@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Phase 0: typecheck + lint. Phase 11 adds full L1 + L2 suite.
+pnpm typecheck && pnpm lint

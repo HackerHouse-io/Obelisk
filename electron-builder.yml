@@ -1,0 +1,41 @@
+appId: com.obelisk.app
+productName: Obelisk
+copyright: Copyright © 2026 Obelisk contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - '!**/{.DS_Store,.git,.github,.vscode,test-fixtures}/**/*'
+  - '!**/node_modules/**/{*.md,*.markdown,LICENSE*,license*,README*,readme*}'
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**/*'
+  - '**/node_modules/keytar/**/*'
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # entitlements: build/entitlements.mac.plist          # added in Phase 12
+  # entitlementsInherit: build/entitlements.mac.plist
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Development
+publish:
+  provider: github
+  owner: obelisk-labs
+  repo: obelisk
+  releaseType: release

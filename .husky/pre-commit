@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Phase 0: typecheck only. Phase 11 wires lint-staged + L1 unit tests on touched files.
+pnpm typecheck || exit 1

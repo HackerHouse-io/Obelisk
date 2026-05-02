@@ -1,0 +1,14 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 08:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  placeholder:
+    name: Nightly placeholder (L2-real + L3 land in Phase 11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Nightly suite skeleton — fills in Phase 11 (L2-real + L3 across mac/win/linux)."
