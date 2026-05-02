@@ -117,6 +117,16 @@ export interface IpcMap {
   'repos:list': { req: void; res: Repo[] };
   'repos:connect': { req: { localPath?: string; githubFullName?: string }; res: Repo };
   'repos:setMode': { req: { repoId: string; mode: SafetyMode }; res: Repo };
+  'repos:pickFolder': { req: void; res: { path: string | null } };
+  'repos:listGitHubRepos': {
+    req: void;
+    res: {
+      fullName: string;
+      defaultBranch: string;
+      private: boolean;
+      description: string | null;
+    }[];
+  };
 
   // Allowlist
   'allowlist:list': {

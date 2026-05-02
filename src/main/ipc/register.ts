@@ -2,6 +2,22 @@ import { app, ipcMain } from 'electron';
 import { fromException, ok, err, type Result } from '../../shared/errors';
 import type { IpcChannel, IpcMap } from '../../shared/types';
 import { dbPath } from '../db';
+import {
+  handleAuthStatus,
+  handleAuthSignIn,
+  handleAuthComplete,
+  handleAuthUpgradeScope,
+  handleAuthSetRunnerKey,
+  handleAuthSignOut,
+} from './auth';
+import {
+  handleReposList,
+  handleReposConnect,
+  handleReposSetMode,
+  handleReposPickFolder,
+  handleReposListGitHubRepos,
+} from './repos';
+import { handleAllowlistList, handleAllowlistAdd, handleAllowlistRemove } from './allowlist';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -16,11 +32,8 @@ const notImplemented = (channel: string) => async (): Promise<never> => {
 };
 
 /**
- * Phase 1 wires every channel from docs/TECH_DESIGN.md §3.1 to a stub
- * that returns a NOT_IMPLEMENTED error. Subsequent phases replace each
- * stub with a real implementation.
- *
- *   Phase 2: auth:*, repos:*, allowlist:*
+ * Phase 2 wires real handlers for auth:*, repos:*, allowlist:*. Other
+ * channels remain as NOT_IMPLEMENTED stubs until later phases:
  *   Phase 4: agents:*, runs:*
  *   Phase 5: backlog:*, playbook:*
  *   Phase 9: settings:* full surface
@@ -34,22 +47,27 @@ export function registerIpcHandlers(): void {
     electron: process.versions.electron ?? '',
   }));
 
-  // Stubs — phases 2+ replace each one.
-  register('auth:status', async () => ({ signedIn: false }));
-  register('auth:signIn', notImplemented('auth:signIn'));
-  register('auth:complete', notImplemented('auth:complete'));
-  register('auth:upgradeScope', notImplemented('auth:upgradeScope'));
-  register('auth:setRunnerKey', notImplemented('auth:setRunnerKey'));
-  register('auth:signOut', notImplemented('auth:signOut'));
+  // Auth (Phase 2 — real)
+  register('auth:status', handleAuthStatus);
+  register('auth:signIn', handleAuthSignIn);
+  register('auth:complete', handleAuthComplete);
+  register('auth:upgradeScope', handleAuthUpgradeScope);
+  register('auth:setRunnerKey', handleAuthSetRunnerKey);
+  register('auth:signOut', handleAuthSignOut);
 
-  register('repos:list', async () => []);
-  register('repos:connect', notImplemented('repos:connect'));
-  register('repos:setMode', notImplemented('repos:setMode'));
+  // Repos (Phase 2 — real)
+  register('repos:list', handleReposList);
+  register('repos:connect', handleReposConnect);
+  register('repos:setMode', handleReposSetMode);
+  register('repos:pickFolder', handleReposPickFolder);
+  register('repos:listGitHubRepos', handleReposListGitHubRepos);
 
-  register('allowlist:list', async () => []);
-  register('allowlist:add', notImplemented('allowlist:add'));
-  register('allowlist:remove', notImplemented('allowlist:remove'));
+  // Allowlist (Phase 2 — real)
+  register('allowlist:list', handleAllowlistList);
+  register('allowlist:add', handleAllowlistAdd);
+  register('allowlist:remove', handleAllowlistRemove);
 
+  // Phase 4+
   register('agents:list', async () => []);
   register('agents:run', notImplemented('agents:run'));
   register('agents:cancel', notImplemented('agents:cancel'));

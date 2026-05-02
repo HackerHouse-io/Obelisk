@@ -2,24 +2,37 @@ import { useEffect, type ReactElement } from 'react';
 import { Shell } from './shell/Shell';
 import { useStore, type Route } from './state/store';
 import { startBusSubscriber } from './state/bus-subscriber';
+import { Connect } from './screens/Connect';
 
 export function App(): ReactElement {
   const route = useStore((s) => s.route);
+  const setRoute = useStore((s) => s.setRoute);
   const setSettings = useStore((s) => s.setSettings);
+  const setRepos = useStore((s) => s.setRepos);
+  const setAuth = useStore((s) => s.setAuth);
 
   useEffect(() => {
     const unsubscribe = startBusSubscriber();
-    void window.obelisk.invoke('settings:get', undefined).then((res) => {
-      if (res.ok) setSettings(res.value);
-    });
-    return unsubscribe;
-  }, [setSettings]);
 
-  return (
-    <Shell>
-      <Placeholder route={route} />
-    </Shell>
-  );
+    void (async () => {
+      const [settingsRes, reposRes, authRes] = await Promise.all([
+        window.obelisk.invoke('settings:get', undefined),
+        window.obelisk.invoke('repos:list', undefined),
+        window.obelisk.invoke('auth:status', undefined),
+      ]);
+      if (settingsRes.ok) setSettings(settingsRes.value);
+      if (authRes.ok) setAuth(authRes.value);
+      if (reposRes.ok) {
+        setRepos(reposRes.value);
+        // First launch: no repos connected → drop the user into the wizard.
+        if (reposRes.value.length === 0) setRoute('connect');
+      }
+    })();
+
+    return unsubscribe;
+  }, [setSettings, setRepos, setAuth, setRoute]);
+
+  return <Shell>{renderScreen(route)}</Shell>;
 }
 
 const TITLES: Record<Route, string> = {
@@ -38,11 +51,12 @@ const SUBTITLES: Record<Route, string> = {
   backlog: 'Drag-to-rank queue. Lands in Phase 5.',
   agents: 'Marketplace + per-agent detail. Lands in Phase 9.',
   playbook: 'qa/ editor. Lands in Phase 9.',
-  connect: 'OAuth Device Flow + 6-step wizard. Lands in Phase 2.',
+  connect: '',
   settings: 'Safety modes, runners, allowed actors. Lands in Phase 9.',
 };
 
-function Placeholder({ route }: { route: Route }): ReactElement {
+function renderScreen(route: Route): ReactElement {
+  if (route === 'connect') return <Connect />;
   return (
     <div className="placeholder">
       <div className="placeholder-title">{TITLES[route]}</div>
