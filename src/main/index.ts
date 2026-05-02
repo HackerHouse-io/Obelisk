@@ -1,5 +1,9 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
+import { runMigrations } from './db/migrations';
+import { closeDb } from './db';
+import { registerIpcHandlers, unregisterIpcHandlers } from './ipc/register';
+import { startHeartbeat, stopHeartbeat } from './ipc/bus';
 
 const isDev = !app.isPackaged;
 
@@ -37,6 +41,17 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  try {
+    const result = runMigrations();
+    console.log(
+      `[obelisk] migrations: ${result.applied.length} applied, ${result.total} total on disk`,
+    );
+  } catch (e) {
+    console.error('[obelisk] migrations failed:', e);
+  }
+
+  registerIpcHandlers();
+  startHeartbeat();
   createWindow();
 
   app.on('activate', () => {
@@ -46,4 +61,10 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  stopHeartbeat();
+  unregisterIpcHandlers();
+  closeDb();
 });

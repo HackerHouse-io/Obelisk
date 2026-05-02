@@ -1,53 +1,52 @@
-import { useState, type ReactElement } from 'react';
-
-type Route = 'home' | 'mission' | 'backlog' | 'agents' | 'playbook' | 'connect' | 'settings';
-
-const NAV: { id: Route; label: string }[] = [
-  { id: 'home', label: 'Home' },
-  { id: 'mission', label: 'Mission Control' },
-  { id: 'backlog', label: 'Backlog' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'playbook', label: 'QA Playbook' },
-  { id: 'connect', label: 'Connect' },
-  { id: 'settings', label: 'Settings' },
-];
+import { useEffect, type ReactElement } from 'react';
+import { Shell } from './shell/Shell';
+import { useStore, type Route } from './state/store';
+import { startBusSubscriber } from './state/bus-subscriber';
 
 export function App(): ReactElement {
-  const [route, setRoute] = useState<Route>('home');
+  const route = useStore((s) => s.route);
+  const setSettings = useStore((s) => s.setSettings);
+
+  useEffect(() => {
+    const unsubscribe = startBusSubscriber();
+    void window.obelisk.invoke('settings:get', undefined).then((res) => {
+      if (res.ok) setSettings(res.value);
+    });
+    return unsubscribe;
+  }, [setSettings]);
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="sidebar-title">Obelisk</div>
-          <div className="sidebar-sub">v0.0.1 · scaffolding</div>
-        </div>
-        <nav className="sidebar-nav">
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`nav-item${route === item.id ? ' active' : ''}`}
-              onClick={() => setRoute(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-      </aside>
-      <main className="main">
-        <header className="titlebar">
-          <div className="titlebar-text">{NAV.find((n) => n.id === route)?.label}</div>
-        </header>
-        <section className="screen">
-          <div className="placeholder">
-            <div className="placeholder-title">{NAV.find((n) => n.id === route)?.label}</div>
-            <div className="placeholder-body">
-              Phase 0 scaffold. Real screens land in subsequent phases.
-            </div>
-          </div>
-        </section>
-      </main>
+    <Shell>
+      <Placeholder route={route} />
+    </Shell>
+  );
+}
+
+const TITLES: Record<Route, string> = {
+  home: 'Project Command Center',
+  mission: 'Mission Control',
+  backlog: 'Backlog',
+  agents: 'Agents',
+  playbook: 'QA Playbook',
+  connect: 'Connect Repo',
+  settings: 'Settings',
+};
+
+const SUBTITLES: Record<Route, string> = {
+  home: 'Repo health at a glance. Lands in Phase 4.',
+  mission: 'Live pipeline + audit drawer. Lands in Phase 4.',
+  backlog: 'Drag-to-rank queue. Lands in Phase 5.',
+  agents: 'Marketplace + per-agent detail. Lands in Phase 9.',
+  playbook: 'qa/ editor. Lands in Phase 9.',
+  connect: 'OAuth Device Flow + 6-step wizard. Lands in Phase 2.',
+  settings: 'Safety modes, runners, allowed actors. Lands in Phase 9.',
+};
+
+function Placeholder({ route }: { route: Route }): ReactElement {
+  return (
+    <div className="placeholder">
+      <div className="placeholder-title">{TITLES[route]}</div>
+      <div className="placeholder-body">{SUBTITLES[route]}</div>
     </div>
   );
 }

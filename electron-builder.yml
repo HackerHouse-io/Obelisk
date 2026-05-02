@@ -6,6 +6,7 @@ directories:
   buildResources: build
 files:
   - out/**/*
+  - db/migrations/**/*.sql
   - package.json
   - '!**/{.DS_Store,.git,.github,.vscode,test-fixtures}/**/*'
   - '!**/node_modules/**/{*.md,*.markdown,LICENSE*,license*,README*,readme*}'
