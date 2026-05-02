@@ -19,7 +19,8 @@
     "lint": "eslint src --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,html}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,html}\"",
-    "test": "echo \"no tests yet\" && exit 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -33,6 +34,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "simple-git": "^3.27.0",
+    "gray-matter": "^4.0.3",
     "ulid": "^2.3.0",
     "zustand": "^5.0.2"
   },
@@ -56,6 +58,7 @@
     "husky": "^9.1.7",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
   }
 }
