@@ -1,13 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ulid } from 'ulid';
-import { existsSync } from 'node:fs';
 import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
-import { recordArtifact } from '../../db/evidence';
-import { sha256Buffer } from '../../prompt-compiler/hash';
 import { obeliskArtifactUrl } from '../../protocol/obelisk-protocol';
 import { parseFencedJson } from '../lib/parse-fenced-json';
+import { registerArtifactFromPath } from '../lib/register-artifact';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -152,35 +150,16 @@ export function registerPlaywrightArtifacts(
   runId: string,
 ): ArtifactRefs {
   const out: ArtifactRefs = {};
-  const trace = registerOne({ rel: f.trace_path, repoPath, runId, kind: 'trace' });
+  const trace = registerArtifactFromPath({ rel: f.trace_path, repoPath, runId, kind: 'trace' });
   if (trace) out.traceArtifactId = trace;
-  const shot = registerOne({ rel: f.screenshot_path, repoPath, runId, kind: 'screenshot' });
+  const shot = registerArtifactFromPath({
+    rel: f.screenshot_path,
+    repoPath,
+    runId,
+    kind: 'screenshot',
+  });
   if (shot) out.screenshotArtifactId = shot;
   return out;
-}
-
-function registerOne(opts: {
-  rel: string | undefined;
-  repoPath: string;
-  runId: string;
-  kind: 'trace' | 'screenshot';
-}): string | null {
-  if (!opts.rel) return null;
-  const abs = isAbsolute(opts.rel) ? opts.rel : join(opts.repoPath, opts.rel);
-  let buf: Buffer;
-  try {
-    buf = readFileSync(abs);
-  } catch {
-    return null;
-  }
-  const recorded = recordArtifact({
-    runId: opts.runId,
-    kind: opts.kind,
-    path: abs,
-    bytes: buf.byteLength,
-    sha256: sha256Buffer(buf),
-  });
-  return recorded.id;
 }
 
 /* ---------- issue body shape ---------- */

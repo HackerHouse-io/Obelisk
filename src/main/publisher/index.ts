@@ -31,16 +31,26 @@ export interface PublishInput {
 export type PublishOutput =
   | { kind: 'pr'; prNumber: number; htmlUrl: string }
   | { kind: 'issue'; issueNumber: number; htmlUrl: string }
+  | { kind: 'comment'; issueNumber: number; commentId: number; htmlUrl: string }
   | { kind: 'review'; prNumber: number; reviewId: number }
   | { kind: 'noop'; reason: string };
 
 const ACTION_PERMITTED: Record<SafetyMode, ReadonlySet<string>> = {
   observe: new Set(),
-  issues: new Set(['create_issue', 'apply_label']),
-  prs: new Set(['create_issue', 'apply_label', 'commit', 'push', 'open_pr', 'post_review']),
+  issues: new Set(['create_issue', 'apply_label', 'post_comment']),
+  prs: new Set([
+    'create_issue',
+    'apply_label',
+    'post_comment',
+    'commit',
+    'push',
+    'open_pr',
+    'post_review',
+  ]),
   automerge: new Set([
     'create_issue',
     'apply_label',
+    'post_comment',
     'commit',
     'push',
     'open_pr',
@@ -60,8 +70,9 @@ function ensureModeAllows(repo: Repo, action: string): void {
 }
 
 /**
- * Phase 4 publisher. Three plans are supported end-to-end (PR / issue /
- * review); 'noop' is a hatch for agents that decided to do nothing.
+ * Dispatches a `PublishPlan` to GitHub. `noop` is a hatch for agents that
+ * decided to do nothing. Every other kind is gated by `ensureModeAllows`
+ * against the repo's safety mode.
  */
 export async function publish(input: PublishInput): Promise<PublishOutput> {
   const gh = await getGithub();
@@ -166,6 +177,22 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
         body: input.plan.body,
       });
       return { kind: 'review', prNumber, reviewId: created.data.id };
+    }
+
+    case 'comment': {
+      ensureModeAllows(input.repo, 'post_comment');
+      const created = await gh.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: input.plan.issueNumber,
+        body: input.plan.body,
+      });
+      return {
+        kind: 'comment',
+        issueNumber: input.plan.issueNumber,
+        commentId: created.data.id,
+        htmlUrl: created.data.html_url,
+      };
     }
   }
 }

@@ -72,6 +72,7 @@ export interface InterpretResultInput {
 export type PublishPlan =
   | { kind: 'pr'; title: string; body: string; head: string; base: string; draft: true }
   | { kind: 'issue'; title: string; body: string; labels: string[] }
+  | { kind: 'comment'; issueNumber: number; body: string }
   | {
       kind: 'review';
       prNumber: number;

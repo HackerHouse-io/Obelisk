@@ -46,8 +46,27 @@ Each step is a discrete CLI invocation with its own compiled prompt. State persi
 
 # Output format
 
-Branch name: `obelisk/<run-id>`.
+Run all six loop steps in order, then emit one structured block at the end. The orchestrator parses ONLY this block — anything outside is treated as reasoning prose for the audit log.
 
-PR body sections: `## Summary`, `## Spec` (link to issue comment), `## Plan` (link), `## Evidence`, `## Reasoning`.
+```
+BEGIN_FEATURE_OUTPUT
+{
+  "spec": "<full markdown of the spec written in DEFINE — gets posted as an issue comment>",
+  "plan": "<numbered task list from PLAN — gets posted as an issue comment>",
+  "pr_title": "feat(reports): add CSV export to /reports",
+  "pr_summary": "<one-paragraph summary for the PR body>",
+  "screenshot_path": "playwright-report/feature-end-to-end.png",
+  "server_log_path": "logs/feature-execution.txt"
+}
+END_FEATURE_OUTPUT
+```
 
-Open the PR as a DRAFT.
+`pr_title` MUST end up tagged `[obelisk:feature-builder]` (the publisher appends it). Branch is `obelisk/<run-id>` (the orchestrator manages this).
+
+`screenshot_path` is required for any UI-touching feature (Evidence Pack rule). `server_log_path` is required for any backend-touching feature.
+
+If any loop step fails irrecoverably:
+- DEFINE: emit `SPEC_AMBIGUOUS:<questions>` and stop.
+- TEST: after 3 build/test loops, emit `TEST_LOOP_EXHAUSTED:<last failure>` and stop.
+
+In both cases, do NOT emit a `BEGIN_FEATURE_OUTPUT` block — the orchestrator pauses the run for human follow-up.

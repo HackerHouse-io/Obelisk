@@ -3,6 +3,7 @@ import type { AgentHandler } from './types';
 import { bugFixerHandler } from './bug-fixer';
 import { qaHunterHandler } from './qa-hunter';
 import { manualQaHandler } from './manual-qa';
+import { featureBuilderHandler } from './feature-builder';
 
 /**
  * Central registry. Adding a new agent: implement AgentHandler and register
@@ -12,7 +13,8 @@ const HANDLERS: Partial<Record<AgentName, AgentHandler>> = {
   'bug-fixer': bugFixerHandler,
   'qa-hunter': qaHunterHandler,
   'manual-qa': manualQaHandler,
-  // Phase 7+: 'feature-builder', 'pr-reviewer'
+  'feature-builder': featureBuilderHandler,
+  // Phase 8: 'pr-reviewer'
 };
 
 export function getAgentHandler(name: AgentName): AgentHandler | null {

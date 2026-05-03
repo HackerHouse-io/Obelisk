@@ -1,7 +1,6 @@
 import { nextAvailable, getBacklogItem } from '../../db/backlog';
-import { getGithub } from '../../github/client';
-import { ObeliskError } from '../../../shared/errors';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
+import { fetchIssueAuthor } from '../lib/fetch-issue-author';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -94,21 +93,6 @@ function nextAvailableExcluding(
     return null;
   }
   return cursor;
-}
-
-async function fetchIssueAuthor(
-  repoFullName: string,
-  issueNumber: number | null,
-): Promise<string | null> {
-  if (!issueNumber) return null;
-  const gh = await getGithub();
-  if (!gh) {
-    throw new ObeliskError('AUTH_REQUIRED', 'Sign in to GitHub before running agents.');
-  }
-  const [owner, name] = repoFullName.split('/');
-  if (!owner || !name) return null;
-  const resp = await gh.issues.get({ owner, repo: name, issue_number: issueNumber });
-  return resp.data.user?.login?.toLowerCase() ?? null;
 }
 
 function oneLine(text: string): string {

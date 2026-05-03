@@ -338,12 +338,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       fallbackUsed: runResult.fallbackUsed,
     });
 
-    const first = published[0]!;
+    const pr = published.find((r) => r.kind === 'pr');
+    const issue = published.find((r) => r.kind === 'issue');
     return {
       runId: run.id,
       finalState: 'done',
-      ...(first.kind === 'pr' ? { prNumber: first.prNumber } : {}),
-      ...(first.kind === 'issue' ? { issueNumber: first.issueNumber } : {}),
+      ...(pr ? { prNumber: pr.prNumber } : {}),
+      ...(issue ? { issueNumber: issue.issueNumber } : {}),
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -512,10 +513,12 @@ function oneLine(text: string): string {
 function describeOutcomes(results: Awaited<ReturnType<typeof publish>>[]): string {
   const prs = results.filter((r) => r.kind === 'pr').length;
   const issues = results.filter((r) => r.kind === 'issue').length;
+  const comments = results.filter((r) => r.kind === 'comment').length;
   const reviews = results.filter((r) => r.kind === 'review').length;
   const parts: string[] = [];
   if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
   if (prs) parts.push(`${prs} PR${prs === 1 ? '' : 's'}`);
+  if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
   if (reviews) parts.push(`${reviews} review${reviews === 1 ? '' : 's'}`);
   return parts.length === 0 ? 'noop' : `Published ${parts.join(', ')}`;
 }
