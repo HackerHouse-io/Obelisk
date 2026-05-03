@@ -9,9 +9,9 @@ interface Props {
 export function Shell({ children }: Props): ReactElement {
   return (
     <div className="app-shell">
+      <Titlebar />
       <Sidebar />
       <main className="main">
-        <Titlebar />
         <section className="screen">{children}</section>
       </main>
     </div>

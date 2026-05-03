@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import type { PlaybookFile } from '../../shared/types';
+import { EmptyState } from '../ui/EmptyState';
 
 export function Playbook(): ReactElement {
   const repos = useStore((s) => s.repos);
@@ -39,22 +40,29 @@ export function Playbook(): ReactElement {
 
   if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No repo connected</div>
-        <div className="placeholder-body">Open Connect Repo first.</div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="The QA Playbook editor lives per-repo. Connect a repo first."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => useStore.getState().setRoute('connect'),
+        }}
+      />
     );
   }
 
   if (files.length === 0) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No QA Playbook yet</div>
-        <div className="placeholder-body">
-          Connect a repo and Obelisk will bootstrap <span className="mono">qa/</span> for you.
-          Re-run from Settings if you skipped that step.
-        </div>
-      </div>
+      <EmptyState
+        title="No QA Playbook yet"
+        body={
+          <>
+            Obelisk usually bootstraps <span className="mono">qa/</span> on first connect.
+            Re-trigger it from Settings if it didn&apos;t run.
+          </>
+        }
+      />
     );
   }
 

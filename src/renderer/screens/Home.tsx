@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
 import type { Agent, BacklogItem, Run, RunState, AgentName } from '../../shared/types';
 import { Icon } from '../icons';
+import { EmptyState } from '../ui/EmptyState';
 
 /**
  * Home (Project Command Center).
@@ -43,16 +44,15 @@ export function Home(): ReactElement {
 
   if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No repo connected</div>
-        <div className="placeholder-body">
-          Open{' '}
-          <button type="button" className="btn sm" onClick={() => setRoute('connect')}>
-            Connect Repo
-          </button>{' '}
-          to add one.
-        </div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="Connect a GitHub repo to start running agents against it."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => setRoute('connect'),
+        }}
+      />
     );
   }
 

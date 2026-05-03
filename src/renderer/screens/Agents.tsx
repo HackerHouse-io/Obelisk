@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
 import type { Agent, AgentName, RunnerKind } from '../../shared/types';
+import { EmptyState } from '../ui/EmptyState';
 
 interface AgentMeta {
   name: AgentName;
@@ -90,10 +91,15 @@ export function AgentsScreen(): ReactElement {
 
   if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No repo connected</div>
-        <div className="placeholder-body">Open Connect Repo first.</div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="Agents are configured per-repo. Connect one first."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => useStore.getState().setRoute('connect'),
+        }}
+      />
     );
   }
 
@@ -179,22 +185,10 @@ export function AgentsScreen(): ReactElement {
               return <IconCmp size={20} color="var(--brand)" />;
             })()}
           </div>
-          <div>
+          <div className="agents-detail-meta">
             <div className="agents-detail-title">
               {selectedMeta.label}
-              <span
-                className="pill"
-                style={{
-                  marginLeft: 10,
-                  background:
-                    selectedAgentRow?.enabled === false ? 'var(--bg-3)' : 'var(--ok-soft)',
-                  color: selectedAgentRow?.enabled === false ? 'var(--t-2)' : 'oklch(82% 0.14 152)',
-                  borderColor:
-                    selectedAgentRow?.enabled === false
-                      ? 'var(--line-strong)'
-                      : 'oklch(70% 0.14 152 / 0.4)',
-                }}
-              >
+              <span className={`pill ${selectedAgentRow?.enabled === false ? '' : 'ok'}`}>
                 {selectedAgentRow?.enabled === false ? 'paused' : 'enabled'}
               </span>
             </div>

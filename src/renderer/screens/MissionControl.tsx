@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
+import { EmptyState } from '../ui/EmptyState';
 import type { AuditLine, EvidenceItem, Run, RunState, AgentName } from '../../shared/types';
 
 /**
@@ -85,10 +86,15 @@ export function MissionControl(): ReactElement {
 
   if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No repo connected</div>
-        <div className="placeholder-body">Open Connect Repo to add one.</div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="Mission Control shows live agent runs. Connect a repo to populate it."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => useStore.getState().setRoute('connect'),
+        }}
+      />
     );
   }
 
@@ -233,9 +239,9 @@ function RunDrawer({ run, onClose }: { run: Run | null; onClose: () => void }): 
   return (
     <aside className="mc-drawer">
       <div className="mc-drawer-header">
-        <div className="row" style={{ justifyContent: 'space-between' }}>
+        <div className="mc-drawer-row">
           <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
-          <button type="button" className="btn ghost icon" onClick={onClose}>
+          <button type="button" className="btn ghost icon" onClick={onClose} title="Close">
             <Icon.Close size={11} />
           </button>
         </div>
@@ -245,9 +251,7 @@ function RunDrawer({ run, onClose }: { run: Run | null; onClose: () => void }): 
           <span className="pill">{run.state}</span>
           {run.errorCode ? <span className="pill bad">{run.errorCode}</span> : null}
         </div>
-        {run.outputSummary ? (
-          <div style={{ fontSize: 11.5, color: 'var(--t-2)' }}>{run.outputSummary}</div>
-        ) : null}
+        {run.outputSummary ? <div className="mc-drawer-summary">{run.outputSummary}</div> : null}
       </div>
       <div className="mc-tabs">
         {(['audit', 'evidence', 'reasoning', 'files'] as Tab[]).map((t) => (
@@ -318,7 +322,7 @@ function ReasoningTab({ lines }: { lines: AuditLine[] }): ReactElement {
       {reasoningLines.map((l) => (
         <div key={l.id}>
           <div className="mc-evidence-section-title">{l.kind}</div>
-          <pre style={prePayload}>{JSON.stringify(l.payload, null, 2)}</pre>
+          <pre className="mc-pre-payload">{JSON.stringify(l.payload, null, 2)}</pre>
         </div>
       ))}
     </div>
@@ -340,22 +344,14 @@ function FilesTab({ evidence }: { evidence: EvidenceItem[] }): ReactElement {
 }
 
 function Empty({ children }: { children: ReactNode }): ReactElement {
-  return <div style={{ color: 'var(--t-3)', fontSize: 12 }}>{children}</div>;
+  return <div className="mc-empty">{children}</div>;
 }
 
 function describePayload(payload: unknown): ReactNode {
   if (payload == null) return '';
   if (typeof payload === 'string') return payload;
-  return <pre style={prePayload}>{JSON.stringify(payload, null, 2)}</pre>;
+  return <pre className="mc-pre-payload">{JSON.stringify(payload, null, 2)}</pre>;
 }
-
-const prePayload = {
-  margin: 0,
-  fontFamily: 'var(--mono)',
-  fontSize: 10.5,
-  whiteSpace: 'pre-wrap' as const,
-  color: 'var(--t-2)',
-};
 
 function shortTime(iso: string): string {
   // HH:MM:SS in local time.

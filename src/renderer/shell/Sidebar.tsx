@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement } from 'react';
+import type { ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore, type Route } from '../state/store';
 import { ObeliskMark } from './Obelisk';
@@ -7,8 +7,6 @@ interface NavRow {
   id: Route;
   label: string;
   icon: IconName;
-  live?: boolean;
-  count?: number;
 }
 
 const NAV: NavRow[] = [
@@ -28,7 +26,14 @@ const SAFETY_LEVELS = [
   { name: 'Auto-merge', sub: 'Safe fixes auto-merge' },
 ] as const;
 
-const SAFETY_COLORS = ['var(--info)', 'var(--brand)', 'var(--warn)', 'var(--bad)'] as const;
+const SAFETY_BAR_COLOR = ['var(--info)', 'var(--brand)', 'var(--warn)', 'var(--bad)'] as const;
+
+const MODE_TO_LEVEL: Record<string, 0 | 1 | 2 | 3> = {
+  observe: 0,
+  issues: 1,
+  prs: 2,
+  automerge: 3,
+};
 
 export function Sidebar(): ReactElement {
   const route = useStore((s) => s.route);
@@ -38,25 +43,17 @@ export function Sidebar(): ReactElement {
   const auth = useStore((s) => s.auth);
 
   const repo = repos.find((r) => r.id === selectedRepoId);
-  // Phase 1: defaults until Connect wizard runs.
-  const safetyLevel: 0 | 1 | 2 | 3 = 0;
-  const activeRunsCount: number = 0;
+  const safetyLevel = repo ? (MODE_TO_LEVEL[repo.mode] ?? 0) : null;
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-header" style={{ paddingTop: 14 }}>
-        <div className="label" style={{ fontSize: 10 }}>
-          Project
-        </div>
-        <div className="row gap-2 mt-1">
+      <div className="sidebar-header">
+        <div className="sidebar-label">Project</div>
+        <div className="sidebar-project">
           <ObeliskMark size={12} />
-          <div style={{ fontSize: 13, fontWeight: 600 }}>
+          <div className="sidebar-project-name truncate">
             {repo ? repo.githubFullName : 'No repo connected'}
           </div>
-        </div>
-        <div className="row gap-2 mt-2" style={{ fontSize: 11, color: 'var(--t-2)' }}>
-          <span className="dot live" style={{ background: 'var(--ok)', color: 'var(--ok)' }} />
-          {activeRunsCount} active {activeRunsCount === 1 ? 'run' : 'runs'}
         </div>
       </div>
 
@@ -72,87 +69,44 @@ export function Sidebar(): ReactElement {
               onClick={() => setRoute(item.id)}
             >
               <IconCmp size={14} color={active ? 'var(--brand-text)' : 'var(--t-2)'} />
-              <span className="flex-1" style={{ textAlign: 'left' }}>
-                {item.label}
-              </span>
-              {item.live ? (
-                <span
-                  className="dot live"
-                  style={{ background: 'var(--ok)', color: 'var(--ok)' }}
-                />
-              ) : null}
-              {item.count != null ? (
-                <span style={{ fontSize: 10.5, color: 'var(--t-2)' }} className="tab-num">
-                  {item.count}
-                </span>
-              ) : null}
+              <span className="nav-item-label">{item.label}</span>
             </button>
           );
         })}
       </nav>
 
-      <div style={{ padding: 12, borderTop: '1px solid var(--line-soft)' }}>
-        <div className="label" style={{ fontSize: 10 }}>
-          Safety level
+      {safetyLevel !== null ? (
+        <div className="sidebar-safety">
+          <div className="sidebar-label">Safety level</div>
+          <div className="sidebar-safety-bar">
+            {[0, 1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="sidebar-safety-tick"
+                style={{
+                  background: i <= safetyLevel ? SAFETY_BAR_COLOR[safetyLevel] : 'var(--bg-3)',
+                }}
+              />
+            ))}
+          </div>
+          <div className="sidebar-safety-name">{SAFETY_LEVELS[safetyLevel].name}</div>
+          <div className="sidebar-safety-sub">{SAFETY_LEVELS[safetyLevel].sub}</div>
         </div>
-        <SafetyMeter level={safetyLevel} />
-        <div style={{ fontSize: 11.5, color: 'var(--t-1)', marginTop: 6 }}>
-          {SAFETY_LEVELS[safetyLevel].name}
-        </div>
-        <div style={{ fontSize: 10.5, color: 'var(--t-2)', marginTop: 2 }}>
-          {SAFETY_LEVELS[safetyLevel].sub}
-        </div>
-      </div>
+      ) : null}
 
-      <div className="sidebar-footer" style={userBoxStyle}>
-        <div style={avatarStyle}>{(auth.login ?? '?').slice(0, 2).toUpperCase()}</div>
-        <div className="flex-1" style={{ minWidth: 0 }}>
-          <div className="truncate" style={{ fontSize: 12, fontWeight: 600 }}>
+      <div className="sidebar-user">
+        <div className="sidebar-avatar">
+          {auth.signedIn && auth.login ? auth.login.slice(0, 2).toUpperCase() : '–'}
+        </div>
+        <div className="sidebar-user-info">
+          <div className="sidebar-user-name truncate">
             {auth.signedIn ? auth.login : 'Not signed in'}
           </div>
-          <div className="truncate" style={{ fontSize: 10.5, color: 'var(--t-2)' }}>
-            {auth.signedIn ? 'Connected · v0.0.1' : 'Sign in via Connect'}
+          <div className="sidebar-user-sub truncate">
+            {auth.signedIn ? 'Connected' : 'Sign in via Connect'}
           </div>
         </div>
       </div>
     </aside>
   );
 }
-
-function SafetyMeter({ level }: { level: 0 | 1 | 2 | 3 }): ReactElement {
-  return (
-    <div style={{ display: 'flex', gap: 3, marginTop: 8 }}>
-      {[0, 1, 2, 3].map((i) => (
-        <div
-          key={i}
-          style={{
-            flex: 1,
-            height: 4,
-            borderRadius: 2,
-            background: i <= level ? SAFETY_COLORS[level] : 'var(--bg-3)',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-const userBoxStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '10px 12px',
-};
-
-const avatarStyle: CSSProperties = {
-  width: 22,
-  height: 22,
-  borderRadius: '50%',
-  background: 'linear-gradient(135deg, oklch(70% 0.14 320), oklch(60% 0.16 250))',
-  fontSize: 10,
-  fontWeight: 700,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: 'white',
-};

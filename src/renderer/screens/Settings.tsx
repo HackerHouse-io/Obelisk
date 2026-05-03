@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
+import { EmptyState } from '../ui/EmptyState';
 import { useStore } from '../state/store';
 import type {
   AttributionMode,
@@ -68,13 +69,21 @@ export function SettingsScreen(): ReactElement {
     });
   }, [repo]);
 
-  if (!repo || !settings) {
+  if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">Settings</div>
-        <div className="placeholder-body">{!repo ? 'Connect a repo first.' : 'Loading…'}</div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="Settings are per-repo. Connect one first."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => useStore.getState().setRoute('connect'),
+        }}
+      />
     );
+  }
+  if (!settings) {
+    return <EmptyState title="Loading settings…" />;
   }
 
   async function changeMode(target: SafetyMode): Promise<void> {

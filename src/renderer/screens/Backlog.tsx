@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import type { AgentName, BacklogItem } from '../../shared/types';
+import { EmptyState } from '../ui/EmptyState';
 
 type Filter = 'all' | 'bug' | 'feature';
 
@@ -35,10 +36,15 @@ export function Backlog(): ReactElement {
 
   if (!repo) {
     return (
-      <div className="placeholder">
-        <div className="placeholder-title">No repo connected</div>
-        <div className="placeholder-body">Open Connect Repo first.</div>
-      </div>
+      <EmptyState
+        title="No repo connected"
+        body="Connect a repo to populate the backlog."
+        action={{
+          label: 'Connect a repo',
+          icon: <Icon.Connect size={13} />,
+          onClick: () => useStore.getState().setRoute('connect'),
+        }}
+      />
     );
   }
 
@@ -79,12 +85,26 @@ export function Backlog(): ReactElement {
     };
   }
 
-  async function runBugFixerNow(): Promise<void> {
+  async function runFixerForKind(kind: BacklogItem['kind']): Promise<void> {
+    const agentName: AgentName = kind === 'bug' ? 'bug-fixer' : 'feature-builder';
     const res = await window.obelisk.invoke('agents:run', {
       repoId: repo!.id,
-      agentName: 'bug-fixer',
+      agentName,
     });
     if (!res.ok) alert(res.error.message);
+  }
+
+  async function pin(itemId: string): Promise<void> {
+    // Move the item to position 1 via the existing reorder endpoint.
+    const moved = items.filter((i) => i.id === itemId);
+    const rest = items.filter((i) => i.id !== itemId);
+    const next = [...moved, ...rest];
+    setItems(next);
+    const res = await window.obelisk.invoke('backlog:reorder', {
+      repoId: repo!.id,
+      orderedIds: next.map((i) => i.id),
+    });
+    if (!res.ok) await refetch();
   }
 
   return (
@@ -97,7 +117,7 @@ export function Backlog(): ReactElement {
               Drag to reorder. The top item is the next thing Bug Fixer or Feature Builder picks up.
             </div>
           </div>
-          <button type="button" className="btn primary" onClick={runBugFixerNow}>
+          <button type="button" className="btn primary" onClick={() => runFixerForKind('bug')}>
             <Icon.Play size={11} /> Send top to fixer now
           </button>
         </div>
@@ -143,6 +163,8 @@ export function Backlog(): ReactElement {
                     onDragOver={onDragOver(item.id)}
                     onDragLeave={onDragLeave}
                     onDrop={onDrop(item.id)}
+                    onPin={() => pin(item.id)}
+                    onRunNow={() => runFixerForKind(item.kind)}
                   />
                 ))}
               </div>
@@ -166,6 +188,8 @@ export function Backlog(): ReactElement {
                       onDragOver={onDragOver(item.id)}
                       onDragLeave={onDragLeave}
                       onDrop={onDrop(item.id)}
+                      onPin={() => pin(item.id)}
+                      onRunNow={() => runFixerForKind(item.kind)}
                     />
                   ))}
                 </div>
@@ -188,6 +212,8 @@ interface RowProps {
   onDragOver: (e: DragEvent<HTMLDivElement>) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent<HTMLDivElement>) => void;
+  onPin: () => void;
+  onRunNow: () => void;
 }
 
 function Row({
@@ -200,6 +226,8 @@ function Row({
   onDragOver,
   onDragLeave,
   onDrop,
+  onPin,
+  onRunNow,
 }: RowProps): ReactElement {
   const cls = [
     'backlog-row',
@@ -228,34 +256,34 @@ function Row({
           type="button"
           className={`backlog-pin-button${item.userPinRank === 1 ? ' active' : ''}`}
           title={item.userPinRank === 1 ? 'Pinned' : 'Pin to top'}
-          // Phase 5: pin = userPinRank=1 via reorder. Real pin endpoint
-          // lands in Phase 9 alongside the broader Settings UI.
+          onClick={onPin}
         >
           <Icon.Pin size={12} />
         </button>
       </div>
       <span className={`pill${priorityTone(item.priorityLabel)}`}>{item.priorityLabel ?? '—'}</span>
-      <span title={item.kind}>
+      <span className="backlog-kind-icon" title={item.kind}>
         {item.kind === 'bug' ? (
           <Icon.Bug size={13} color="var(--bad)" />
         ) : (
           <Icon.Sparkles size={13} color="var(--brand)" />
         )}
       </span>
-      <div className="row gap-2" style={{ minWidth: 0 }}>
+      <div className="backlog-title-cell">
         <span className="backlog-issue">
           {item.githubIssue ? `#${item.githubIssue}` : 'manual'}
         </span>
         <span className="backlog-title-text truncate">{item.title}</span>
       </div>
-      <span className="backlog-age">—</span>
       <span className="backlog-agent">→ {agentForKind(item.kind, item.agentOverride)}</span>
       <div className="backlog-row-actions">
-        <button type="button" className="btn icon sm" title="Run now">
+        <button
+          type="button"
+          className="btn icon sm"
+          title={`Run ${agentForKind(item.kind, item.agentOverride)} now`}
+          onClick={onRunNow}
+        >
           <Icon.Play size={11} />
-        </button>
-        <button type="button" className="btn icon sm" title="More">
-          <Icon.More size={11} />
         </button>
       </div>
     </div>
