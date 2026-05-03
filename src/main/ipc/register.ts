@@ -1,5 +1,5 @@
 import { app, ipcMain } from 'electron';
-import { fromException, ok, err, type Result } from '../../shared/errors';
+import { fromException, ok, type Result } from '../../shared/errors';
 import type { IpcChannel, IpcMap } from '../../shared/types';
 import { dbPath } from '../db';
 import {
@@ -26,6 +26,8 @@ import {
 } from './agents';
 import { handleRunsList, handleRunsGet } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
+import { handlePlaybookGet, handlePlaybookSave } from './playbook';
+import { handleSettingsGet, handleSettingsUpdate } from './settings';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -35,16 +37,10 @@ function register<C extends IpcChannel>(channel: C, handler: Handler<C>): void {
   handlers.set(channel, handler as (payload: unknown) => Promise<unknown>);
 }
 
-const notImplemented = (channel: string) => async (): Promise<never> => {
-  throw new Error(`channel '${channel}' is not implemented yet`);
-};
-
 /**
- * Phase 2 wires real handlers for auth:*, repos:*, allowlist:*. Other
- * channels remain as NOT_IMPLEMENTED stubs until later phases:
- *   Phase 4: agents:*, runs:*
- *   Phase 5: backlog:*, playbook:*
- *   Phase 9: settings:* full surface
+ * Every IPC channel from `IpcMap` resolves to a real handler. Phases that
+ * own each channel: auth/repos/allowlist (2), agents/runs (4), backlog (5),
+ * playbook (5), settings (9).
  */
 export function registerIpcHandlers(): void {
   register('system:info', async () => ({
@@ -90,20 +86,13 @@ export function registerIpcHandlers(): void {
   register('backlog:reorder', handleBacklogReorder);
   register('backlog:setOverride', handleBacklogSetOverride);
 
-  register('playbook:get', async (payload) => {
-    const { getPlaybookDraft } = await import('../agents/playbook-bootstrapper/publish');
-    const draft = getPlaybookDraft(payload.repoId);
-    if (draft) return { files: draft.files, draft: true };
-    return { files: [], draft: false };
-  });
-  register('playbook:save', notImplemented('playbook:save'));
+  // Playbook (Phase 5 — get; Phase 9 — save)
+  register('playbook:get', handlePlaybookGet);
+  register('playbook:save', handlePlaybookSave);
 
-  register('settings:get', async () => ({
-    defaultRunner: 'claude',
-    attributionMode: 'user',
-    cloudExecutionEnabled: false,
-  }));
-  register('settings:update', notImplemented('settings:update'));
+  // Settings (Phase 9 — real)
+  register('settings:get', handleSettingsGet);
+  register('settings:update', handleSettingsUpdate);
 
   // Bind ipcMain.handle for every registered channel with a single envelope wrapper.
   for (const [channel, handler] of handlers) {
@@ -112,9 +101,6 @@ export function registerIpcHandlers(): void {
         const value = await handler(payload);
         return ok(value);
       } catch (e) {
-        if (e instanceof Error && e.message.includes('not implemented')) {
-          return err('NOT_IMPLEMENTED', e.message);
-        }
         return fromException(e);
       }
     });

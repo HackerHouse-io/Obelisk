@@ -6,6 +6,9 @@ import { Connect } from './screens/Connect';
 import { Home } from './screens/Home';
 import { MissionControl } from './screens/MissionControl';
 import { Backlog } from './screens/Backlog';
+import { AgentsScreen } from './screens/Agents';
+import { Playbook } from './screens/Playbook';
+import { SettingsScreen } from './screens/Settings';
 
 export function App(): ReactElement {
   const route = useStore((s) => s.route);
@@ -38,35 +41,21 @@ export function App(): ReactElement {
   return <Shell>{renderScreen(route)}</Shell>;
 }
 
-const TITLES: Record<Route, string> = {
-  home: 'Project Command Center',
-  mission: 'Mission Control',
-  backlog: 'Backlog',
-  agents: 'Agents',
-  playbook: 'QA Playbook',
-  connect: 'Connect Repo',
-  settings: 'Settings',
-};
-
-const SUBTITLES: Record<Route, string> = {
-  home: 'Repo health at a glance. Lands in Phase 4.',
-  mission: 'Live pipeline + audit drawer. Lands in Phase 4.',
-  backlog: 'Drag-to-rank queue. Lands in Phase 5.',
-  agents: 'Marketplace + per-agent detail. Lands in Phase 9.',
-  playbook: 'qa/ editor. Lands in Phase 9.',
-  connect: '',
-  settings: 'Safety modes, runners, allowed actors. Lands in Phase 9.',
-};
-
 function renderScreen(route: Route): ReactElement {
-  if (route === 'connect') return <Connect />;
-  if (route === 'home') return <Home />;
-  if (route === 'mission') return <MissionControl />;
-  if (route === 'backlog') return <Backlog />;
-  return (
-    <div className="placeholder">
-      <div className="placeholder-title">{TITLES[route]}</div>
-      <div className="placeholder-body">{SUBTITLES[route]}</div>
-    </div>
-  );
+  switch (route) {
+    case 'connect':
+      return <Connect />;
+    case 'home':
+      return <Home />;
+    case 'mission':
+      return <MissionControl />;
+    case 'backlog':
+      return <Backlog />;
+    case 'agents':
+      return <AgentsScreen />;
+    case 'playbook':
+      return <Playbook />;
+    case 'settings':
+      return <SettingsScreen />;
+  }
 }
