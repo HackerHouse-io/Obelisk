@@ -14,6 +14,7 @@ export const featureBuilderHandler: AgentHandler = {
   name: 'feature-builder',
   // Feature Builder ships PRs and MUST go through the Evidence Pack gate.
   skipsEvidenceGate: false,
+  producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     const item = nextAvailable(input.repo.id, 'feature');

@@ -38,6 +38,14 @@ export interface AgentHandler {
    * the gate.
    */
   readonly skipsEvidenceGate: boolean;
+
+  /**
+   * Whether the runner is expected to produce a patch in the worktree.
+   * Read-only agents (QA Hunter, Manual QA, PR Reviewer) set this to false:
+   * the orchestrator then treats `RunResult.reason === 'no_changes'` as a
+   * successful run and skips the patch/failing-test-diff artifacts.
+   */
+  readonly producesPatch: boolean;
 }
 
 export interface SelectTaskInput {

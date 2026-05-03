@@ -17,6 +17,7 @@ import type {
 export const manualQaHandler: AgentHandler = {
   name: 'manual-qa',
   skipsEvidenceGate: true,
+  producesPatch: false,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     const flowsPath = join(input.repo.localPath, 'qa', 'critical-flows.md');

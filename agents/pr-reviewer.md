@@ -32,13 +32,26 @@ If the PR body has an `## Evidence` section, verify each linked artifact resolve
 
 # Output format
 
-One review per run. Top-level summary + inline comments anchored to specific lines. Bottom-of-summary block:
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
 ```
-## Verdict
-Confidence: <0.0–1.0>
-Risk areas: <bullets>
-Suggested follow-ups: <bullets>
+BEGIN_PR_REVIEW
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "<one-paragraph top-level summary>",
+  "findings": [
+    { "axis": "correctness", "severity": "P1", "where": "src/auth/session.ts:142", "note": "Race condition between cookie write and refresh." }
+  ],
+  "verdict_block": "## Verdict\nConfidence: 0.87\nRisk areas:\n- Session refresh path on Safari\nSuggested follow-ups:\n- Add a Playwright trace for the strict-cookies flow.",
+  "confidence": 0.87
+}
+END_PR_REVIEW
 ```
 
-Event: `APPROVE` | `REQUEST_CHANGES` | `COMMENT`. Never modify code; never open a PR. Reviews only.
+`verdict` ∈ `APPROVE` | `REQUEST_CHANGES` | `COMMENT`.
+
+The orchestrator may **override** your verdict to `REQUEST_CHANGES` if the PR body is missing the required `## Evidence` section or has any required Evidence subheading empty. In that case your review body is appended below an Obelisk-authored "Evidence Pack incomplete" preamble.
+
+`findings` axis ∈ `correctness` | `design` | `tests` | `security` | `perf`. Severity ∈ `P0` | `P1` | `P2`. The orchestrator turns each finding into a top-level mention in the review body; it does NOT post inline comments in v0.1 (Phase 11+ wires PR-line anchors).
+
+Never modify code. Never open a PR. Reviews only.

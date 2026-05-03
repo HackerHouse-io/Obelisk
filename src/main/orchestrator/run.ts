@@ -63,13 +63,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${input.repoId} not found`);
 
   const handler = getAgentHandler(input.agentName);
-  if (!handler) {
-    throw new ObeliskError(
-      'AGENT_NOT_FOUND',
-      `Agent '${input.agentName}' has no implementation in v0.1`,
-      'Bug Fixer is the only Phase 4 agent; the rest land in Phases 5-8.',
-    );
-  }
 
   // 1) Pick a task.
   const selected = await handler.selectTask({ repo, defaultRunner: repo.defaultRunner });
@@ -156,26 +149,37 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       },
     });
 
-    if (!runResult.result.ok) {
-      const errorCode = errorCodeForReason(runResult.result.reason);
+    // Read-only agents (qa-hunter, manual-qa, pr-reviewer) report
+    // `no_changes` as their normal success path; coerce that into an ok
+    // result with an empty patch so downstream code treats it uniformly.
+    const result = runResult.result;
+    const isReadOnlyNoChanges =
+      !result.ok && result.reason === 'no_changes' && handler.producesPatch === false;
+
+    if (!result.ok && !isReadOnlyNoChanges) {
+      const errorCode = errorCodeForReason(result.reason);
       appendAudit({
         runId: run.id,
         kind: 'state',
         payload: {
           from: 'running',
           to: 'failed',
-          reason: runResult.result.reason,
-          detail: runResult.result.detail,
+          reason: result.reason,
+          detail: result.detail,
         },
       });
       transitionRun(run.id, 'failed', {
         errorCode,
-        outputSummary: runResult.result.detail.slice(0, 500),
+        outputSummary: result.detail.slice(0, 500),
         runnerUsed: runResult.runnerUsed,
         fallbackUsed: runResult.fallbackUsed,
       });
-      return { runId: run.id, finalState: 'failed', reason: runResult.result.reason };
+      return { runId: run.id, finalState: 'failed', reason: result.reason };
     }
+
+    const ok = result.ok
+      ? result
+      : { ok: true as const, patch: { diff: '', filesChanged: [] }, testsRun: [], reasoning: '' };
 
     // 8) Capture artifacts + (for PR-opening agents) check the Evidence Pack.
     transitionRun(run.id, 'publishing', {
@@ -183,47 +187,46 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       fallbackUsed: runResult.fallbackUsed,
     });
 
-    saveArtifact({
-      runId: run.id,
-      repoId: repo.id,
-      kind: 'patch',
-      filename: 'patch.diff',
-      contents: runResult.result.patch.diff,
-    });
+    if (handler.producesPatch) {
+      saveArtifact({
+        runId: run.id,
+        repoId: repo.id,
+        kind: 'patch',
+        filename: 'patch.diff',
+        contents: ok.patch.diff,
+      });
+    }
     saveArtifact({
       runId: run.id,
       repoId: repo.id,
       kind: 'reasoning',
       filename: 'reasoning.md',
-      contents: runResult.result.reasoning,
+      contents: ok.reasoning || '(no reasoning emitted)',
     });
-    // Phase 4 stub: a synthetic test_output artifact records that the runner
-    // claimed tests passed. Phase 6+ wires real test extraction (testsRun).
     saveArtifact({
       runId: run.id,
       repoId: repo.id,
       kind: 'test_output',
       filename: 'test-output.txt',
       contents:
-        runResult.result.testsRun
-          .map((t) => `$ ${t.command}\nexit ${t.exitCode}\n${t.summary}`)
-          .join('\n\n') || '(test runner output not yet extracted in Phase 4)',
+        ok.testsRun.map((t) => `$ ${t.command}\nexit ${t.exitCode}\n${t.summary}`).join('\n\n') ||
+        '(no test runner output extracted)',
     });
     if (input.agentName === 'bug-fixer') {
       // Bug Fixer's Prove-It Pattern means the failing test is part of the
-      // patch. We tag it explicitly for the evidence checker.
+      // patch. Tag it explicitly so the evidence check sees it.
       saveArtifact({
         runId: run.id,
         repoId: repo.id,
         kind: 'failing_test_diff',
         filename: 'failing-test.diff',
-        contents: runResult.result.patch.diff,
+        contents: ok.patch.diff,
       });
     }
 
     const inferred = inferChangeKind({
       agentName: input.agentName,
-      filesChanged: runResult.result.patch.filesChanged,
+      filesChanged: ok.patch.filesChanged,
     });
     const evidence = checkEvidence({
       runId: run.id,
@@ -258,7 +261,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     const planOrPlans = await handler.interpretResult({
       repo,
       task: selected.task,
-      runResult: runResult.result,
+      runResult: ok,
       runId: run.id,
     });
     const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
@@ -303,8 +306,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
             agentName: input.agentName,
             runId: run.id,
             taskRef: selected.task.ref,
-            summary: oneLine(runResult.result.reasoning),
-            reasoning: runResult.result.reasoning,
+            summary: oneLine(ok.reasoning),
+            reasoning: ok.reasoning,
             evidence,
           });
         }

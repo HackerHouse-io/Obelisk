@@ -4,21 +4,22 @@ import { bugFixerHandler } from './bug-fixer';
 import { qaHunterHandler } from './qa-hunter';
 import { manualQaHandler } from './manual-qa';
 import { featureBuilderHandler } from './feature-builder';
+import { prReviewerHandler } from './pr-reviewer';
 
 /**
  * Central registry. Adding a new agent: implement AgentHandler and register
  * it here. Everything else (orchestrator, scheduler, IPC) is name-agnostic.
  */
-const HANDLERS: Partial<Record<AgentName, AgentHandler>> = {
+const HANDLERS: Record<AgentName, AgentHandler> = {
   'bug-fixer': bugFixerHandler,
   'qa-hunter': qaHunterHandler,
   'manual-qa': manualQaHandler,
   'feature-builder': featureBuilderHandler,
-  // Phase 8: 'pr-reviewer'
+  'pr-reviewer': prReviewerHandler,
 };
 
-export function getAgentHandler(name: AgentName): AgentHandler | null {
-  return HANDLERS[name] ?? null;
+export function getAgentHandler(name: AgentName): AgentHandler {
+  return HANDLERS[name];
 }
 
 export function listImplementedAgents(): AgentName[] {

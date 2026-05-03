@@ -15,6 +15,7 @@ export const qaHunterHandler: AgentHandler = {
   // QA Hunter doesn't write code; it files issues. The Evidence Pack gate
   // (which is about PR evidence) doesn't apply.
   skipsEvidenceGate: true,
+  producesPatch: false,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     // QA Hunter sweeps the entire repo on a schedule. Synthesize a single
