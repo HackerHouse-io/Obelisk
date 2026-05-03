@@ -147,6 +147,11 @@ out/
 release/
 .electron-builder/
 
+# Test scratch (created when tests run outside Electron context)
+.obelisk-records/
+.obelisk-worktrees/
+.obelisk-test-data/
+
 # OS
 .DS_Store
 Thumbs.db

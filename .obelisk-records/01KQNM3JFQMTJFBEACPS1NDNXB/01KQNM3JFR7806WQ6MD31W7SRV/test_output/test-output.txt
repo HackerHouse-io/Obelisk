@@ -1,3 +1,0 @@
-$ pnpm test
-exit 0
-PASS  src/auth/session.test.ts (3 tests)

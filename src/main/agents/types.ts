@@ -61,6 +61,12 @@ export interface InterpretResultInput {
   repo: Repo;
   task: TaskPayload;
   runResult: Extract<RunResult, { ok: true }>;
+  /**
+   * Run id, so handlers that want to persist their own evidence artifacts
+   * (Manual QA's Playwright trace + screenshot) can register them via
+   * `recordArtifact` and have the run's `evidence_artifacts` rows wired up.
+   */
+  runId: string;
 }
 
 export type PublishPlan =

@@ -76,3 +76,10 @@ export function listArtifacts(runId: string): EvidenceArtifact[] {
 export function markArtifactUploaded(id: string): void {
   getDb().prepare('UPDATE evidence_artifacts SET uploaded_to_repo = 1 WHERE id = ?').run(id);
 }
+
+export function getArtifactPath(id: string): string | null {
+  const row = getDb()
+    .prepare<[string], { path: string }>('SELECT path FROM evidence_artifacts WHERE id = ?')
+    .get(id);
+  return row?.path ?? null;
+}

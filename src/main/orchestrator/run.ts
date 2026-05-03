@@ -259,6 +259,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       repo,
       task: selected.task,
       runResult: runResult.result,
+      runId: run.id,
     });
     const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
 

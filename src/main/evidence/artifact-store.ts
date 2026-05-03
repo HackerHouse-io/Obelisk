@@ -1,8 +1,8 @@
 import { app } from 'electron';
-import { mkdirSync, writeFileSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { recordArtifact, type EvidenceKind } from '../db/evidence';
+import { sha256, sha256Buffer } from '../prompt-compiler/hash';
 
 /**
  * Local artifact storage at <userData>/Obelisk/records/<repoId>/<runId>/<kind>/<filename>.
@@ -41,16 +41,21 @@ export function saveArtifact(input: SaveArtifactInput): SavedArtifact {
   const absolutePath = join(dir, input.filename);
   mkdirSync(dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, input.contents);
-  const bytes = statSync(absolutePath).size;
-  const sha256 = createHash('sha256').update(input.contents).digest('hex');
+
+  const bytes =
+    typeof input.contents === 'string'
+      ? Buffer.byteLength(input.contents, 'utf8')
+      : input.contents.byteLength;
+  const digest =
+    typeof input.contents === 'string' ? sha256(input.contents) : sha256Buffer(input.contents);
 
   const artifact = recordArtifact({
     runId: input.runId,
     kind: input.kind,
     path: absolutePath,
     bytes,
-    sha256,
+    sha256: digest,
   });
 
-  return { id: artifact.id, absolutePath, bytes, sha256 };
+  return { id: artifact.id, absolutePath, bytes, sha256: digest };
 }

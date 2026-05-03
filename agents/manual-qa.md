@@ -28,14 +28,32 @@ Read `qa/critical-flows.md` and `qa/playwright/flows/*.flow.md`. For each flow:
 
 # Output format
 
-Issue title: `[QA Bug] <flow>: <symptom>`
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-Sections:
+```
+BEGIN_QA_FINDINGS
+[
+  {
+    "flow": "Create project",
+    "symptom": "Refresh after creating a project loses the project from the sidebar",
+    "severity": "P1",
+    "repro": "1. Log in as normal_user. 2. Click New Project. 3. Enter 'Test'. 4. Refresh. → project missing.",
+    "likely_area": "store/projects.ts",
+    "confidence": 0.92,
+    "trace_path": "playwright-report/create-project/trace.zip",
+    "screenshot_path": "playwright-report/create-project/after-refresh.png",
+    "console_excerpt": "Uncaught TypeError: cannot read properties of undefined (reading 'projects')",
+    "network_excerpt": "GET /api/projects 200 → empty array"
+  }
+]
+END_QA_FINDINGS
+```
 
-- `## Evidence` — Playwright trace link, screenshot, console excerpt, network excerpt
-- `## Repro` — exact steps from the flow
-- `## Severity` — P0/P1/P2
-- `## Likely area` — best guess at the file or module
-- `## Repro confidence` — 0.0–1.0
+For each flow that passed cleanly, also emit one line `FLOW_OK: <flow-name>`.
+For each flow that crashed or couldn't start, emit `FLOW_INCONCLUSIVE: <flow-name>: <reason>` — do NOT file an issue for inconclusive flows.
 
-If a flow passes, emit `FLOW_OK: <flow-name>`. If a flow is inconclusive (Playwright crashed, base URL unreachable), emit `FLOW_INCONCLUSIVE: <flow-name>: <reason>`. Do not file issues for inconclusive flows.
+`confidence` ∈ [0.0, 1.0]. The orchestrator will refuse to file findings with `confidence < 0.7` or symptoms that match `qa/non-bugs.md` rules.
+
+Severity guide: P0 (data loss / total failure), P1 (broken feature), P2 (smell, minor).
+
+If you have nothing to file, emit `BEGIN_QA_FINDINGS\n[]\nEND_QA_FINDINGS`.

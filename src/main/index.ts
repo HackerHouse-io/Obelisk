@@ -4,8 +4,15 @@ import { runMigrations } from './db/migrations';
 import { closeDb } from './db';
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc/register';
 import { startHeartbeat, stopHeartbeat } from './ipc/bus';
+import {
+  registerObeliskProtocolSchemes,
+  registerObeliskProtocolHandler,
+} from './protocol/obelisk-protocol';
 
 const isDev = !app.isPackaged;
+
+// Must be called BEFORE app.whenReady() (Electron protocol contract).
+registerObeliskProtocolSchemes();
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -50,6 +57,7 @@ app.whenReady().then(() => {
     console.error('[obelisk] migrations failed:', e);
   }
 
+  registerObeliskProtocolHandler();
   registerIpcHandlers();
   startHeartbeat();
   createWindow();

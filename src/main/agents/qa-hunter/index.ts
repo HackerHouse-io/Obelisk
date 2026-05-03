@@ -1,6 +1,7 @@
 import { ulid } from 'ulid';
 import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
+import { parseFencedJson } from '../lib/parse-fenced-json';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -59,25 +60,8 @@ interface Finding {
   suspected_kind?: 'bug' | 'coverage';
 }
 
-/**
- * QA Hunter's runner is instructed to emit a `BEGIN_FINDINGS` / `END_FINDINGS`
- * fenced block containing a JSON array. Anything outside is reasoning the
- * agent included for the audit log; only the fenced block is parsed.
- *
- * Falling back gracefully: if parsing fails, return [] and let the audit
- * log preserve the raw stdout.
- */
 export function parseFindings(stdout: string): Finding[] {
-  const match = stdout.match(/BEGIN_FINDINGS\s*([\s\S]*?)\s*END_FINDINGS/);
-  if (!match) return [];
-  const json = match[1]!.trim();
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isFinding);
-  } catch {
-    return [];
-  }
+  return parseFencedJson<Finding>(stdout, 'BEGIN_FINDINGS', 'END_FINDINGS', isFinding);
 }
 
 function isFinding(v: unknown): v is Finding {

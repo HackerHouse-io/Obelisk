@@ -2,6 +2,7 @@ import type { AgentName } from '../../shared/types';
 import type { AgentHandler } from './types';
 import { bugFixerHandler } from './bug-fixer';
 import { qaHunterHandler } from './qa-hunter';
+import { manualQaHandler } from './manual-qa';
 
 /**
  * Central registry. Adding a new agent: implement AgentHandler and register
@@ -10,7 +11,8 @@ import { qaHunterHandler } from './qa-hunter';
 const HANDLERS: Partial<Record<AgentName, AgentHandler>> = {
   'bug-fixer': bugFixerHandler,
   'qa-hunter': qaHunterHandler,
-  // Phase 6+: 'manual-qa', 'feature-builder', 'pr-reviewer'
+  'manual-qa': manualQaHandler,
+  // Phase 7+: 'feature-builder', 'pr-reviewer'
 };
 
 export function getAgentHandler(name: AgentName): AgentHandler | null {

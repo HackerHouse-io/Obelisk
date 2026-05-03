@@ -1025,7 +1025,7 @@ Find the root cause, not a symptom that quiets the alarm.
       "path": ".claude/settings.json",
     },
   ],
-  "contentHash": "5cdf007662d189592de6b87ab5015ad2ef6ff7ff4426895152bbc530d33425bf",
+  "contentHash": "3afa06876415a27df0f3fc5bccb50bb9a7fe25c3cad7c92e7bd8bd30d7275909",
   "runnerArgs": [
     "--system-prompt-file",
     ".claude/SYSTEM.md",
@@ -1056,17 +1056,35 @@ Read \`qa/critical-flows.md\` and \`qa/playwright/flows/*.flow.md\`. For each fl
 
 # Output format
 
-Issue title: \`[QA Bug] <flow>: <symptom>\`
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-Sections:
+\`\`\`
+BEGIN_QA_FINDINGS
+[
+  {
+    "flow": "Create project",
+    "symptom": "Refresh after creating a project loses the project from the sidebar",
+    "severity": "P1",
+    "repro": "1. Log in as normal_user. 2. Click New Project. 3. Enter 'Test'. 4. Refresh. → project missing.",
+    "likely_area": "store/projects.ts",
+    "confidence": 0.92,
+    "trace_path": "playwright-report/create-project/trace.zip",
+    "screenshot_path": "playwright-report/create-project/after-refresh.png",
+    "console_excerpt": "Uncaught TypeError: cannot read properties of undefined (reading 'projects')",
+    "network_excerpt": "GET /api/projects 200 → empty array"
+  }
+]
+END_QA_FINDINGS
+\`\`\`
 
-- \`## Evidence\` — Playwright trace link, screenshot, console excerpt, network excerpt
-- \`## Repro\` — exact steps from the flow
-- \`## Severity\` — P0/P1/P2
-- \`## Likely area\` — best guess at the file or module
-- \`## Repro confidence\` — 0.0–1.0
+For each flow that passed cleanly, also emit one line \`FLOW_OK: <flow-name>\`.
+For each flow that crashed or couldn't start, emit \`FLOW_INCONCLUSIVE: <flow-name>: <reason>\` — do NOT file an issue for inconclusive flows.
 
-If a flow passes, emit \`FLOW_OK: <flow-name>\`. If a flow is inconclusive (Playwright crashed, base URL unreachable), emit \`FLOW_INCONCLUSIVE: <flow-name>: <reason>\`. Do not file issues for inconclusive flows.
+\`confidence\` ∈ [0.0, 1.0]. The orchestrator will refuse to file findings with \`confidence < 0.7\` or symptoms that match \`qa/non-bugs.md\` rules.
+
+Severity guide: P0 (data loss / total failure), P1 (broken feature), P2 (smell, minor).
+
+If you have nothing to file, emit \`BEGIN_QA_FINDINGS\\n[]\\nEND_QA_FINDINGS\`.
 
 # Permissions
 - mode: prs
@@ -1100,7 +1118,7 @@ Critical flows: login, create-project, billing. See qa/critical-flows.md.
 exports[`prompt-compiler > snapshot per (agent, runner) > manual-qa × codex 1`] = `
 {
   "attachments": [],
-  "contentHash": "48978e5fba3e67fd88c593a741e1dd819c47157530222ff9bc1c38812f57daae",
+  "contentHash": "6ef1c553f5c5564c7718774dcff354462f12dcc5a851c345258836003eb35ae6",
   "runnerArgs": [
     "exec",
     "--codex-model=gpt-5",
@@ -1131,17 +1149,35 @@ Read \`qa/critical-flows.md\` and \`qa/playwright/flows/*.flow.md\`. For each fl
 
 # Output format
 
-Issue title: \`[QA Bug] <flow>: <symptom>\`
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-Sections:
+\`\`\`
+BEGIN_QA_FINDINGS
+[
+  {
+    "flow": "Create project",
+    "symptom": "Refresh after creating a project loses the project from the sidebar",
+    "severity": "P1",
+    "repro": "1. Log in as normal_user. 2. Click New Project. 3. Enter 'Test'. 4. Refresh. → project missing.",
+    "likely_area": "store/projects.ts",
+    "confidence": 0.92,
+    "trace_path": "playwright-report/create-project/trace.zip",
+    "screenshot_path": "playwright-report/create-project/after-refresh.png",
+    "console_excerpt": "Uncaught TypeError: cannot read properties of undefined (reading 'projects')",
+    "network_excerpt": "GET /api/projects 200 → empty array"
+  }
+]
+END_QA_FINDINGS
+\`\`\`
 
-- \`## Evidence\` — Playwright trace link, screenshot, console excerpt, network excerpt
-- \`## Repro\` — exact steps from the flow
-- \`## Severity\` — P0/P1/P2
-- \`## Likely area\` — best guess at the file or module
-- \`## Repro confidence\` — 0.0–1.0
+For each flow that passed cleanly, also emit one line \`FLOW_OK: <flow-name>\`.
+For each flow that crashed or couldn't start, emit \`FLOW_INCONCLUSIVE: <flow-name>: <reason>\` — do NOT file an issue for inconclusive flows.
 
-If a flow passes, emit \`FLOW_OK: <flow-name>\`. If a flow is inconclusive (Playwright crashed, base URL unreachable), emit \`FLOW_INCONCLUSIVE: <flow-name>: <reason>\`. Do not file issues for inconclusive flows.
+\`confidence\` ∈ [0.0, 1.0]. The orchestrator will refuse to file findings with \`confidence < 0.7\` or symptoms that match \`qa/non-bugs.md\` rules.
+
+Severity guide: P0 (data loss / total failure), P1 (broken feature), P2 (smell, minor).
+
+If you have nothing to file, emit \`BEGIN_QA_FINDINGS\\n[]\\nEND_QA_FINDINGS\`.
 
 ## Permissions
 - mode: prs

@@ -1,1 +1,0 @@
-Hypothesis: Safari rejects Lax + Secure cookies. Fix: emit SameSite=None when Secure is true. Added a regression test that fails before the fix.
