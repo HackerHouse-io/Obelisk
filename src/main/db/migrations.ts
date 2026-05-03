@@ -14,13 +14,21 @@ import { getDb } from './index';
  */
 
 function resolveMigrationsDir(): string {
+  const appPath = ((): string | null => {
+    try {
+      return app.getAppPath();
+    } catch {
+      return null;
+    }
+  })();
   const candidates = [
     join(process.resourcesPath ?? '', 'db', 'migrations'),
-    join(app.getAppPath(), 'db', 'migrations'),
+    appPath ? join(appPath, 'db', 'migrations') : '',
     join(__dirname, '..', '..', '..', 'db', 'migrations'),
-  ];
+    join(process.cwd(), 'db', 'migrations'),
+  ].filter((p) => p.length > 0);
   for (const c of candidates) {
-    if (c && existsSync(c)) return c;
+    if (existsSync(c)) return c;
   }
   throw new Error(`migrations directory not found; tried: ${candidates.join(', ')}`);
 }

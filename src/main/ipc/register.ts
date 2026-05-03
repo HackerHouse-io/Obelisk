@@ -18,6 +18,14 @@ import {
   handleReposListGitHubRepos,
 } from './repos';
 import { handleAllowlistList, handleAllowlistAdd, handleAllowlistRemove } from './allowlist';
+import {
+  handleAgentsList,
+  handleAgentsRun,
+  handleAgentsCancel,
+  handleAgentsUpdate,
+} from './agents';
+import { handleRunsList, handleRunsGet } from './runs';
+import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -67,18 +75,20 @@ export function registerIpcHandlers(): void {
   register('allowlist:add', handleAllowlistAdd);
   register('allowlist:remove', handleAllowlistRemove);
 
-  // Phase 4+
-  register('agents:list', async () => []);
-  register('agents:run', notImplemented('agents:run'));
-  register('agents:cancel', notImplemented('agents:cancel'));
-  register('agents:update', notImplemented('agents:update'));
+  // Agents (Phase 4 — real)
+  register('agents:list', handleAgentsList);
+  register('agents:run', handleAgentsRun);
+  register('agents:cancel', handleAgentsCancel);
+  register('agents:update', handleAgentsUpdate);
 
-  register('runs:list', async () => []);
-  register('runs:get', notImplemented('runs:get'));
+  // Runs (Phase 4 — real)
+  register('runs:list', handleRunsList);
+  register('runs:get', handleRunsGet);
 
-  register('backlog:list', async () => []);
-  register('backlog:reorder', notImplemented('backlog:reorder'));
-  register('backlog:setOverride', notImplemented('backlog:setOverride'));
+  // Backlog (Phase 4 — real)
+  register('backlog:list', handleBacklogList);
+  register('backlog:reorder', handleBacklogReorder);
+  register('backlog:setOverride', handleBacklogSetOverride);
 
   register('playbook:get', async () => ({ files: [], draft: true }));
   register('playbook:save', notImplemented('playbook:save'));

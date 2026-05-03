@@ -3,6 +3,8 @@ import { Shell } from './shell/Shell';
 import { useStore, type Route } from './state/store';
 import { startBusSubscriber } from './state/bus-subscriber';
 import { Connect } from './screens/Connect';
+import { Home } from './screens/Home';
+import { MissionControl } from './screens/MissionControl';
 
 export function App(): ReactElement {
   const route = useStore((s) => s.route);
@@ -57,6 +59,8 @@ const SUBTITLES: Record<Route, string> = {
 
 function renderScreen(route: Route): ReactElement {
   if (route === 'connect') return <Connect />;
+  if (route === 'home') return <Home />;
+  if (route === 'mission') return <MissionControl />;
   return (
     <div className="placeholder">
       <div className="placeholder-title">{TITLES[route]}</div>

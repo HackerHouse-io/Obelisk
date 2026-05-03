@@ -21,6 +21,8 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,html}\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pretest": "npm rebuild better-sqlite3 keytar",
+    "posttest": "electron-builder install-app-deps",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
   },
