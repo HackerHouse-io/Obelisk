@@ -28,6 +28,7 @@ import {
 import { handleRunsList, handleRunsGet } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
 import { handlePlaybookGet, handlePlaybookSave } from './playbook';
+import { handlePreviewsList } from './previews';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
@@ -91,6 +92,9 @@ export function registerIpcHandlers(): void {
   // Playbook (Phase 5 — get; Phase 9 — save)
   register('playbook:get', handlePlaybookGet);
   register('playbook:save', handlePlaybookSave);
+
+  // Observe-mode previews
+  register('previews:list', handlePreviewsList);
 
   // Settings (Phase 9 — real)
   register('settings:get', handleSettingsGet);

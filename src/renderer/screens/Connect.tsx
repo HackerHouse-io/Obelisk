@@ -48,8 +48,8 @@ const SAFETY_OPTIONS: {
   {
     mode: 'observe',
     title: 'Observe only',
-    sub: 'Read code, run tests, crawl the app. No GitHub writes. Recommended first run.',
-    chips: ['read code', 'run tests', 'preview issues'],
+    sub: 'Read code, run tests, crawl the app. No GitHub writes — drafts of issues and the QA playbook show up on Home so you can review them before promoting the mode.',
+    chips: ['read code', 'run tests', 'drafts on Home'],
     recommended: true,
   },
   {

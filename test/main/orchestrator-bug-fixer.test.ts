@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,16 @@ import { runAgent } from '../../src/main/orchestrator/run';
 import { addInProcessListener } from '../../src/main/ipc/bus';
 import type { BusEvent } from '../../src/shared/types';
 import { MockRunner, type MockRecipe } from '../helpers/mock-runner';
+
+// Force getGithub() to return null regardless of whether the developer's
+// keychain has a real token saved. The test's whole premise is "no signed-in
+// GitHub user", and reading from a real keychain would let tokens leak into
+// the test path and trigger real network calls (or, with a wrong/expired
+// token, infinite retries against a non-existent test/express-buggy repo).
+vi.mock('../../src/main/github/client', () => ({
+  getGithub: vi.fn(async () => null),
+  invalidateGithubClient: vi.fn(),
+}));
 
 let tmpRoot: string;
 let repoPath: string;

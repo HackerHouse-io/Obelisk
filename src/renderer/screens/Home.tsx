@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
-import type { Agent, BacklogItem, Run, RunState, AgentName } from '../../shared/types';
+import type { Agent, BacklogItem, IpcMap, Run, RunState, AgentName } from '../../shared/types';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
+
+type PreviewsResponse = IpcMap['previews:list']['res'];
 
 /**
  * Home (Project Command Center).
@@ -21,6 +23,10 @@ export function Home(): ReactElement {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
+  const [previews, setPreviews] = useState<PreviewsResponse>({
+    findings: [],
+    playbookDraft: null,
+  });
 
   useEffect(() => {
     if (!repo) return;
@@ -28,10 +34,12 @@ export function Home(): ReactElement {
       window.obelisk.invoke('agents:list', { repoId: repo.id }),
       window.obelisk.invoke('runs:list', { repoId: repo.id, limit: 50 }),
       window.obelisk.invoke('backlog:list', { repoId: repo.id }),
-    ]).then(([a, r, b]) => {
+      window.obelisk.invoke('previews:list', { repoId: repo.id }),
+    ]).then(([a, r, b, p]) => {
       if (a.ok) setAgents(a.value);
       if (r.ok) setRuns(r.value);
       if (b.ok) setBacklog(b.value);
+      if (p.ok) setPreviews(p.value);
     });
   }, [repo]);
 
@@ -78,6 +86,16 @@ export function Home(): ReactElement {
         <KpiCard label="Failed (recent)" value={kpis.failedRecent} sub="last 50 runs" />
         <KpiCard label="Backlog" value={kpis.backlogTotal} sub="items waiting" />
       </div>
+
+      {repo.mode === 'observe' &&
+      (previews.findings.length > 0 || previews.playbookDraft !== null) ? (
+        <ObservePreviews
+          findings={previews.findings}
+          playbookDraft={previews.playbookDraft}
+          onUpgradeMode={() => setRoute('settings')}
+          onOpenPlaybook={() => setRoute('playbook')}
+        />
+      ) : null}
 
       <div className="home-section">
         <div className="home-section-title">
@@ -195,6 +213,106 @@ function KpiCard({
       <div className="kpi-label">{label}</div>
       <div className="kpi-value">{value}</div>
       <div className="kpi-sub">{sub}</div>
+    </div>
+  );
+}
+
+function ObservePreviews({
+  findings,
+  playbookDraft,
+  onUpgradeMode,
+  onOpenPlaybook,
+}: {
+  findings: PreviewsResponse['findings'];
+  playbookDraft: PreviewsResponse['playbookDraft'];
+  onUpgradeMode: () => void;
+  onOpenPlaybook: () => void;
+}): ReactElement {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  return (
+    <div className="home-section observe-previews">
+      <div className="home-section-title">
+        <span className="row gap-2" style={{ alignItems: 'center' }}>
+          <Icon.Eye size={13} color="var(--brand)" />
+          Observe-mode previews
+        </span>
+        <button type="button" className="btn ghost sm" onClick={onUpgradeMode}>
+          Switch to &ldquo;File issues&rdquo; mode
+        </button>
+      </div>
+      <div className="home-section-sub">
+        Safety mode is set to <span className="mono">observe</span>, so nothing has been written to
+        GitHub. These are the issues and playbook files agents would have filed otherwise.
+      </div>
+
+      {playbookDraft ? (
+        <div className="preview-card">
+          <div className="row gap-2" style={{ alignItems: 'center' }}>
+            <Icon.Playbook size={13} color="var(--t-1)" />
+            <div style={{ fontWeight: 600, fontSize: 13 }}>QA playbook draft</div>
+            <span className="pill" style={{ marginLeft: 'auto' }}>
+              draft
+            </span>
+          </div>
+          <div className="preview-card-sub">
+            Detected framework <span className="mono">{playbookDraft.framework}</span> ·{' '}
+            {playbookDraft.fileCount} file{playbookDraft.fileCount === 1 ? '' : 's'} ·{' '}
+            {playbookDraft.criticalFlows.length} critical flow
+            {playbookDraft.criticalFlows.length === 1 ? '' : 's'} · generated{' '}
+            {short(playbookDraft.generatedAt)}
+          </div>
+          <div className="row gap-2">
+            <button type="button" className="btn sm" onClick={onOpenPlaybook}>
+              <Icon.Doc size={11} /> Review draft
+            </button>
+            <button type="button" className="btn sm" onClick={onUpgradeMode}>
+              Open as PR
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {findings.length === 0 ? (
+        <div className="home-table-empty">
+          No previewed findings yet. QA Hunter and Manual QA write here on their next run.
+        </div>
+      ) : (
+        <div className="home-table">
+          {findings.map((f) => {
+            const expanded = expandedId === f.id;
+            return (
+              <div key={f.id} className="preview-row">
+                <button
+                  type="button"
+                  className="preview-row-head"
+                  onClick={() => setExpandedId(expanded ? null : f.id)}
+                >
+                  <Icon.Issue size={13} color="var(--t-2)" />
+                  <div className="preview-row-title">
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{f.title}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                      {labelFor(f.agentName)} · {short(f.at)}
+                    </div>
+                  </div>
+                  <div className="row gap-1">
+                    {f.labels.map((l) => (
+                      <span key={l} className="pill">
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                  <Icon.ChevronDown
+                    size={11}
+                    color="var(--t-2)"
+                    style={{ transform: expanded ? 'rotate(180deg)' : undefined }}
+                  />
+                </button>
+                {expanded ? <pre className="preview-row-body">{f.body}</pre> : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

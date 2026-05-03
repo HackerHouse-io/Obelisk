@@ -165,6 +165,29 @@ export interface IpcMap {
   'playbook:get': { req: { repoId: string }; res: Playbook };
   'playbook:save': { req: { repoId: string; files: PlaybookFile[] }; res: { ok: true } };
 
+  // Observe-mode previews — the issues / playbook agents would have filed
+  // if the repo's safety mode allowed writes.
+  'previews:list': {
+    req: { repoId: string };
+    res: {
+      findings: {
+        id: number;
+        runId: string;
+        agentName: AgentName;
+        at: ISO;
+        title: string;
+        body: string;
+        labels: string[];
+      }[];
+      playbookDraft: {
+        generatedAt: ISO;
+        framework: string;
+        criticalFlows: string[];
+        fileCount: number;
+      } | null;
+    };
+  };
+
   // Settings
   'settings:get': { req: void; res: Settings };
   'settings:update': { req: Partial<Settings>; res: Settings };
