@@ -1639,7 +1639,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
       "path": ".claude/settings.json",
     },
   ],
-  "contentHash": "e54164443980dd196c68a4f653587a8b97f39205132b10f91c4520cfa8876644",
+  "contentHash": "26d73b2054369c62e61ae97518128ce575890ad43584f299533d3d6619f5de14",
   "runnerArgs": [
     "--system-prompt-file",
     ".claude/SYSTEM.md",
@@ -1670,14 +1670,26 @@ Do not file noise. Each finding must include the code location, why it's a bug o
 
 # Output format
 
-For every confirmed finding, emit a GitHub issue body with these sections:
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-- \`## Severity\` — \`P0\` (data loss / security / total failure), \`P1\` (broken feature), \`P2\` (smell, minor)
-- \`## Repro\` — minimal steps a human could follow
-- \`## Suspected files\` — \`path/to/file.ts:line\`
-- \`## Suggested test\` — a single failing-test sketch that would catch this
+\`\`\`
+BEGIN_FINDINGS
+[
+  {
+    "title": "Race condition in session refresh on Safari",
+    "severity": "P1",
+    "repro": "1. Sign in on Safari with strict cookies. 2. Wait 30s. 3. Refresh.",
+    "suspected_files": ["src/auth/session.ts:142"],
+    "suggested_test": "describe('session refresh', () => { it('handles strict-cookie Safari', ...) })"
+  },
+  …
+]
+END_FINDINGS
+\`\`\`
 
-If you have nothing to file, output \`NO_FINDINGS\` and exit. Do not invent issues.
+Severity values: \`P0\` (data loss / security / total failure), \`P1\` (broken feature), \`P2\` (smell, minor).
+
+If you have nothing to file, emit \`BEGIN_FINDINGS\\n[]\\nEND_FINDINGS\`. Do not invent issues.
 
 # Permissions
 - mode: observe
@@ -1713,7 +1725,7 @@ Critical flows: login, create-project, billing. See qa/critical-flows.md.
 exports[`prompt-compiler > snapshot per (agent, runner) > qa-hunter × codex 1`] = `
 {
   "attachments": [],
-  "contentHash": "07e43ace92eaa5089f274856a1322cb61ae86203eff2f39b2a1e783db982c701",
+  "contentHash": "c50c4c791df1d5515d0cbaa6168490e1b3ab1a00e2b354401475ddde32c19eea",
   "runnerArgs": [
     "exec",
     "--codex-model=gpt-5",
@@ -1744,14 +1756,26 @@ Do not file noise. Each finding must include the code location, why it's a bug o
 
 # Output format
 
-For every confirmed finding, emit a GitHub issue body with these sections:
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-- \`## Severity\` — \`P0\` (data loss / security / total failure), \`P1\` (broken feature), \`P2\` (smell, minor)
-- \`## Repro\` — minimal steps a human could follow
-- \`## Suspected files\` — \`path/to/file.ts:line\`
-- \`## Suggested test\` — a single failing-test sketch that would catch this
+\`\`\`
+BEGIN_FINDINGS
+[
+  {
+    "title": "Race condition in session refresh on Safari",
+    "severity": "P1",
+    "repro": "1. Sign in on Safari with strict cookies. 2. Wait 30s. 3. Refresh.",
+    "suspected_files": ["src/auth/session.ts:142"],
+    "suggested_test": "describe('session refresh', () => { it('handles strict-cookie Safari', ...) })"
+  },
+  …
+]
+END_FINDINGS
+\`\`\`
 
-If you have nothing to file, output \`NO_FINDINGS\` and exit. Do not invent issues.
+Severity values: \`P0\` (data loss / security / total failure), \`P1\` (broken feature), \`P2\` (smell, minor).
+
+If you have nothing to file, emit \`BEGIN_FINDINGS\\n[]\\nEND_FINDINGS\`. Do not invent issues.
 
 ## Permissions
 - mode: observe

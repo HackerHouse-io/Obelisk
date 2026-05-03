@@ -90,7 +90,12 @@ export function registerIpcHandlers(): void {
   register('backlog:reorder', handleBacklogReorder);
   register('backlog:setOverride', handleBacklogSetOverride);
 
-  register('playbook:get', async () => ({ files: [], draft: true }));
+  register('playbook:get', async (payload) => {
+    const { getPlaybookDraft } = await import('../agents/playbook-bootstrapper/publish');
+    const draft = getPlaybookDraft(payload.repoId);
+    if (draft) return { files: draft.files, draft: true };
+    return { files: [], draft: false };
+  });
   register('playbook:save', notImplemented('playbook:save'));
 
   register('settings:get', async () => ({

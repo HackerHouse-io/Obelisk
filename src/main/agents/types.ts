@@ -19,10 +19,25 @@ export interface AgentHandler {
   selectTask(input: SelectTaskInput): Promise<SelectedTask | null>;
 
   /**
-   * Convert a successful RunResult into a publish plan. Called only after the
-   * Evidence Pack check has passed.
+   * Convert a successful RunResult into one or more publish plans. Called
+   * only after the Evidence Pack check has passed (or skipped, when the
+   * agent doesn't open PRs).
+   *
+   * Most agents return exactly one plan. QA Hunter and Manual QA return
+   * many — one per finding. Returning [] is allowed and means "nothing
+   * actionable was produced this run."
    */
-  interpretResult(input: InterpretResultInput): PublishPlan;
+  interpretResult(
+    input: InterpretResultInput,
+  ): Promise<PublishPlan | PublishPlan[]> | PublishPlan | PublishPlan[];
+
+  /**
+   * Whether this agent's output skips the Evidence Pack gate. Issue-filing
+   * agents (QA Hunter, Manual QA) don't write code, so the gate doesn't
+   * apply. PR-opening agents (Bug Fixer, Feature Builder) MUST go through
+   * the gate.
+   */
+  readonly skipsEvidenceGate: boolean;
 }
 
 export interface SelectTaskInput {

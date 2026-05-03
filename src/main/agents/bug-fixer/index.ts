@@ -12,6 +12,7 @@ import type {
 
 export const bugFixerHandler: AgentHandler = {
   name: 'bug-fixer',
+  skipsEvidenceGate: false,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     return selectTaskForBugFixer(input);

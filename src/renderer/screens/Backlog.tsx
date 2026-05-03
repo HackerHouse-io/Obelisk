@@ -1,0 +1,285 @@
+import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react';
+import { Icon } from '../icons';
+import { useStore } from '../state/store';
+import type { AgentName, BacklogItem } from '../../shared/types';
+
+type Filter = 'all' | 'bug' | 'feature';
+
+export function Backlog(): ReactElement {
+  const repos = useStore((s) => s.repos);
+  const selectedRepoId = useStore((s) => s.selectedRepoId);
+  const repo = repos.find((r) => r.id === selectedRepoId);
+
+  const [items, setItems] = useState<BacklogItem[]>([]);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  const refetch = async (): Promise<void> => {
+    if (!repo) return;
+    const res = await window.obelisk.invoke('backlog:list', { repoId: repo.id });
+    if (res.ok) setItems(res.value);
+  };
+
+  useEffect(() => {
+    void refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.id]);
+
+  const visible = useMemo(
+    () => items.filter((i) => filter === 'all' || i.kind === filter),
+    [items, filter],
+  );
+  const nextUp = visible.slice(0, 6);
+  const later = visible.slice(6);
+
+  if (!repo) {
+    return (
+      <div className="placeholder">
+        <div className="placeholder-title">No repo connected</div>
+        <div className="placeholder-body">Open Connect Repo first.</div>
+      </div>
+    );
+  }
+
+  function onDragStart(id: string): (e: DragEvent<HTMLDivElement>) => void {
+    return (e) => {
+      setDraggingId(id);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', id);
+    };
+  }
+
+  function onDragOver(id: string): (e: DragEvent<HTMLDivElement>) => void {
+    return (e) => {
+      e.preventDefault();
+      if (draggingId && draggingId !== id) setDropTargetId(id);
+      e.dataTransfer.dropEffect = 'move';
+    };
+  }
+
+  function onDragLeave(): void {
+    setDropTargetId(null);
+  }
+
+  function onDrop(targetId: string): (e: DragEvent<HTMLDivElement>) => void {
+    return async (e) => {
+      e.preventDefault();
+      const sourceId = draggingId ?? e.dataTransfer.getData('text/plain');
+      setDropTargetId(null);
+      setDraggingId(null);
+      if (!sourceId || sourceId === targetId) return;
+      const reordered = reorder(items, sourceId, targetId);
+      setItems(reordered); // optimistic
+      const res = await window.obelisk.invoke('backlog:reorder', {
+        repoId: repo!.id,
+        orderedIds: reordered.map((i) => i.id),
+      });
+      if (!res.ok) await refetch(); // revert on failure
+    };
+  }
+
+  async function runBugFixerNow(): Promise<void> {
+    const res = await window.obelisk.invoke('agents:run', {
+      repoId: repo!.id,
+      agentName: 'bug-fixer',
+    });
+    if (!res.ok) alert(res.error.message);
+  }
+
+  return (
+    <div className="backlog">
+      <div className="backlog-header">
+        <div className="backlog-title-row">
+          <div>
+            <div className="backlog-title">Backlog</div>
+            <div className="backlog-sub">
+              Drag to reorder. The top item is the next thing Bug Fixer or Feature Builder picks up.
+            </div>
+          </div>
+          <button type="button" className="btn primary" onClick={runBugFixerNow}>
+            <Icon.Play size={11} /> Send top to fixer now
+          </button>
+        </div>
+        <div className="backlog-filters">
+          {(['all', 'bug', 'feature'] as Filter[]).map((f) => (
+            <button
+              key={f}
+              type="button"
+              className={`btn sm${filter === f ? ' primary' : ''}`}
+              onClick={() => setFilter(f)}
+            >
+              {f === 'all' ? 'All' : f === 'bug' ? 'Bugs' : 'Features'}
+            </button>
+          ))}
+          <span className="muted" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: 11 }}>
+            {visible.length} {visible.length === 1 ? 'item' : 'items'}
+          </span>
+        </div>
+      </div>
+
+      <div className="backlog-body">
+        {visible.length === 0 ? (
+          <div className="home-table-empty">
+            Backlog is empty. QA Hunter and Manual QA fill this on their next run.
+          </div>
+        ) : (
+          <>
+            <div>
+              <div className="backlog-section-title">
+                <span className="dot" style={{ background: 'var(--brand)' }} />
+                Next up
+              </div>
+              <div className="backlog-list">
+                {nextUp.map((item, i) => (
+                  <Row
+                    key={item.id}
+                    item={item}
+                    position={i + 1}
+                    later={false}
+                    isDragging={draggingId === item.id}
+                    isDropTarget={dropTargetId === item.id}
+                    onDragStart={onDragStart(item.id)}
+                    onDragOver={onDragOver(item.id)}
+                    onDragLeave={onDragLeave}
+                    onDrop={onDrop(item.id)}
+                  />
+                ))}
+              </div>
+            </div>
+            {later.length > 0 ? (
+              <div>
+                <div className="backlog-section-title">
+                  <span className="dot" style={{ background: 'var(--t-3)' }} />
+                  Later
+                </div>
+                <div className="backlog-list">
+                  {later.map((item, i) => (
+                    <Row
+                      key={item.id}
+                      item={item}
+                      position={i + 7}
+                      later={true}
+                      isDragging={draggingId === item.id}
+                      isDropTarget={dropTargetId === item.id}
+                      onDragStart={onDragStart(item.id)}
+                      onDragOver={onDragOver(item.id)}
+                      onDragLeave={onDragLeave}
+                      onDrop={onDrop(item.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface RowProps {
+  item: BacklogItem;
+  position: number;
+  later: boolean;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  onDragStart: (e: DragEvent<HTMLDivElement>) => void;
+  onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (e: DragEvent<HTMLDivElement>) => void;
+}
+
+function Row({
+  item,
+  position,
+  later,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}: RowProps): ReactElement {
+  const cls = [
+    'backlog-row',
+    later ? 'later' : '',
+    isDragging ? 'dragging' : '',
+    isDropTarget ? 'drop-target' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <div
+      className={cls}
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      <div className="backlog-handle" title="Drag to reorder">
+        <Icon.Drag size={14} />
+      </div>
+      <div className="backlog-position">{position}</div>
+      <div className="backlog-pin">
+        <button
+          type="button"
+          className={`backlog-pin-button${item.userPinRank === 1 ? ' active' : ''}`}
+          title={item.userPinRank === 1 ? 'Pinned' : 'Pin to top'}
+          // Phase 5: pin = userPinRank=1 via reorder. Real pin endpoint
+          // lands in Phase 9 alongside the broader Settings UI.
+        >
+          <Icon.Pin size={12} />
+        </button>
+      </div>
+      <span className={`pill${priorityTone(item.priorityLabel)}`}>{item.priorityLabel ?? '—'}</span>
+      <span title={item.kind}>
+        {item.kind === 'bug' ? (
+          <Icon.Bug size={13} color="var(--bad)" />
+        ) : (
+          <Icon.Sparkles size={13} color="var(--brand)" />
+        )}
+      </span>
+      <div className="row gap-2" style={{ minWidth: 0 }}>
+        <span className="backlog-issue">
+          {item.githubIssue ? `#${item.githubIssue}` : 'manual'}
+        </span>
+        <span className="backlog-title-text truncate">{item.title}</span>
+      </div>
+      <span className="backlog-age">—</span>
+      <span className="backlog-agent">→ {agentForKind(item.kind, item.agentOverride)}</span>
+      <div className="backlog-row-actions">
+        <button type="button" className="btn icon sm" title="Run now">
+          <Icon.Play size={11} />
+        </button>
+        <button type="button" className="btn icon sm" title="More">
+          <Icon.More size={11} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function priorityTone(p: BacklogItem['priorityLabel']): string {
+  if (p === 'P0') return ' bad';
+  if (p === 'P1') return ' warn';
+  return '';
+}
+
+function agentForKind(kind: BacklogItem['kind'], override: AgentName | null): string {
+  if (override) return override;
+  return kind === 'bug' ? 'bug-fixer' : 'feature-builder';
+}
+
+function reorder(items: BacklogItem[], sourceId: string, targetId: string): BacklogItem[] {
+  const sourceIdx = items.findIndex((i) => i.id === sourceId);
+  const targetIdx = items.findIndex((i) => i.id === targetId);
+  if (sourceIdx < 0 || targetIdx < 0) return items;
+  const next = [...items];
+  const [moved] = next.splice(sourceIdx, 1);
+  if (!moved) return items;
+  next.splice(targetIdx, 0, moved);
+  return next;
+}

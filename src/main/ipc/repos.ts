@@ -7,6 +7,7 @@ import { createAgent } from '../db/agents';
 import { addToAllowlist } from '../db/allowlist';
 import { getGithub } from '../github/client';
 import { loadGitHubToken } from '../auth/token-store';
+import { bootstrapAndPublish } from '../agents/playbook-bootstrapper/publish';
 import { ObeliskError } from '../../shared/errors';
 import type { AgentName, IpcMap } from '../../shared/types';
 
@@ -122,6 +123,14 @@ export async function handleReposConnect(
   if (stored?.login) {
     addToAllowlist(repo.id, stored.login, 'auto');
   }
+
+  // Fire the playbook bootstrapper. In Observe mode this writes a draft
+  // to settings; in higher modes it pushes a `chore(obelisk): bootstrap
+  // QA playbook` PR. Failures here are non-fatal — the connect succeeds
+  // and the user can re-trigger the bootstrap manually from Settings.
+  void bootstrapAndPublish(repo).catch((e) => {
+    console.warn(`[obelisk] playbook bootstrap failed for ${repo.githubFullName}:`, e);
+  });
 
   return repo;
 }

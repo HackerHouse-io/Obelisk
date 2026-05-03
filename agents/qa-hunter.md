@@ -30,11 +30,23 @@ Do not file noise. Each finding must include the code location, why it's a bug o
 
 # Output format
 
-For every confirmed finding, emit a GitHub issue body with these sections:
+You may write reasoning prose freely. The orchestrator only ingests one structured block. Emit it like this — exactly:
 
-- `## Severity` — `P0` (data loss / security / total failure), `P1` (broken feature), `P2` (smell, minor)
-- `## Repro` — minimal steps a human could follow
-- `## Suspected files` — `path/to/file.ts:line`
-- `## Suggested test` — a single failing-test sketch that would catch this
+```
+BEGIN_FINDINGS
+[
+  {
+    "title": "Race condition in session refresh on Safari",
+    "severity": "P1",
+    "repro": "1. Sign in on Safari with strict cookies. 2. Wait 30s. 3. Refresh.",
+    "suspected_files": ["src/auth/session.ts:142"],
+    "suggested_test": "describe('session refresh', () => { it('handles strict-cookie Safari', ...) })"
+  },
+  …
+]
+END_FINDINGS
+```
 
-If you have nothing to file, output `NO_FINDINGS` and exit. Do not invent issues.
+Severity values: `P0` (data loss / security / total failure), `P1` (broken feature), `P2` (smell, minor).
+
+If you have nothing to file, emit `BEGIN_FINDINGS\n[]\nEND_FINDINGS`. Do not invent issues.

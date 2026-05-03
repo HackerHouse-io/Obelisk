@@ -177,7 +177,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       return { runId: run.id, finalState: 'failed', reason: runResult.result.reason };
     }
 
-    // 8) Evidence: capture the patch + reasoning, infer change kind, check.
+    // 8) Capture artifacts + (for PR-opening agents) check the Evidence Pack.
     transitionRun(run.id, 'publishing', {
       runnerUsed: runResult.runnerUsed,
       fallbackUsed: runResult.fallbackUsed,
@@ -233,10 +233,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     appendAudit({
       runId: run.id,
       kind: 'evidence_check',
-      payload: { result: evidence.ok ? 'pass' : 'fail', missing: evidence.missing },
+      payload: {
+        result: evidence.ok ? 'pass' : 'fail',
+        missing: evidence.missing,
+        skipped: handler.skipsEvidenceGate,
+      },
     });
 
-    if (!evidence.ok) {
+    if (!handler.skipsEvidenceGate && !evidence.ok) {
       transitionRun(run.id, 'paused', {
         errorCode: 'EVIDENCE_INCOMPLETE',
         outputSummary: `Missing: ${evidence.missing.join(', ')}`,
@@ -250,60 +254,96 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       };
     }
 
-    // 9) Publish via agent-supplied plan.
-    const plan = handler.interpretResult({
+    // 9) Publish via agent-supplied plan(s).
+    const planOrPlans = await handler.interpretResult({
       repo,
       task: selected.task,
       runResult: runResult.result,
     });
-    if (plan.kind === 'pr') {
-      // Fill in the head branch + the rendered PR body.
-      const body = renderPrBody({
-        agentName: input.agentName,
-        runId: run.id,
-        taskRef: selected.task.ref,
-        summary: oneLine(runResult.result.reasoning),
-        reasoning: runResult.result.reasoning,
-        evidence,
+    const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
+
+    if (plans.length === 0) {
+      const summary = 'agent produced no actionable findings';
+      appendAudit({ runId: run.id, kind: 'state', payload: { outcome: 'noop', reason: summary } });
+      transitionRun(run.id, 'done', {
+        outputSummary: summary,
+        runnerUsed: runResult.runnerUsed,
+        fallbackUsed: runResult.fallbackUsed,
       });
-      plan.head = worktreeHandle.branch;
-      plan.body = body;
+      return { runId: run.id, finalState: 'done', reason: summary };
     }
 
-    const published = await publish({
-      repo,
-      runId: run.id,
-      worktreePath: worktreeHandle.worktreePath,
-      branch: worktreeHandle.branch,
-      agentName: input.agentName,
-      plan,
-      commitSubject: plan.kind === 'pr' ? plan.title : `chore: ${selected.task.ref}`,
-      ...(selected.task.githubNumber ? { sourceIssueNumber: selected.task.githubNumber } : {}),
-    });
-
-    let outputSummary = '';
-    let result: RunAgentOutput;
-    if (published.kind === 'pr') {
-      outputSummary = `Opened PR #${published.prNumber}`;
-      result = { runId: run.id, finalState: 'done', prNumber: published.prNumber };
-    } else if (published.kind === 'issue') {
-      outputSummary = `Filed issue #${published.issueNumber}`;
-      result = { runId: run.id, finalState: 'done', issueNumber: published.issueNumber };
-    } else if (published.kind === 'review') {
-      outputSummary = `Posted review on PR #${published.prNumber}`;
-      result = { runId: run.id, finalState: 'done', prNumber: published.prNumber };
-    } else {
-      outputSummary = `Noop: ${published.reason}`;
-      result = { runId: run.id, finalState: 'done', reason: published.reason };
+    // Observe-mode preview: PR-opening agents ALWAYS need writes; issue-only
+    // agents (skipsEvidenceGate=true) preview to audit_log instead.
+    if (handler.skipsEvidenceGate && repo.mode === 'observe') {
+      for (const plan of plans) {
+        appendAudit({
+          runId: run.id,
+          kind: 'preview',
+          payload: plan,
+        });
+      }
+      transitionRun(run.id, 'done', {
+        outputSummary: `Previewed ${plans.length} finding${plans.length === 1 ? '' : 's'} (observe mode)`,
+        runnerUsed: runResult.runnerUsed,
+        fallbackUsed: runResult.fallbackUsed,
+      });
+      return { runId: run.id, finalState: 'done', reason: 'previewed' };
     }
 
+    // Iterate plans. PR plans get the rendered Evidence body filled in.
+    const published: Awaited<ReturnType<typeof publish>>[] = [];
+    const failures: string[] = [];
+    for (const plan of plans) {
+      try {
+        if (plan.kind === 'pr') {
+          plan.head = worktreeHandle.branch;
+          plan.body = renderPrBody({
+            agentName: input.agentName,
+            runId: run.id,
+            taskRef: selected.task.ref,
+            summary: oneLine(runResult.result.reasoning),
+            reasoning: runResult.result.reasoning,
+            evidence,
+          });
+        }
+        const result = await publish({
+          repo,
+          runId: run.id,
+          worktreePath: worktreeHandle.worktreePath,
+          branch: worktreeHandle.branch,
+          agentName: input.agentName,
+          plan,
+          commitSubject: plan.kind === 'pr' ? plan.title : `chore: ${selected.task.ref}`,
+          ...(selected.task.githubNumber ? { sourceIssueNumber: selected.task.githubNumber } : {}),
+        });
+        published.push(result);
+        appendAudit({ runId: run.id, kind: 'published', payload: result });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        failures.push(message);
+        appendAudit({ runId: run.id, kind: 'publish_failed', payload: { plan, error: message } });
+      }
+    }
+
+    if (published.length === 0) {
+      throw new Error(failures[0] ?? 'publish failed for every plan');
+    }
+
+    const outputSummary = describeOutcomes(published);
     transitionRun(run.id, 'done', {
       outputSummary,
       runnerUsed: runResult.runnerUsed,
       fallbackUsed: runResult.fallbackUsed,
     });
 
-    return result;
+    const first = published[0]!;
+    return {
+      runId: run.id,
+      finalState: 'done',
+      ...(first.kind === 'pr' ? { prNumber: first.prNumber } : {}),
+      ...(first.kind === 'issue' ? { issueNumber: first.issueNumber } : {}),
+    };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     appendAudit({
@@ -466,4 +506,15 @@ function errorCodeForReason(reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_
 
 function oneLine(text: string): string {
   return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
+}
+
+function describeOutcomes(results: Awaited<ReturnType<typeof publish>>[]): string {
+  const prs = results.filter((r) => r.kind === 'pr').length;
+  const issues = results.filter((r) => r.kind === 'issue').length;
+  const reviews = results.filter((r) => r.kind === 'review').length;
+  const parts: string[] = [];
+  if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
+  if (prs) parts.push(`${prs} PR${prs === 1 ? '' : 's'}`);
+  if (reviews) parts.push(`${reviews} review${reviews === 1 ? '' : 's'}`);
+  return parts.length === 0 ? 'noop' : `Published ${parts.join(', ')}`;
 }

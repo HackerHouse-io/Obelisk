@@ -5,6 +5,7 @@ import { startBusSubscriber } from './state/bus-subscriber';
 import { Connect } from './screens/Connect';
 import { Home } from './screens/Home';
 import { MissionControl } from './screens/MissionControl';
+import { Backlog } from './screens/Backlog';
 
 export function App(): ReactElement {
   const route = useStore((s) => s.route);
@@ -61,6 +62,7 @@ function renderScreen(route: Route): ReactElement {
   if (route === 'connect') return <Connect />;
   if (route === 'home') return <Home />;
   if (route === 'mission') return <MissionControl />;
+  if (route === 'backlog') return <Backlog />;
   return (
     <div className="placeholder">
       <div className="placeholder-title">{TITLES[route]}</div>
