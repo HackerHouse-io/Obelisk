@@ -158,6 +158,11 @@ export const Icon = {
       <circle cx="8" cy="8" r="1.5" />
     </>,
   ),
+  EyeOff: make(
+    <>
+      <path d="M2.5 4l11 8M3 9.5C4.5 11 6 12 8 12c.7 0 1.4-.1 2-.3M14 8s-1-1.7-2.7-3M6 4.4C6.6 4.3 7.3 4.2 8 4.2c4 0 6.5 4.5 6.5 4.5" />
+    </>,
+  ),
   Shield: make(<path d="M8 1.5l5 2v4c0 3-2 5.5-5 7-3-1.5-5-4-5-7v-4z" />),
   GitHub: make(
     <path

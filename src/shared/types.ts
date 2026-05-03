@@ -110,6 +110,8 @@ export interface IpcMap {
   };
   'auth:complete': { req: void; res: { login: string; scope: string[] } };
   'auth:upgradeScope': { req: { to: SafetyMode }; res: { scope: string[] } };
+  'auth:signInWithToken': { req: { token: string }; res: { login: string; scope: string[] } };
+  'auth:capabilities': { req: void; res: { deviceFlow: boolean } };
   'auth:signOut': { req: void; res: { ok: true } };
 
   // Repos

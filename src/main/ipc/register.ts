@@ -7,6 +7,8 @@ import {
   handleAuthSignIn,
   handleAuthComplete,
   handleAuthUpgradeScope,
+  handleAuthCapabilities,
+  handleAuthSignInWithToken,
   handleAuthSignOut,
 } from './auth';
 import {
@@ -55,6 +57,8 @@ export function registerIpcHandlers(): void {
   register('auth:signIn', handleAuthSignIn);
   register('auth:complete', handleAuthComplete);
   register('auth:upgradeScope', handleAuthUpgradeScope);
+  register('auth:capabilities', handleAuthCapabilities);
+  register('auth:signInWithToken', handleAuthSignInWithToken);
   register('auth:signOut', handleAuthSignOut);
 
   // Repos (Phase 2 — real)

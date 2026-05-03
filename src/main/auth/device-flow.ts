@@ -30,10 +30,14 @@ function assertConfigured(): void {
   if (!CLIENT_ID) {
     throw new ObeliskError(
       'AUTH_DENIED',
-      'GitHub OAuth client ID is not configured.',
-      'Set OBELISK_GITHUB_CLIENT_ID at build time. See README for OAuth App setup.',
+      'OAuth Device Flow is not available in this build.',
+      'Sign in with a Personal Access Token instead — it works for every install.',
     );
   }
+}
+
+export function isDeviceFlowConfigured(): boolean {
+  return CLIENT_ID.length > 0;
 }
 
 export interface SignInResult {

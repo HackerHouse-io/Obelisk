@@ -8,8 +8,8 @@ type StepId = 'auth' | 'repo' | 'safety' | 'runner' | 'schedule' | 'start';
 const STEPS: { id: StepId; title: string; sub: string }[] = [
   {
     id: 'auth',
-    title: 'Sign in to GitHub',
-    sub: 'OAuth Device Flow. Token stored in your OS keychain.',
+    title: 'Connect your GitHub account',
+    sub: 'Generate a token on GitHub and paste it here. Stored only on this machine, in your OS keychain.',
   },
   {
     id: 'repo',
@@ -141,6 +141,15 @@ export function Connect(): ReactElement {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
+  const [tokenInput, setTokenInput] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [deviceFlowAvailable, setDeviceFlowAvailable] = useState(false);
+
+  useEffect(() => {
+    void window.obelisk.invoke('auth:capabilities', undefined).then((res) => {
+      if (res.ok) setDeviceFlowAvailable(res.value.deviceFlow);
+    });
+  }, []);
 
   const [repoChoice, setRepoChoice] = useState<RepoChoice | null>(null);
   const [remoteRepos, setRemoteRepos] = useState<
@@ -175,6 +184,26 @@ export function Connect(): ReactElement {
     if (step.id === 'repo') return repoChoice !== null;
     return true;
   }, [step.id, auth.signedIn, repoChoice]);
+
+  async function handleSignInWithToken(): Promise<void> {
+    setSigningIn(true);
+    setAuthError(null);
+    try {
+      const res = await window.obelisk.invoke('auth:signInWithToken', { token: tokenInput });
+      if (!res.ok) {
+        setAuthError(res.error.message + (res.error.hint ? ` · ${res.error.hint}` : ''));
+        setSigningIn(false);
+        return;
+      }
+      setAuth({ signedIn: true, login: res.value.login, scope: res.value.scope });
+      setTokenInput('');
+      setSigningIn(false);
+      setStepIdx(1);
+    } catch (e) {
+      setAuthError(String(e));
+      setSigningIn(false);
+    }
+  }
 
   async function handleStartSignIn(): Promise<void> {
     setSigningIn(true);
@@ -288,7 +317,13 @@ export function Connect(): ReactElement {
               secondsLeft={secondsLeft}
               signingIn={signingIn}
               error={authError}
-              onStart={handleStartSignIn}
+              tokenInput={tokenInput}
+              setTokenInput={setTokenInput}
+              showToken={showToken}
+              setShowToken={setShowToken}
+              deviceFlowAvailable={deviceFlowAvailable}
+              onSubmitToken={handleSignInWithToken}
+              onStartDeviceFlow={handleStartSignIn}
             />
           )}
 
@@ -362,6 +397,8 @@ function Section({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
+const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo,workflow&description=Obelisk';
+
 function AuthStep({
   signedIn,
   login,
@@ -369,7 +406,13 @@ function AuthStep({
   secondsLeft,
   signingIn,
   error,
-  onStart,
+  tokenInput,
+  setTokenInput,
+  showToken,
+  setShowToken,
+  deviceFlowAvailable,
+  onSubmitToken,
+  onStartDeviceFlow,
 }: {
   signedIn: boolean;
   login?: string;
@@ -377,7 +420,13 @@ function AuthStep({
   secondsLeft: number;
   signingIn: boolean;
   error: string | null;
-  onStart: () => void;
+  tokenInput: string;
+  setTokenInput: (s: string) => void;
+  showToken: boolean;
+  setShowToken: (b: boolean) => void;
+  deviceFlowAvailable: boolean;
+  onSubmitToken: () => void;
+  onStartDeviceFlow: () => void;
 }): ReactElement {
   if (signedIn) {
     return (
@@ -403,7 +452,7 @@ function AuthStep({
         <div className="col gap-4">
           <div style={{ fontSize: 13 }}>
             Enter this code at <span className="mono">{deviceFlow.verificationUri}</span>
-            {' (we opened it in your browser)'}.
+            {' (we opened it in your browser).'}
           </div>
           <div className="code-display">{deviceFlow.userCode}</div>
           <div className="row gap-2" style={{ fontSize: 11.5, color: 'var(--t-2)' }}>
@@ -434,20 +483,97 @@ function AuthStep({
   }
 
   return (
-    <Section>
-      <div className="col gap-3">
-        <div style={{ fontSize: 13, color: 'var(--t-1)' }}>
-          We use GitHub OAuth Device Flow. Your token is stored in the OS keychain — never on disk.
+    <div className="col gap-3">
+      <Section>
+        <div className="col gap-4">
+          <div className="auth-step">
+            <div className="auth-step-num">1</div>
+            <div className="col gap-2 flex-1">
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Generate a GitHub token</div>
+              <div style={{ fontSize: 12, color: 'var(--t-2)' }}>
+                We&apos;ll open the GitHub token page with the right scopes (
+                <span className="mono">repo</span>, <span className="mono">workflow</span>)
+                pre-checked. Click <span style={{ color: 'var(--t-1)' }}>Generate token</span> on
+                that page, then copy the token.
+              </div>
+              <div>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => window.open(TOKEN_URL, '_blank', 'noopener')}
+                >
+                  <Icon.External size={12} /> Open GitHub token page
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="auth-step">
+            <div className="auth-step-num">2</div>
+            <div className="col gap-2 flex-1">
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Paste the token here</div>
+              <div className="row gap-2">
+                <input
+                  className="input flex-1 mono"
+                  type={showToken ? 'text' : 'password'}
+                  placeholder="ghp_… or github_pat_…"
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && tokenInput.trim() && !signingIn) onSubmitToken();
+                  }}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="btn icon"
+                  title={showToken ? 'Hide token' : 'Show token'}
+                  onClick={() => setShowToken(!showToken)}
+                >
+                  {showToken ? <Icon.EyeOff size={12} /> : <Icon.Eye size={12} />}
+                </button>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={onSubmitToken}
+                  disabled={!tokenInput.trim() || signingIn}
+                >
+                  {signingIn ? (
+                    <>
+                      <Icon.Spinner size={11} /> Signing in…
+                    </>
+                  ) : (
+                    <>
+                      <Icon.Check size={11} /> Sign in
+                    </>
+                  )}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                The token never leaves this machine. It&apos;s stored in your OS keychain (Keychain
+                on macOS, Credential Manager on Windows, libsecret on Linux).
+              </div>
+            </div>
+          </div>
+
+          {error ? <div className="tone-error">{error}</div> : null}
         </div>
-        {error ? <div className="tone-error">{error}</div> : null}
-        <div>
-          <button type="button" className="btn primary lg" onClick={onStart} disabled={signingIn}>
-            <Icon.GitHub size={13} />
-            {signingIn ? 'Starting…' : 'Sign in with GitHub'}
+      </Section>
+
+      {deviceFlowAvailable ? (
+        <div className="row gap-2" style={{ fontSize: 11.5, color: 'var(--t-2)' }}>
+          <span>Prefer the browser flow?</span>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={onStartDeviceFlow}
+            disabled={signingIn}
+          >
+            <Icon.GitHub size={11} /> Use OAuth Device Flow instead
           </button>
         </div>
-      </div>
-    </Section>
+      ) : null}
+    </div>
   );
 }
 
