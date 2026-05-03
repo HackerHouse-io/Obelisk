@@ -923,11 +923,13 @@ body {
   border: 1px solid var(--line-strong);
   border-radius: var(--r-3);
   cursor: pointer;
+  color: var(--t-0);
   transition:
     border-color 140ms var(--ease),
     background 140ms var(--ease),
     box-shadow 200ms var(--ease);
   text-align: left;
+  font: inherit;
 }
 .choice-card:hover {
   background: var(--bg-3);
