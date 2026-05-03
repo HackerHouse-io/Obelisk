@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-and-typecheck:
-    name: Lint + typecheck
+  verify:
+    name: Verify (typecheck + lint + format + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,12 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+      # keytar links against libsecret on Linux; ubuntu-latest images don't ship it.
+      - name: Install libsecret (keytar runtime dep on Linux)
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Lint
-        run: pnpm lint
-      - name: Format check
-        run: pnpm format:check
-      - name: Test (placeholder)
-        run: pnpm test
+      # `pnpm verify` runs the same gates the pre-push hook runs locally:
+      # typecheck → lint → format:check → test. Single source of truth.
+      - name: Verify
+        run: pnpm verify

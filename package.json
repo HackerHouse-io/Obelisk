@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "pretest": "npm rebuild better-sqlite3 keytar",
     "posttest": "electron-builder install-app-deps",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
   },
