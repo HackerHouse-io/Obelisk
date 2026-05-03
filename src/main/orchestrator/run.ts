@@ -27,6 +27,11 @@ export interface RunAgentInput {
   agentName: AgentName;
   trigger: 'manual' | 'schedule' | 'webhook';
   /**
+   * Optional hint passed to the agent's `selectTask`. Used by agents that
+   * support targeting a specific task (e.g. iOS QA Pilot's `flow:<id>`).
+   */
+  taskId?: string;
+  /**
    * Inject a runner factory for tests (defaults to real Claude/Codex CLIs).
    */
   runnerFactory?: (kind: 'claude' | 'codex') => CodingAgentRunner;
@@ -60,7 +65,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   const handler = getAgentHandler(input.agentName);
 
   // 1) Pick a task.
-  const selected = await handler.selectTask({ repo, defaultRunner: repo.defaultRunner });
+  const selected = await handler.selectTask({
+    repo,
+    defaultRunner: repo.defaultRunner,
+    taskId: input.taskId,
+  });
   if (!selected) {
     return { runId: '', finalState: 'done', reason: 'nothing to do' };
   }

@@ -46,6 +46,7 @@ const DEFAULT_TIMEOUT: Record<AgentName, number> = {
   'bug-fixer': 30 * 60 * 1000,
   'feature-builder': 60 * 60 * 1000,
   'pr-reviewer': 10 * 60 * 1000,
+  'ios-qa-pilot': 45 * 60 * 1000,
 };
 
 export function createAgent(input: CreateAgentInput): Agent {

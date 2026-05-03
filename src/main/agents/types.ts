@@ -52,6 +52,13 @@ export interface SelectTaskInput {
   repo: Repo;
   /** The default runner for this repo. */
   defaultRunner: RunnerKind;
+  /**
+   * Optional hint passed through from `agents:run`'s `taskId`. Agents can
+   * use this to bias their task selection — e.g. iOS QA Pilot interprets
+   * `flow:<flow_id>` to claim a specific flow. Unrecognised hints are
+   * ignored.
+   */
+  taskId?: string;
 }
 
 export interface SelectedTask {

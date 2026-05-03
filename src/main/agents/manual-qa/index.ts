@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
-import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { obeliskArtifactUrl } from '../../protocol/obelisk-protocol';
+import { fetchOpenIssueTitles, titleConflicts } from '../lib/find-existing-issue';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { registerArtifactFromPath } from '../lib/register-artifact';
 import type {
@@ -39,7 +39,10 @@ export const manualQaHandler: AgentHandler = {
     if (findings.length === 0) return [];
 
     const compiledRules = readNonBugs(input.repo.localPath).map(compileNonBugRule);
-    const existingTitles = await fetchExistingQaTitles(input.repo.githubFullName);
+    const existing = await fetchOpenIssueTitles({
+      repoFullName: input.repo.githubFullName,
+      label: OBELISK_LABELS.qaBug,
+    });
 
     const out: PublishPlan[] = [];
     for (const f of findings) {
@@ -47,7 +50,7 @@ export const manualQaHandler: AgentHandler = {
       if (matchesNonBug(f, compiledRules)) continue;
 
       const title = titleFor(f);
-      if (existingTitles.some((existing) => titleConflicts(existing, title))) continue;
+      if (existing.some((row) => titleConflicts(row.title, title, '[QA Bug]'))) continue;
 
       const refs = registerPlaywrightArtifacts(f, input.repo.localPath, input.runId);
       out.push({
@@ -205,37 +208,4 @@ function labelsFor(f: QaFinding): string[] {
   return [OBELISK_LABELS.fix, f.severity, OBELISK_LABELS.qaBug];
 }
 
-/* ---------- dedup ---------- */
-
-async function fetchExistingQaTitles(repoFullName: string): Promise<string[]> {
-  try {
-    const gh = await getGithub();
-    if (!gh) return [];
-    const [owner, name] = repoFullName.split('/');
-    if (!owner || !name) return [];
-    const { data } = await gh.issues.listForRepo({
-      owner,
-      repo: name,
-      labels: OBELISK_LABELS.qaBug,
-      state: 'open',
-      per_page: 100,
-    });
-    return data.map((d) => d.title);
-  } catch {
-    return [];
-  }
-}
-
-function titleConflicts(existing: string, candidate: string): boolean {
-  const a = stripQaPrefix(existing);
-  const b = stripQaPrefix(candidate);
-  if (!a || !b) return false;
-  return a.includes(b) || b.includes(a);
-}
-
-function stripQaPrefix(title: string): string {
-  return title
-    .replace(/^\[QA Bug\]\s*/i, '')
-    .trim()
-    .toLowerCase();
-}
+/* dedup helpers extracted to ../lib/find-existing-issue.ts */

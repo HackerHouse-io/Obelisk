@@ -9,7 +9,9 @@ export type EvidenceKind =
   | 'log'
   | 'reasoning'
   | 'failing_test_diff'
-  | 'curl_log';
+  | 'curl_log'
+  | 'recording'
+  | 'syslog';
 
 export interface EvidenceArtifact {
   id: string;

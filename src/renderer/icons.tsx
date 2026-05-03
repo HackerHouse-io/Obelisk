@@ -76,6 +76,13 @@ export const Icon = {
       <path d="M7 12l-1 1a2.5 2.5 0 11-3.5-3.5L4 8" />
     </>,
   ),
+  Phone: make(
+    <>
+      <rect x="4" y="1.5" width="8" height="13" rx="1.5" />
+      <path d="M7 12.5h2" />
+      <path d="M5.5 3.5h5" opacity=".5" />
+    </>,
+  ),
 
   // ui actions
   Search: make(

@@ -8,6 +8,7 @@ import { MissionControl } from './screens/MissionControl';
 import { Backlog } from './screens/Backlog';
 import { AgentsScreen } from './screens/Agents';
 import { Playbook } from './screens/Playbook';
+import { Qa } from './screens/Qa';
 import { SettingsScreen } from './screens/Settings';
 
 export function App(): ReactElement {
@@ -55,6 +56,8 @@ function renderScreen(route: Route): ReactElement {
       return <AgentsScreen />;
     case 'playbook':
       return <Playbook />;
+    case 'qa':
+      return <Qa />;
     case 'settings':
       return <SettingsScreen />;
   }

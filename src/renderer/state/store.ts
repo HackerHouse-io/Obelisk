@@ -1,7 +1,15 @@
 import { create } from 'zustand';
 import type { Agent, AuthStatus, BacklogItem, Repo, Run, Settings } from '../../shared/types';
 
-export type Route = 'home' | 'mission' | 'backlog' | 'agents' | 'playbook' | 'connect' | 'settings';
+export type Route =
+  | 'home'
+  | 'mission'
+  | 'backlog'
+  | 'agents'
+  | 'playbook'
+  | 'qa'
+  | 'connect'
+  | 'settings';
 
 interface ObeliskState {
   /* navigation */

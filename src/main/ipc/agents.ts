@@ -20,6 +20,7 @@ export async function handleAgentsRun(
     repoId: payload.repoId,
     agentName: payload.agentName,
     trigger: 'manual',
+    taskId: payload.taskId,
   });
   if (!result.runId) {
     throw new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.');

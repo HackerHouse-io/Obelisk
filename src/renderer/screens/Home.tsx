@@ -324,6 +324,7 @@ function labelFor(name: AgentName): string {
     'bug-fixer': 'Bug Fixer',
     'feature-builder': 'Feature Builder',
     'pr-reviewer': 'PR Reviewer',
+    'ios-qa-pilot': 'iOS QA Pilot',
   }[name];
 }
 

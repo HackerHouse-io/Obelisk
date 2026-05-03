@@ -5,6 +5,7 @@ import { qaHunterHandler } from './qa-hunter';
 import { manualQaHandler } from './manual-qa';
 import { featureBuilderHandler } from './feature-builder';
 import { prReviewerHandler } from './pr-reviewer';
+import { iosQaPilotHandler } from './ios-qa-pilot';
 
 /**
  * Central registry. Adding a new agent: implement AgentHandler and register
@@ -16,6 +17,7 @@ const HANDLERS: Record<AgentName, AgentHandler> = {
   'manual-qa': manualQaHandler,
   'feature-builder': featureBuilderHandler,
   'pr-reviewer': prReviewerHandler,
+  'ios-qa-pilot': iosQaPilotHandler,
 };
 
 export function getAgentHandler(name: AgentName): AgentHandler {

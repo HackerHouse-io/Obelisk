@@ -7,6 +7,7 @@ export const OBELISK_LABELS = {
   falsePositive: 'obelisk:false-positive',
   cloudOnly: 'obelisk:cloud-only',
   qaBug: 'qa-bug',
+  iosQaBug: 'ios-qa-bug',
 } as const;
 
 export type ObeliskLabel = (typeof OBELISK_LABELS)[keyof typeof OBELISK_LABELS];

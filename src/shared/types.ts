@@ -8,7 +8,13 @@
 export type SafetyMode = 'observe' | 'issues' | 'prs' | 'automerge';
 export type RunnerKind = 'claude' | 'codex';
 export type RunState = 'queued' | 'running' | 'publishing' | 'done' | 'failed' | 'paused';
-export type AgentName = 'qa-hunter' | 'manual-qa' | 'bug-fixer' | 'feature-builder' | 'pr-reviewer';
+export type AgentName =
+  | 'qa-hunter'
+  | 'manual-qa'
+  | 'bug-fixer'
+  | 'feature-builder'
+  | 'pr-reviewer'
+  | 'ios-qa-pilot';
 export type AttributionMode = 'user' | 'bot' | 'custom';
 
 export type ISO = string;
@@ -97,6 +103,45 @@ export interface EvidenceItem {
   path: string;
   bytes: number;
   sha256: string;
+}
+
+/* ---------- iOS QA Pilot ---------- */
+
+export type QaFlowStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'inconclusive'
+  | 'outdated';
+
+export interface QaFlow {
+  flowId: string;
+  repoId: string;
+  title: string;
+  sourcePath: string;
+  status: QaFlowStatus;
+  cycle: number;
+  lastRunId: string | null;
+  lastVerifiedAt: ISO | null;
+  findingCount: number;
+  /** If this flow_id was migrated from a previous id, the predecessor. */
+  renamedFromOldId?: string;
+}
+
+export type DoctorCheckLevel = 'green' | 'yellow' | 'red';
+export interface DoctorCheck {
+  id: string;
+  label: string;
+  level: DoctorCheckLevel;
+  detail: string;
+  remediation?: string;
+}
+export interface DoctorReport {
+  overall: DoctorCheckLevel;
+  checks: DoctorCheck[];
+  checkedAt: ISO;
+  setupAt: ISO | null;
 }
 
 /* ---------- IPC channel map ---------- */
@@ -188,6 +233,21 @@ export interface IpcMap {
     };
   };
 
+  // iOS QA Pilot
+  'qa:list': { req: { repoId: string }; res: QaFlow[] };
+  'qa:plan': {
+    req: { repoId: string };
+    res: { enqueued: number; runIds: string[]; reason?: string };
+  };
+  'qa:reset': {
+    req: { repoId: string; scope?: 'unverified' | 'all' };
+    res: { cycle: number };
+  };
+  'qa:runFlow': { req: { repoId: string; flowId: string }; res: { runId: string } };
+  'qa:doctor': { req: { repoId: string }; res: DoctorReport };
+  'qa:doctorSetup': { req: { repoId: string }; res: DoctorReport };
+  'qa:warmPool': { req: void; res: { ok: true } };
+
   // Settings
   'settings:get': { req: void; res: Settings };
   'settings:update': { req: Partial<Settings>; res: Settings };
@@ -210,6 +270,8 @@ export type BusEvent =
   | { type: 'backlog.changed'; repoId: string }
   | { type: 'auth.changed'; signedIn: boolean }
   | { type: 'evidence.missing'; runId: string; missing: string[] }
+  | { type: 'qa.flowChanged'; repoId: string; flowId: string }
+  | { type: 'qa.doctorChanged'; repoId: string }
   | { type: 'system.heartbeat'; at: ISO };
 
 /* ---------- Renderer-side bridge surface ---------- */

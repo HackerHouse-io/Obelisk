@@ -12,6 +12,10 @@ const DEFAULT_CRON: Record<AgentName, string> = {
   'bug-fixer': '0 */2 * * *',
   'feature-builder': '0 */6 * * *',
   'pr-reviewer': '*/5 * * * *',
+  // iOS QA Pilot is user-triggered (no cron poll). The schedule string is
+  // present only to satisfy the AgentName-keyed map; it never fires because
+  // the agent's selectTask returns null without active flows + a green Doctor.
+  'ios-qa-pilot': '0 0 31 2 *',
 };
 
 export function defaultCronFor(agent: AgentName): string {

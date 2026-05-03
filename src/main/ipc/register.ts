@@ -29,6 +29,15 @@ import { handleRunsList, handleRunsGet } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
 import { handlePlaybookGet, handlePlaybookSave } from './playbook';
 import { handlePreviewsList } from './previews';
+import {
+  handleQaDoctor,
+  handleQaDoctorSetup,
+  handleQaList,
+  handleQaPlan,
+  handleQaReset,
+  handleQaRunFlow,
+  handleQaWarmPool,
+} from './qa';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
@@ -95,6 +104,15 @@ export function registerIpcHandlers(): void {
 
   // Observe-mode previews
   register('previews:list', handlePreviewsList);
+
+  // iOS QA Pilot
+  register('qa:list', handleQaList);
+  register('qa:plan', handleQaPlan);
+  register('qa:reset', handleQaReset);
+  register('qa:runFlow', handleQaRunFlow);
+  register('qa:doctor', handleQaDoctor);
+  register('qa:doctorSetup', handleQaDoctorSetup);
+  register('qa:warmPool', handleQaWarmPool);
 
   // Settings (Phase 9 — real)
   register('settings:get', handleSettingsGet);
