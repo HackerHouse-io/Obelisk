@@ -30,19 +30,3 @@ export function broadcast(event: BusEvent): void {
     // No Electron app context (e.g. unit tests). Silent.
   }
 }
-
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-
-export function startHeartbeat(intervalMs = 5000): void {
-  stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    broadcast({ type: 'system.heartbeat', at: new Date().toISOString() });
-  }, intervalMs);
-}
-
-export function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}

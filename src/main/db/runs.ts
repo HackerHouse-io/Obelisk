@@ -98,6 +98,24 @@ export function listLiveRuns(repoId: string): Run[] {
     .map(mapRow);
 }
 
+/**
+ * Last `started_at` timestamp for any run of `agentName` against `repoId`,
+ * regardless of state. Used by the scheduler as the basis for cron's
+ * "next fire after this point" computation.
+ */
+export function getLastRunStartedAt(repoId: string, agentName: AgentName): Date | null {
+  const row = getDb()
+    .prepare<[string, string], { started_at: string | null }>(
+      `SELECT started_at FROM runs
+       WHERE repo_id = ? AND agent_name = ?
+       ORDER BY started_at DESC NULLS LAST LIMIT 1`,
+    )
+    .get(repoId, agentName);
+  if (!row?.started_at) return null;
+  const d = new Date(row.started_at);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function transitionRun(
   id: string,
   state: RunState,

@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import { runMigrations } from './db/migrations';
 import { closeDb } from './db';
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc/register';
-import { startHeartbeat, stopHeartbeat } from './ipc/bus';
 import {
   registerObeliskProtocolSchemes,
   registerObeliskProtocolHandler,
 } from './protocol/obelisk-protocol';
+import { startScheduler, stopScheduler } from './scheduler/tick';
 
 const isDev = !app.isPackaged;
 
@@ -59,7 +59,10 @@ app.whenReady().then(() => {
 
   registerObeliskProtocolHandler();
   registerIpcHandlers();
-  startHeartbeat();
+  // The scheduler tick broadcasts `system.heartbeat` itself, so the
+  // renderer's "bus connected" indicator stays lit without a separate
+  // heartbeat timer.
+  startScheduler();
   createWindow();
 
   app.on('activate', () => {
@@ -72,7 +75,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  stopHeartbeat();
+  stopScheduler();
   unregisterIpcHandlers();
   closeDb();
 });
