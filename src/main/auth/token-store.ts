@@ -12,6 +12,28 @@ export interface StoredAuth {
   scopes: string[];
 }
 
+/**
+ * keytar requires an OS keyring (Keychain on macOS, Credential Manager on
+ * Windows, libsecret + a running Secret Service on Linux). On headless or
+ * sandboxed environments — most notably CI runners — the read calls throw
+ * "org.freedesktop.secrets was not provided by any .service files".
+ *
+ * For Obelisk, "no keyring" is observationally identical to "no token
+ * stored": the renderer routes the user to the Connect wizard either way.
+ * `safeGet` swallows those errors and returns null so downstream code
+ * doesn't have to special-case the test/CI environment.
+ *
+ * Writes (`set`/`delete`) still throw — those failures are user-visible
+ * (sign-in actually broke), and we don't want to silently lose tokens.
+ */
+async function safeGet(service: string, account: string): Promise<string | null> {
+  try {
+    return await keytar.getPassword(service, account);
+  } catch {
+    return null;
+  }
+}
+
 export async function saveGitHubToken(auth: StoredAuth): Promise<void> {
   await keytar.setPassword(SERVICE, ACCOUNT_GITHUB, auth.token);
   await keytar.setPassword(SERVICE, ACCOUNT_LOGIN, auth.login);
@@ -19,10 +41,10 @@ export async function saveGitHubToken(auth: StoredAuth): Promise<void> {
 }
 
 export async function loadGitHubToken(): Promise<StoredAuth | null> {
-  const token = await keytar.getPassword(SERVICE, ACCOUNT_GITHUB);
+  const token = await safeGet(SERVICE, ACCOUNT_GITHUB);
   if (!token) return null;
-  const login = (await keytar.getPassword(SERVICE, ACCOUNT_LOGIN)) ?? '';
-  const scopesRaw = await keytar.getPassword(SERVICE, ACCOUNT_SCOPES);
+  const login = (await safeGet(SERVICE, ACCOUNT_LOGIN)) ?? '';
+  const scopesRaw = await safeGet(SERVICE, ACCOUNT_SCOPES);
   let scopes: string[] = [];
   if (scopesRaw) {
     try {
@@ -50,7 +72,7 @@ export async function saveRunnerKey(runner: 'claude' | 'codex', key: string): Pr
 }
 
 export async function loadRunnerKey(runner: 'claude' | 'codex'): Promise<string | null> {
-  return keytar.getPassword(SERVICE, ACCOUNT_RUNNER_PREFIX + runner);
+  return safeGet(SERVICE, ACCOUNT_RUNNER_PREFIX + runner);
 }
 
 export async function clearRunnerKey(runner: 'claude' | 'codex'): Promise<void> {
