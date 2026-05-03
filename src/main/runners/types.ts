@@ -14,8 +14,6 @@ export interface RunOpts {
   /** Working directory: a per-run git worktree. */
   worktreePath: string;
   prompt: CompiledPrompt;
-  /** API key for the chosen runner; injected as the *only* secret env var. */
-  apiKeyEnv: { name: string; value: string };
   timeoutMs: number;
   /** Stream stdout / stderr / lifecycle events to the audit log. */
   onAudit: (line: AuditLine) => void;

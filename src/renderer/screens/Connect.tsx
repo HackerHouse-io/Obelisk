@@ -677,8 +677,9 @@ function RunnerStep({
         ))}
       </div>
       <div className="tone-info">
-        Set API keys per runner in Settings. Auto-fallback kicks in after two consecutive failures
-        on the same task.
+        Sign in to the CLI itself with <span className="mono">claude login</span> or{' '}
+        <span className="mono">codex login</span> in your terminal — Obelisk reuses those
+        credentials. Auto-fallback kicks in after two consecutive failures on the same task.
       </div>
     </div>
   );

@@ -110,7 +110,6 @@ describe('orchestrator: bug-fixer happy path', () => {
       agentName: 'bug-fixer',
       trigger: 'manual',
       runnerFactory: factory,
-      apiKeyOverride: 'sk-mock',
     });
     stop();
 
@@ -177,7 +176,6 @@ describe('orchestrator: bug-fixer happy path', () => {
       agentName: 'bug-fixer',
       trigger: 'manual',
       runnerFactory: factory,
-      apiKeyOverride: 'sk-mock',
     });
 
     // Run reaches publishing, then fails when getGithub() returns null

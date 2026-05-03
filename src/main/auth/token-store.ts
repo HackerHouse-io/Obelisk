@@ -4,7 +4,6 @@ const SERVICE = 'com.obelisk.app';
 const ACCOUNT_GITHUB = 'github';
 const ACCOUNT_LOGIN = 'github.login';
 const ACCOUNT_SCOPES = 'github.scopes';
-const ACCOUNT_RUNNER_PREFIX = 'runner.';
 
 export interface StoredAuth {
   token: string;
@@ -61,20 +60,4 @@ export async function clearGitHubToken(): Promise<void> {
   await keytar.deletePassword(SERVICE, ACCOUNT_GITHUB).catch(() => undefined);
   await keytar.deletePassword(SERVICE, ACCOUNT_LOGIN).catch(() => undefined);
   await keytar.deletePassword(SERVICE, ACCOUNT_SCOPES).catch(() => undefined);
-}
-
-/**
- * Per-runner API keys (Anthropic / OpenAI). Stored under separate keychain
- * entries so the user can rotate one without affecting the other.
- */
-export async function saveRunnerKey(runner: 'claude' | 'codex', key: string): Promise<void> {
-  await keytar.setPassword(SERVICE, ACCOUNT_RUNNER_PREFIX + runner, key);
-}
-
-export async function loadRunnerKey(runner: 'claude' | 'codex'): Promise<string | null> {
-  return safeGet(SERVICE, ACCOUNT_RUNNER_PREFIX + runner);
-}
-
-export async function clearRunnerKey(runner: 'claude' | 'codex'): Promise<void> {
-  await keytar.deletePassword(SERVICE, ACCOUNT_RUNNER_PREFIX + runner).catch(() => undefined);
 }

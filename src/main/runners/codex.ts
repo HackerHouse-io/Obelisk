@@ -1,5 +1,6 @@
 import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
+import { runnerEnv } from './env';
 import type { CodingAgentRunner, RunOpts, RunResult } from './types';
 
 export class CodexRunner implements CodingAgentRunner {
@@ -22,12 +23,7 @@ export class CodexRunner implements CodingAgentRunner {
         command: 'codex',
         args: opts.prompt.runnerArgs,
         cwd: opts.worktreePath,
-        env: {
-          PATH: process.env['PATH'] ?? '',
-          HOME: process.env['HOME'] ?? '',
-          LANG: process.env['LANG'] ?? 'en_US.UTF-8',
-          [opts.apiKeyEnv.name]: opts.apiKeyEnv.value,
-        },
+        env: runnerEnv(),
         stdin: opts.prompt.userMessage,
         timeoutMs: opts.timeoutMs,
         onAudit: opts.onAudit,

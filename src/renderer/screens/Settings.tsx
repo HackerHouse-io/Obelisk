@@ -117,12 +117,6 @@ export function SettingsScreen(): ReactElement {
     if (res.ok) setLocalSettings(res.value);
   }
 
-  async function setKey(runner: RunnerKind, key: string): Promise<void> {
-    if (!key.trim()) return;
-    const res = await window.obelisk.invoke('auth:setRunnerKey', { runner, key: key.trim() });
-    if (!res.ok) alert(res.error.message);
-  }
-
   async function addAllowlist(login: string): Promise<void> {
     setAllowlistError(null);
     const trimmed = login.trim().replace(/^@/, '');
@@ -164,11 +158,7 @@ export function SettingsScreen(): ReactElement {
 
       <SafetyCard mode={repo.mode} busy={busy} onChange={changeMode} />
 
-      <RunnerCard
-        defaultRunner={settings.defaultRunner}
-        onChange={changeDefaultRunner}
-        onSetKey={setKey}
-      />
+      <RunnerCard defaultRunner={settings.defaultRunner} onChange={changeDefaultRunner} />
 
       <AttributionCard mode={settings.attributionMode} onChange={changeAttribution} />
 
@@ -241,20 +231,18 @@ function SafetyCard({
 function RunnerCard({
   defaultRunner,
   onChange,
-  onSetKey,
 }: {
   defaultRunner: RunnerKind;
   onChange: (r: RunnerKind) => void;
-  onSetKey: (r: RunnerKind, k: string) => Promise<void>;
 }): ReactElement {
-  const [claudeKey, setClaudeKey] = useState('');
-  const [codexKey, setCodexKey] = useState('');
-
   return (
     <div className="settings-card">
       <div className="settings-card-title">CLI runner</div>
       <div className="settings-card-sub">
         Pick the default runner for new agents. Per-agent overrides are configured in Agents.
+        Authenticate the CLI itself by running <span className="mono">claude login</span> or{' '}
+        <span className="mono">codex login</span> in a terminal — Obelisk inherits whatever
+        credentials the CLI already has.
       </div>
       <div className="row gap-2">
         {(['claude', 'codex'] as RunnerKind[]).map((r) => (
@@ -268,62 +256,6 @@ function RunnerCard({
             {r === 'claude' ? 'Claude Code' : 'Codex'}
           </button>
         ))}
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <div className="settings-row-label">ANTHROPIC_API_KEY</div>
-          <div className="settings-row-help">
-            Stored in your OS keychain. Never written to disk in cleartext.
-          </div>
-        </div>
-        <div className="row gap-2">
-          <input
-            className="input settings-input"
-            type="password"
-            placeholder="sk-ant-..."
-            value={claudeKey}
-            onChange={(e) => setClaudeKey(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => {
-              void onSetKey('claude', claudeKey).then(() => setClaudeKey(''));
-            }}
-            disabled={!claudeKey.trim()}
-          >
-            Save
-          </button>
-        </div>
-      </div>
-
-      <div className="settings-row">
-        <div>
-          <div className="settings-row-label">OPENAI_API_KEY</div>
-          <div className="settings-row-help">
-            Stored in your OS keychain. Never written to disk in cleartext.
-          </div>
-        </div>
-        <div className="row gap-2">
-          <input
-            className="input settings-input"
-            type="password"
-            placeholder="sk-..."
-            value={codexKey}
-            onChange={(e) => setCodexKey(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => {
-              void onSetKey('codex', codexKey).then(() => setCodexKey(''));
-            }}
-            disabled={!codexKey.trim()}
-          >
-            Save
-          </button>
-        </div>
       </div>
     </div>
   );

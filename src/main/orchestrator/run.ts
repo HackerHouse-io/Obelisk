@@ -15,7 +15,6 @@ import { CodexRunner } from '../runners/codex';
 import { runnerFallback, classifyOutcome } from '../runners/fallback';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
 import { createWorktree, destroyWorktree } from '../git/worktree';
-import { loadRunnerKey } from '../auth/token-store';
 import { inferChangeKind } from '../evidence/infer-change-kind';
 import { saveArtifact } from '../evidence/artifact-store';
 import { checkEvidence } from '../evidence/check';
@@ -31,10 +30,6 @@ export interface RunAgentInput {
    * Inject a runner factory for tests (defaults to real Claude/Codex CLIs).
    */
   runnerFactory?: (kind: 'claude' | 'codex') => CodingAgentRunner;
-  /**
-   * Bypass the keychain for tests. Production reads from keytar.
-   */
-  apiKeyOverride?: string;
 }
 
 export interface RunAgentOutput {
@@ -125,16 +120,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       payload: { summary: 'compiled prompt', contentHash: prompt.contentHash },
     });
 
-    // 6) Pick API key from keychain (or test override).
-    const apiKey = input.apiKeyOverride ?? (await loadRunnerKey(runnerKind));
-    if (!apiKey) {
-      throw new ObeliskError(
-        'AUTH_REQUIRED',
-        `No API key set for ${runnerKind}. Open Settings to add one.`,
-      );
-    }
-
-    // 7) Run with auto-fallback policy.
+    // 6) Run with auto-fallback policy. The CLI authenticates itself —
+    //    Obelisk doesn't pass credentials.
     const runResult = await runWithFallback({
       runId: run.id,
       taskRef: selected.task.ref,
@@ -143,10 +130,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       worktreePath: worktreeHandle.worktreePath,
       prompt,
       timeoutMs: agentRow?.timeoutMs ?? 30 * 60 * 1000,
-      apiKey: {
-        name: runnerKind === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY',
-        value: apiKey,
-      },
     });
 
     // Read-only agents (qa-hunter, manual-qa, pr-reviewer) report
@@ -389,7 +372,6 @@ interface FallbackInput {
   worktreePath: string;
   prompt: import('../prompt-compiler').CompiledPrompt;
   timeoutMs: number;
-  apiKey: { name: string; value: string };
 }
 
 interface FallbackOutput {
@@ -410,7 +392,6 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
       {
         worktreePath: input.worktreePath,
         prompt: input.prompt,
-        apiKeyEnv: input.apiKey,
         timeoutMs: input.timeoutMs,
         onAudit: (line) => {
           appendAudit({

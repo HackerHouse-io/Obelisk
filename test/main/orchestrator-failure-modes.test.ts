@@ -154,7 +154,6 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
       agentName: 'bug-fixer',
       trigger: 'manual',
       runnerFactory: factoryFor(recipe),
-      apiKeyOverride: 'sk-mock',
     });
 
     expect(result.finalState).toBe('paused');
@@ -200,7 +199,6 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
         filesToWrite: [],
         failWith: { reason: 'timeout', detail: '> 30 min' },
       }),
-      apiKeyOverride: 'sk-mock',
     });
 
     expect(result.finalState).toBe('failed');
@@ -237,7 +235,6 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
       agentName: 'bug-fixer',
       trigger: 'manual',
       runnerFactory: factoryFor({ filesToWrite: [] }),
-      apiKeyOverride: 'sk-mock',
     });
 
     expect(result.finalState).toBe('failed');
@@ -263,7 +260,6 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
         filesToWrite: [],
         reasoning: 'Scanned. BEGIN_FINDINGS\n[]\nEND_FINDINGS',
       }),
-      apiKeyOverride: 'sk-mock',
     });
 
     expect(result.finalState).toBe('done');
@@ -303,7 +299,6 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
           { path: 'auth/session.test.ts', contents: FAILING_TEST_TS },
         ]),
       ),
-      apiKeyOverride: 'sk-mock',
     });
 
     expect(result.finalState).toBe('failed');
