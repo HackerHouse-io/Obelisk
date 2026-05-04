@@ -5,6 +5,11 @@ import { getSetupAt, listSimSlots, setSetupAt } from '../../db/qa-flows';
 
 const exec = promisify(execFile);
 
+// `appium driver install xcuitest` downloads WebDriverAgent + a few hundred
+// npm packages; its stdout regularly exceeds Node's default 1 MB exec buffer
+// and kills the process mid-install. 100 MB is plenty.
+const SETUP_MAX_BUFFER = 100 * 1024 * 1024;
+
 export type CheckLevel = 'green' | 'yellow' | 'red';
 
 export interface DoctorCheck {
@@ -58,28 +63,64 @@ export async function runDoctor(opts: DoctorOpts): Promise<DoctorReport> {
 }
 
 /**
- * Run only the steps needed to bring red checks to green. Idempotent.
+ * Run only the steps needed to bring red checks to green. Idempotent: each
+ * install is gated on a "still missing?" probe so re-clicking doesn't error.
+ *
+ * Each install captures stdout/stderr; failures are folded into the returned
+ * report so the panel shows what went wrong instead of silently saying
+ * "Setup completed". `setup_at` is only written when every critical step
+ * succeeded.
  */
 export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
-  // 1. Make sure Appium + xcuitest are installed (best-effort).
-  await safeRun(opts.exec ?? exec, 'npm', ['install', '-g', 'appium']);
-  await safeRun(opts.exec ?? exec, 'appium', ['driver', 'install', 'xcuitest']);
+  const run = opts.exec ?? exec;
+  const errors: { step: string; error: string }[] = [];
 
-  // 2. Bootstrap pool slots (clones simulators if missing).
-  const bootstrap: BootstrapOpts = {
-    size: opts.poolSize,
-    appiumPortBase: opts.appiumPortBase,
-    wdaPortBase: opts.wdaPortBase,
-    device: opts.device,
-    os: opts.os,
-  };
-  await bootstrapPool(bootstrap);
-  await keepBooted();
+  // 1. Appium itself.
+  if ((await checkAppium(run)).level !== 'green') {
+    const r = await runStep(run, 'npm', ['install', '-g', 'appium']);
+    if (!r.ok) errors.push({ step: 'install Appium', error: r.error });
+  }
 
-  // 3. Mark this repo as set up.
-  setSetupAt(opts.repoId, new Date().toISOString());
+  // 2. xcuitest driver — only install if not already present (the CLI errors
+  // if you ask it to install a driver that's already installed).
+  if ((await checkXcuitestDriver(run)).level !== 'green') {
+    const r = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
+    if (!r.ok) errors.push({ step: 'install xcuitest driver', error: r.error });
+  }
 
-  return runDoctor(opts);
+  // 3. Bootstrap pool slots (clones simulators if missing).
+  try {
+    const bootstrap: BootstrapOpts = {
+      size: opts.poolSize,
+      appiumPortBase: opts.appiumPortBase,
+      wdaPortBase: opts.wdaPortBase,
+      device: opts.device,
+      os: opts.os,
+    };
+    await bootstrapPool(bootstrap);
+    await keepBooted();
+  } catch (e) {
+    errors.push({ step: 'bootstrap simulator pool', error: errorMessage(e) });
+  }
+
+  // 4. Only stamp setup_at when every required step landed.
+  if (errors.length === 0) {
+    setSetupAt(opts.repoId, new Date().toISOString());
+  }
+
+  const report = await runDoctor(opts);
+  if (errors.length > 0) {
+    report.overall = 'red';
+    report.checks.push({
+      id: 'setup_errors',
+      label: 'Setup errors',
+      level: 'red',
+      detail: errors.map((e) => `${e.step}: ${truncate(e.error, 240)}`).join(' · '),
+      remediation:
+        'Open the Terminal and run the failed command manually, then click Re-check. If the install needs sudo, run it from a shell with the right permissions.',
+    });
+  }
+  return report;
 }
 
 /* ---------- individual checks ---------- */
@@ -255,10 +296,32 @@ function checkSetupTimestamp(repoId: string): DoctorCheck {
   };
 }
 
-async function safeRun(run: typeof exec, cmd: string, args: string[]): Promise<void> {
+async function runStep(
+  run: typeof exec,
+  cmd: string,
+  args: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    await run(cmd, args);
-  } catch {
-    // Best-effort install — fail soft so the report can show the user what's missing.
+    await run(cmd, args, { maxBuffer: SETUP_MAX_BUFFER });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
   }
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) {
+    // execFile rejections include stderr in the message; prefer that when
+    // available so the user sees the real install error, not just "exit 1".
+    const withStderr = e as Error & { stderr?: string };
+    if (typeof withStderr.stderr === 'string' && withStderr.stderr.length > 0) {
+      return withStderr.stderr.trim();
+    }
+    return e.message;
+  }
+  return String(e);
+}
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }

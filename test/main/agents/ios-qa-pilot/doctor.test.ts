@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { closeDb, setDbPathForTesting } from '../../../../src/main/db';
 import { runMigrations } from '../../../../src/main/db/migrations';
 import { createRepo } from '../../../../src/main/db/repos';
-import { runDoctor } from '../../../../src/main/agents/ios-qa-pilot/doctor';
-import { upsertSimSlot, setSetupAt } from '../../../../src/main/db/qa-flows';
+import { runDoctor, runSetup } from '../../../../src/main/agents/ios-qa-pilot/doctor';
+import { getSetupAt, upsertSimSlot, setSetupAt } from '../../../../src/main/db/qa-flows';
 
 let tmp: string;
 let repoId: string;
@@ -120,6 +120,79 @@ describe('runDoctor', () => {
     });
     expect(report.overall).toBe('green');
     expect(report.checks.every((c) => c.level === 'green')).toBe(true);
+  });
+
+  it('surfaces install failures from runSetup instead of marking setup_at', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    // checkXcuitestDriver runs twice: once during runSetup's "is it missing?"
+    // probe, then again when runSetup re-invokes runDoctor at the end. Both
+    // returns must show xcuitest absent so the red bubbles up.
+    const calls: string[] = [];
+    const installFailure = Object.assign(new Error('exit 1'), {
+      stderr: 'EACCES: permission denied while writing to /usr/local/lib',
+    });
+    const fakeExec = async (cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      calls.push(key);
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
+      if (key === 'appium driver list --installed') return { stdout: '(no drivers)', stderr: '' };
+      if (key === 'appium driver install xcuitest') throw installFailure;
+      if (key === 'npm install -g appium') return { stdout: '', stderr: '' };
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('red');
+    expect(getSetupAt(repoId)).toBeNull(); // gated on success — must NOT be stamped
+    const errs = report.checks.find((c) => c.id === 'setup_errors')!;
+    expect(errs).toBeTruthy();
+    expect(errs.level).toBe('red');
+    expect(errs.detail).toContain('install xcuitest driver');
+    expect(errs.detail).toContain('EACCES'); // stderr surfaced, not just "exit 1"
+    expect(calls).toContain('appium driver install xcuitest');
+  });
+
+  it('runSetup is idempotent — skips installs that are already green', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const calls: string[] = [];
+    const fakeExec = async (cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      calls.push(key);
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
+      if (key === 'appium driver list --installed') return { stdout: 'xcuitest@5', stderr: '' };
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('green');
+    expect(getSetupAt(repoId)).not.toBeNull();
+    // Crucial: did NOT re-run the install commands, since they were already green.
+    expect(calls).not.toContain('npm install -g appium');
+    expect(calls).not.toContain('appium driver install xcuitest');
   });
 
   it('flags missing xcuitest driver as red with the right remediation', async () => {
