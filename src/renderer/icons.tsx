@@ -93,6 +93,13 @@ export const Icon = {
   ),
   Plus: make(<path d="M8 3v10M3 8h10" />),
   Close: make(<path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />),
+  Help: make(
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M6.2 6.2c.2-1 1.0-1.7 1.9-1.7 1.0 0 1.9.8 1.9 1.8 0 .9-.6 1.4-1.4 1.8-.5.2-.6.5-.6 1" />
+      <circle cx="8" cy="11.5" r="0.5" fill="currentColor" />
+    </>,
+  ),
   Chevron: make(<path d="M6 4l4 4-4 4" />),
   ChevronDown: make(<path d="M4 6l4 4 4-4" />),
   Check: make(<path d="M3 8.5l3.5 3.5L13 4.5" />),

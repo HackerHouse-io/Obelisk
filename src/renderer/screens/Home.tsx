@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
 import type {
   Agent,
@@ -108,9 +108,12 @@ export function Home(): ReactElement {
       <div className="home-section">
         <div className="home-section-title">
           Agents
-          <button type="button" className="btn ghost sm" onClick={() => setRoute('agents')}>
-            Configure
-          </button>
+          <span className="row gap-1" style={{ alignItems: 'center' }}>
+            <AgentLegendButton />
+            <button type="button" className="btn ghost sm" onClick={() => setRoute('agents')}>
+              Configure
+            </button>
+          </span>
         </div>
         {repo.mode === 'observe' ? (
           <div className="home-section-sub" style={{ marginBottom: 8 }}>
@@ -132,16 +135,23 @@ export function Home(): ReactElement {
           <div className="home-table">
             {agents.map((a) => {
               const status = agentRunStatus(a, repo.mode);
+              const tooltip = `${status.label} — ${status.description}`;
               return (
                 <div key={a.id} className="home-table-row">
-                  <span className="dot" style={{ background: status.dotColor }} />
+                  <span className="dot" style={{ background: status.dotColor }} title={tooltip} />
                   <div>
                     <div style={{ fontWeight: 600 }}>{labelFor(a.name)}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {a.runnerOverride ?? repo.defaultRunner} · {scheduleSummary(a)}
                     </div>
                   </div>
-                  <span className={`pill ${status.tone}`}>{status.label}</span>
+                  <span
+                    className={`pill ${status.tone}`}
+                    title={tooltip}
+                    style={{ cursor: 'help' }}
+                  >
+                    {status.label}
+                  </span>
                   <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
                     {a.timeoutMs / 1000 / 60}m timeout
                   </span>
@@ -216,6 +226,92 @@ export function Home(): ReactElement {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function AgentLegendButton(): ReactElement {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent): void {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const rows = useMemo(() => buildLegend(), []);
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="btn ghost sm icon"
+        onClick={() => setOpen((v) => !v)}
+        title="Agent state legend"
+        aria-label="Agent state legend"
+        aria-expanded={open}
+      >
+        <Icon.Help size={13} />
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Agent states"
+          className="card"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            width: 340,
+            padding: 12,
+            zIndex: 20,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 6 }}>Agent states</div>
+          <div className="col" style={{ gap: 8 }}>
+            {rows.map((r) => (
+              <div key={r.label} className="row gap-2" style={{ alignItems: 'flex-start' }}>
+                <span
+                  className="dot"
+                  style={{ background: r.dotColor, marginTop: 5, flexShrink: 0 }}
+                />
+                <div className="col" style={{ gap: 2, flex: 1 }}>
+                  <div className="row gap-2" style={{ alignItems: 'center' }}>
+                    <span className={`pill ${r.tone}`}>{r.label}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--t-2)', lineHeight: 1.4 }}>
+                    {r.description}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 8,
+              borderTop: '1px solid var(--bg-3)',
+              fontSize: 11,
+              color: 'var(--t-3)',
+            }}
+          >
+            The state shown on each agent reflects the repo&apos;s current safety mode. Change it in
+            Settings to escalate or de-escalate every agent at once.
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -342,6 +438,7 @@ interface AgentRunStatus {
   label: string;
   tone: '' | 'ok' | 'warn' | 'bad' | 'info';
   dotColor: string;
+  description: string;
 }
 
 /**
@@ -351,18 +448,65 @@ interface AgentRunStatus {
  */
 function agentRunStatus(agent: Agent, mode: SafetyMode): AgentRunStatus {
   if (!agent.enabled) {
-    return { label: 'Paused', tone: '', dotColor: 'var(--t-3)' };
+    return {
+      label: 'Paused',
+      tone: '',
+      dotColor: 'var(--t-3)',
+      description: 'Disabled. Will not run on schedule or via "Run all".',
+    };
   }
   switch (mode) {
     case 'observe':
-      return { label: 'Previewing', tone: 'info', dotColor: 'var(--info)' };
+      return {
+        label: 'Previewing',
+        tone: 'info',
+        dotColor: 'var(--info)',
+        description:
+          'Runs on schedule and writes findings as previews here. Nothing is published to GitHub while safety mode is Observe.',
+      };
     case 'issues':
-      return { label: 'Filing issues', tone: 'ok', dotColor: 'var(--ok)' };
+      return {
+        label: 'Filing issues',
+        tone: 'ok',
+        dotColor: 'var(--ok)',
+        description:
+          'Runs on schedule and files GitHub issues for findings (no code changes). PR-opening agents stay limited to issues until you raise the safety mode.',
+      };
     case 'prs':
-      return { label: 'Opening PRs', tone: 'warn', dotColor: 'var(--warn)' };
+      return {
+        label: 'Opening PRs',
+        tone: 'warn',
+        dotColor: 'var(--warn)',
+        description:
+          'Runs on schedule and opens draft PRs you review before merging. Issue-only agents still file issues.',
+      };
     case 'automerge':
-      return { label: 'Auto-merging', tone: 'bad', dotColor: 'var(--bad)' };
+      return {
+        label: 'Auto-merging',
+        tone: 'bad',
+        dotColor: 'var(--bad)',
+        description:
+          'Runs on schedule, opens PRs, and auto-merges the ones that meet the safety bar. Highest blast radius.',
+      };
   }
+}
+
+const LEGEND_MODES: SafetyMode[] = ['observe', 'issues', 'prs', 'automerge'];
+
+function buildLegend(): AgentRunStatus[] {
+  // Reuse agentRunStatus so the legend can never drift from the real labels.
+  const dummy: Agent = {
+    id: '',
+    repoId: '',
+    name: 'qa-hunter',
+    enabled: true,
+    runnerOverride: null,
+    scheduleCron: null,
+    timeoutMs: 0,
+  };
+  const rows = LEGEND_MODES.map((m) => agentRunStatus(dummy, m));
+  rows.push(agentRunStatus({ ...dummy, enabled: false }, 'observe'));
+  return rows;
 }
 
 function scheduleSummary(agent: Agent): string {
