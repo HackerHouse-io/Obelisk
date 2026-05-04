@@ -80,18 +80,13 @@ export function claimPrReview(input: ClaimInput): PrReviewClaim | null {
 
 /** Attach a run id to an already-acquired claim once the run row exists. */
 export function attachRunToPrReviewClaim(claimId: string, runId: string): void {
-  getDb()
-    .prepare('UPDATE pr_review_claims SET run_id = ? WHERE id = ?')
-    .run(runId, claimId);
+  getDb().prepare('UPDATE pr_review_claims SET run_id = ? WHERE id = ?').run(runId, claimId);
 }
 
 /** Has any agent successfully reviewed this (repo, PR, sha) yet? */
 export function wasReviewed(repoId: string, prNumber: number, headSha: string): boolean {
   const row = getDb()
-    .prepare<
-      [string, number, string],
-      { c: number }
-    >(
+    .prepare<[string, number, string], { c: number }>(
       `SELECT COUNT(*) AS c FROM pr_review_claims
        WHERE repo_id = ? AND pr_number = ? AND head_sha = ? AND result = 'done'`,
     )
@@ -99,10 +94,7 @@ export function wasReviewed(repoId: string, prNumber: number, headSha: string): 
   return (row?.c ?? 0) > 0;
 }
 
-export function releasePrReviewClaim(
-  claimId: string,
-  result: 'done' | 'failed' | 'paused',
-): void {
+export function releasePrReviewClaim(claimId: string, result: 'done' | 'failed' | 'paused'): void {
   getDb()
     .prepare('UPDATE pr_review_claims SET released_at = ?, result = ? WHERE id = ?')
     .run(new Date().toISOString(), result, claimId);

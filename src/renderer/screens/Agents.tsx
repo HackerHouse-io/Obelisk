@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactElement,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
 import type {
@@ -167,7 +160,12 @@ export function AgentsScreen(): ReactElement {
   }
 
   async function deleteInstance(agentId: string, displayName: string): Promise<void> {
-    if (!confirm(`Delete ${displayName}? This removes the instance and its scheduling. Run history is kept.`)) return;
+    if (
+      !confirm(
+        `Delete ${displayName}? This removes the instance and its scheduling. Run history is kept.`,
+      )
+    )
+      return;
     const res = await window.obelisk.invoke('agents:delete', { agentId });
     if (!res.ok) {
       alert(res.error.message);
@@ -400,14 +398,17 @@ interface RowProps {
   onDelete: () => void;
 }
 
-function SidebarRow({ agent, meta, selected, onSelect, onClone, onDelete }: RowProps): ReactElement {
+function SidebarRow({
+  agent,
+  meta,
+  selected,
+  onSelect,
+  onClone,
+  onDelete,
+}: RowProps): ReactElement {
   const IconCmp = Icon[meta.icon];
   const [menuOpen, setMenuOpen] = useState(false);
-  const dotColor = !agent.enabled
-    ? 'var(--t-3)'
-    : agent.nextFireAt
-      ? 'var(--ok)'
-      : 'var(--warn)';
+  const dotColor = !agent.enabled ? 'var(--t-3)' : agent.nextFireAt ? 'var(--ok)' : 'var(--warn)';
   return (
     <div style={{ position: 'relative' }}>
       <button
@@ -419,7 +420,10 @@ function SidebarRow({ agent, meta, selected, onSelect, onClone, onDelete }: RowP
           <IconCmp size={14} color="var(--brand)" />
         </div>
         <div style={{ minWidth: 0 }}>
-          <div className="agents-list-item-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div
+            className="agents-list-item-name"
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}
+          >
             {agent.displayName}
           </div>
           <div className="agents-list-item-role">
@@ -529,15 +533,18 @@ interface PickerProps {
 
 const PICKER_EXPLAINERS: Record<AgentName, { explainer: string; singleton: boolean }> = {
   'bug-fixer': {
-    explainer: 'Each instance picks a different bug per tick. Adding more drains the backlog faster.',
+    explainer:
+      'Each instance picks a different bug per tick. Adding more drains the backlog faster.',
     singleton: false,
   },
   'feature-builder': {
-    explainer: 'Each instance ships a different feature in parallel — distinct backlog rows, no overlap.',
+    explainer:
+      'Each instance ships a different feature in parallel — distinct backlog rows, no overlap.',
     singleton: false,
   },
   'pr-reviewer': {
-    explainer: 'Each instance reviews a different PR. The same PR is never reviewed twice at the same SHA.',
+    explainer:
+      'Each instance reviews a different PR. The same PR is never reviewed twice at the same SHA.',
     singleton: false,
   },
   'ios-qa-pilot': {
@@ -549,7 +556,8 @@ const PICKER_EXPLAINERS: Record<AgentName, { explainer: string; singleton: boole
     singleton: true,
   },
   'manual-qa': {
-    explainer: 'Manual QA runs every flow in qa/critical-flows.md per sweep — only one is useful today.',
+    explainer:
+      'Manual QA runs every flow in qa/critical-flows.md per sweep — only one is useful today.',
     singleton: true,
   },
 };
@@ -593,8 +601,7 @@ function AddAgentPicker({ existingByName, seed, onCancel, onPick }: PickerProps)
         </div>
         <div style={{ fontSize: 12, color: 'var(--t-2)', marginBottom: 14, lineHeight: 1.5 }}>
           Each agent runs as a single process. Add multiple instances of the same type to
-          parallelize the work — claim primitives guarantee no two instances pick the same
-          unit.
+          parallelize the work — claim primitives guarantee no two instances pick the same unit.
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
@@ -647,9 +654,7 @@ function AddAgentPicker({ existingByName, seed, onCancel, onPick }: PickerProps)
                   {info.explainer}
                 </div>
                 <div style={{ fontSize: 10.5, color: 'var(--t-3)' }}>
-                  {installed > 0
-                    ? `Already installed: ${installed}`
-                    : 'No instance installed yet'}
+                  {installed > 0 ? `Already installed: ${installed}` : 'No instance installed yet'}
                 </div>
                 <button
                   type="button"
@@ -823,28 +828,26 @@ function StatsCard({ agent }: { agent: Agent }): ReactElement {
   return (
     <div className="settings-card">
       <div className="settings-card-title">Last 7 days</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 8 }}>
+      <div
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 8 }}
+      >
         <Stat label="Runs" value={stats?.runs ?? 0} />
-        <Stat
-          label={renderForKind.label}
-          value={renderForKind.pluck(stats)}
-        />
+        <Stat label={renderForKind.label} value={renderForKind.pluck(stats)} />
         <Stat
           label="Failure rate"
           value={`${Math.round((stats?.falsePositiveRate ?? 0) * 100)}%`}
           good={stats != null && stats.falsePositiveRate < 0.15}
         />
-        <Stat
-          label="Avg duration"
-          value={fmtDuration(stats?.avgDurationMs ?? 0)}
-          mono
-        />
+        <Stat label="Avg duration" value={fmtDuration(stats?.avgDurationMs ?? 0)} mono />
       </div>
     </div>
   );
 }
 
-function primaryStatFor(name: AgentName): { label: string; pluck: (s: Stats | null) => number | string } {
+function primaryStatFor(name: AgentName): {
+  label: string;
+  pluck: (s: Stats | null) => number | string;
+} {
   switch (name) {
     case 'bug-fixer':
     case 'feature-builder':
@@ -870,7 +873,15 @@ function Stat({
   const color = good == null ? 'var(--t-0)' : good ? 'var(--ok)' : 'var(--warn)';
   return (
     <div>
-      <div style={{ fontSize: 10.5, color: 'var(--t-2)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 600 }}>
+      <div
+        style={{
+          fontSize: 10.5,
+          color: 'var(--t-2)',
+          textTransform: 'uppercase',
+          letterSpacing: 0.04,
+          fontWeight: 600,
+        }}
+      >
         {label}
       </div>
       <div
@@ -1036,8 +1047,8 @@ function PermissionsCard({
     <div className="settings-card">
       <div className="settings-card-title">Permissions</div>
       <div className="settings-card-sub">
-        Permissions narrow what this instance is allowed to do. Repo safety mode is the upper
-        bound — per-instance toggles can subtract but never add.
+        Permissions narrow what this instance is allowed to do. Repo safety mode is the upper bound
+        — per-instance toggles can subtract but never add.
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
         {items.map((item) => {
@@ -1143,8 +1154,8 @@ function RunnerModelCard({
     <div className="settings-card">
       <div className="settings-card-title">Runner &amp; model</div>
       <div className="settings-card-sub">
-        Override the repo&rsquo;s default CLI runner and model for this instance only. Model
-        choice changes cost / speed; runner choice changes the executable invoked.
+        Override the repo&rsquo;s default CLI runner and model for this instance only. Model choice
+        changes cost / speed; runner choice changes the executable invoked.
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
         <div>
@@ -1338,7 +1349,13 @@ function ScheduleEditorCard({
                   }}
                 >
                   <I size={14} color={active ? 'var(--brand-text)' : 'var(--t-2)'} />
-                  <div style={{ fontSize: 12, fontWeight: 600, color: active ? 'var(--t-0)' : 'var(--t-1)' }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: active ? 'var(--t-0)' : 'var(--t-1)',
+                    }}
+                  >
                     {mode.label}
                   </div>
                   <div style={{ fontSize: 10.5, color: 'var(--t-3)' }}>{mode.sub}</div>
@@ -1403,7 +1420,11 @@ function ScheduleEditorCard({
                       </div>
                       <div style={{ fontSize: 10.5, color: 'var(--t-2)' }}>{r.relative}</div>
                     </div>
-                    {i === 0 ? <span className="pill brand" style={{ fontSize: 9.5 }}>next</span> : null}
+                    {i === 0 ? (
+                      <span className="pill brand" style={{ fontSize: 9.5 }}>
+                        next
+                      </span>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -1421,12 +1442,17 @@ function ScheduleEditorCard({
                 border: '1px solid var(--line)',
               }}
             >
-              <div style={{ fontSize: 10, color: 'var(--t-3)', textTransform: 'uppercase' }}>cron</div>
-              <div className="mono" style={{ fontSize: 11.5, color: 'var(--t-1)', wordBreak: 'break-all' }}>
+              <div style={{ fontSize: 10, color: 'var(--t-3)', textTransform: 'uppercase' }}>
+                cron
+              </div>
+              <div
+                className="mono"
+                style={{ fontSize: 11.5, color: 'var(--t-1)', wordBreak: 'break-all' }}
+              >
                 {config.mode === 'cron'
-                  ? config.cron ?? '—'
+                  ? (config.cron ?? '—')
                   : config.mode === 'recurring'
-                    ? toCron(config) ?? '—'
+                    ? (toCron(config) ?? '—')
                     : '— no schedule —'}
               </div>
             </div>
@@ -1463,7 +1489,9 @@ function RecurringConfig({
           min={1}
           max={59}
           value={config.every ?? 1}
-          onChange={(e) => onChange({ every: Math.max(1, Math.min(59, Number(e.target.value) || 1)) })}
+          onChange={(e) =>
+            onChange({ every: Math.max(1, Math.min(59, Number(e.target.value) || 1)) })
+          }
           style={{
             width: 56,
             height: 30,
@@ -1670,7 +1698,10 @@ function dayList(days: number[]): string {
   const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   if (days.slice(0, 5).every((d) => d) && !days[5] && !days[6]) return 'weekdays';
   if (!days.slice(0, 5).some((d) => d) && days[5] && days[6]) return 'weekends';
-  return days.map((d, i) => (d ? labels[i] : null)).filter(Boolean).join(', ');
+  return days
+    .map((d, i) => (d ? labels[i] : null))
+    .filter(Boolean)
+    .join(', ');
 }
 
 function toCron(s: ScheduleConfig): string | null {
@@ -1683,7 +1714,10 @@ function toCron(s: ScheduleConfig): string | null {
   const days = s.days ?? [1, 1, 1, 1, 1, 1, 1];
   const dows = days.every((d) => d === 1)
     ? '*'
-    : days.map((d, i) => (d ? (i + 1) % 7 : null)).filter((v): v is number => v !== null).join(',');
+    : days
+        .map((d, i) => (d ? (i + 1) % 7 : null))
+        .filter((v): v is number => v !== null)
+        .join(',');
   if (s.unit === 'minute') return `*/${every} * * * ${dows}`;
   if (s.unit === 'hour') return `0 */${every} * * ${dows}`;
   if (s.unit === 'day') return `${m} ${h} */${every} * *`;
@@ -1691,7 +1725,10 @@ function toCron(s: ScheduleConfig): string | null {
   return null;
 }
 
-function computeNextRuns(s: ScheduleConfig, count: number): { absolute: string; relative: string }[] {
+function computeNextRuns(
+  s: ScheduleConfig,
+  count: number,
+): { absolute: string; relative: string }[] {
   if (s.mode === 'manual') return [];
   if (s.mode === 'event') {
     return [
@@ -1737,7 +1774,20 @@ function computeNextRuns(s: ScheduleConfig, count: number): { absolute: string; 
 
 function formatAbsolute(d: Date): string {
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
   const tomorrow = new Date(today.getTime() + 86400000);
@@ -1835,9 +1885,7 @@ function HistoryGridCard({ agent }: { agent: Agent }): ReactElement {
             const c = lookup.get(`${dow}:${hour}`);
             const intensity = c && max > 0 ? c.runs / max : 0;
             const bg =
-              intensity > 0
-                ? `oklch(67% 0.17 286 / ${Math.max(0.15, intensity)})`
-                : 'var(--bg-3)';
+              intensity > 0 ? `oklch(67% 0.17 286 / ${Math.max(0.15, intensity)})` : 'var(--bg-3)';
             const tooltip = c
               ? `${days[dow]} ${String(hour).padStart(2, '0')}:00 — ${c.runs} run${c.runs === 1 ? '' : 's'}`
               : `${days[dow]} ${String(hour).padStart(2, '0')}:00 — idle`;

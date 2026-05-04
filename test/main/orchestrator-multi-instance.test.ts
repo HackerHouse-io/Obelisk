@@ -137,9 +137,27 @@ describe('orchestrator: multi-instance bug-fixer', () => {
     const factory = (k: 'claude' | 'codex'): MockRunner => new MockRunner(k, recipe);
 
     const results = await Promise.all([
-      runAgent({ repoId: repo.id, agentName: 'bug-fixer', agentId: f1.id, trigger: 'manual', runnerFactory: factory }),
-      runAgent({ repoId: repo.id, agentName: 'bug-fixer', agentId: f2.id, trigger: 'manual', runnerFactory: factory }),
-      runAgent({ repoId: repo.id, agentName: 'bug-fixer', agentId: f3.id, trigger: 'manual', runnerFactory: factory }),
+      runAgent({
+        repoId: repo.id,
+        agentName: 'bug-fixer',
+        agentId: f1.id,
+        trigger: 'manual',
+        runnerFactory: factory,
+      }),
+      runAgent({
+        repoId: repo.id,
+        agentName: 'bug-fixer',
+        agentId: f2.id,
+        trigger: 'manual',
+        runnerFactory: factory,
+      }),
+      runAgent({
+        repoId: repo.id,
+        agentName: 'bug-fixer',
+        agentId: f3.id,
+        trigger: 'manual',
+        runnerFactory: factory,
+      }),
     ]);
 
     // Exactly one result should be the "nothing to do" sentinel (empty runId).

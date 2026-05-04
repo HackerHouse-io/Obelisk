@@ -70,19 +70,50 @@ const DEFAULT_DISPLAY_NAME: Record<AgentName, string> = {
 };
 
 const DEFAULT_PERMS: Record<AgentName, AgentPermissions> = {
-  'qa-hunter':       { readCode: true, runTests: true, createIssues: true,  draftPrs: false, merge: false },
-  'manual-qa':       { readCode: true, runTests: true, createIssues: true,  draftPrs: false, merge: false },
-  'bug-fixer':       { readCode: true, runTests: true, createIssues: true,  draftPrs: true,  merge: false },
-  'feature-builder': { readCode: true, runTests: true, createIssues: true,  draftPrs: true,  merge: false },
-  'pr-reviewer':     { readCode: true, runTests: true, createIssues: false, draftPrs: false, merge: false },
-  'ios-qa-pilot':    { readCode: true, runTests: true, createIssues: true,  draftPrs: false, merge: false },
+  'qa-hunter': {
+    readCode: true,
+    runTests: true,
+    createIssues: true,
+    draftPrs: false,
+    merge: false,
+  },
+  'manual-qa': {
+    readCode: true,
+    runTests: true,
+    createIssues: true,
+    draftPrs: false,
+    merge: false,
+  },
+  'bug-fixer': { readCode: true, runTests: true, createIssues: true, draftPrs: true, merge: false },
+  'feature-builder': {
+    readCode: true,
+    runTests: true,
+    createIssues: true,
+    draftPrs: true,
+    merge: false,
+  },
+  'pr-reviewer': {
+    readCode: true,
+    runTests: true,
+    createIssues: false,
+    draftPrs: false,
+    merge: false,
+  },
+  'ios-qa-pilot': {
+    readCode: true,
+    runTests: true,
+    createIssues: true,
+    draftPrs: false,
+    merge: false,
+  },
 };
 
 export function listAgentsForRepo(repoId: string): Agent[] {
   return getDb()
-    .prepare<[string], AgentRow>(
-      'SELECT * FROM agents WHERE repo_id = ? ORDER BY name, created_at ASC',
-    )
+    .prepare<
+      [string],
+      AgentRow
+    >('SELECT * FROM agents WHERE repo_id = ? ORDER BY name, created_at ASC')
     .all(repoId)
     .map(mapRow);
 }
@@ -130,10 +161,9 @@ function pickUniqueDisplayName(repoId: string, name: AgentName, requested?: stri
   const base = (requested ?? DEFAULT_DISPLAY_NAME[name]).trim() || DEFAULT_DISPLAY_NAME[name];
   const taken = new Set(
     getDb()
-      .prepare<
-        [string, string],
-        { display_name: string }
-      >('SELECT display_name FROM agents WHERE repo_id = ? AND name = ?')
+      .prepare<[string, string], { display_name: string }>(
+        'SELECT display_name FROM agents WHERE repo_id = ? AND name = ?',
+      )
       .all(repoId, name)
       .map((r) => r.display_name),
   );
@@ -207,8 +237,7 @@ export function updateAgent(id: string, patch: Partial<Agent>): Agent {
     enabled: patch.enabled === undefined ? existing.enabled : patch.enabled,
     runnerOverride:
       patch.runnerOverride === undefined ? existing.runnerOverride : patch.runnerOverride,
-    modelOverride:
-      patch.modelOverride === undefined ? existing.modelOverride : patch.modelOverride,
+    modelOverride: patch.modelOverride === undefined ? existing.modelOverride : patch.modelOverride,
     scheduleCron: patch.scheduleCron === undefined ? existing.scheduleCron : patch.scheduleCron,
     schedule: patch.schedule === undefined ? existing.schedule : patch.schedule,
     timeoutMs: patch.timeoutMs ?? existing.timeoutMs,

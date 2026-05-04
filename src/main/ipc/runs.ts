@@ -82,10 +82,7 @@ export async function handleRunsStats(
 
   // PRs / issues opened by counting publish-success audit lines, scoped to runs of this agent.
   const opened = db
-    .prepare<
-      [string, string],
-      { prs: number; issues: number; reviews: number }
-    >(
+    .prepare<[string, string], { prs: number; issues: number; reviews: number }>(
       `SELECT
          SUM(CASE WHEN json_extract(al.payload,'$.kind') = 'pr'      THEN 1 ELSE 0 END) AS prs,
          SUM(CASE WHEN json_extract(al.payload,'$.kind') = 'issue'   THEN 1 ELSE 0 END) AS issues,
@@ -119,10 +116,7 @@ export async function handleRunsHistogram(
   const since = new Date(sinceMs).toISOString();
 
   const rows = getDb()
-    .prepare<
-      [string, string],
-      { started_at: string; state: string }
-    >(
+    .prepare<[string, string], { started_at: string; state: string }>(
       `SELECT started_at, state FROM runs
        WHERE agent_id = ? AND started_at IS NOT NULL AND started_at >= ?`,
     )
@@ -130,7 +124,10 @@ export async function handleRunsHistogram(
 
   // Map to (dow, hour) buckets. JS getDay: Sun=0..Sat=6; we use Mon=0..Sun=6
   // to match the renderer's grid headers.
-  const cells = new Map<string, { dayOfWeek: number; hour: number; runs: number; issues: number }>();
+  const cells = new Map<
+    string,
+    { dayOfWeek: number; hour: number; runs: number; issues: number }
+  >();
   for (const r of rows) {
     const d = new Date(r.started_at);
     if (Number.isNaN(d.getTime())) continue;

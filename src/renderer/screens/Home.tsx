@@ -142,7 +142,8 @@ export function Home(): ReactElement {
                   <div>
                     <div style={{ fontWeight: 600 }}>{a.displayName}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                      {labelFor(a.name)} · {a.runnerOverride ?? repo.defaultRunner} · {scheduleSummary(a)}
+                      {labelFor(a.name)} · {a.runnerOverride ?? repo.defaultRunner} ·{' '}
+                      {scheduleSummary(a)}
                     </div>
                   </div>
                   <span

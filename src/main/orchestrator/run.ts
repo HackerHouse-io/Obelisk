@@ -6,10 +6,7 @@ import type { AgentName, Repo } from '../../shared/types';
 import { getRepo } from '../db/repos';
 import { listAgentsForRepo, getAgent } from '../db/agents';
 import { lockBacklogItem, unlockBacklogItem } from '../db/backlog';
-import {
-  attachRunToPrReviewClaim,
-  releasePrReviewClaim,
-} from '../db/pr-review-claims';
+import { attachRunToPrReviewClaim, releasePrReviewClaim } from '../db/pr-review-claims';
 import { createRun, transitionRun, getRun } from '../db/runs';
 import { appendAudit } from '../logger/audit';
 import { getAgentHandler } from '../agents/registry';
@@ -382,11 +379,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     if (selected?.prReviewClaimId) {
       const finalState = getRun(run.id)?.state;
       const result: 'done' | 'failed' | 'paused' =
-        finalState === 'done'
-          ? 'done'
-          : finalState === 'paused'
-            ? 'paused'
-            : 'failed';
+        finalState === 'done' ? 'done' : finalState === 'paused' ? 'paused' : 'failed';
       releasePrReviewClaim(selected.prReviewClaimId, result);
     }
     if (worktreeHandle) {

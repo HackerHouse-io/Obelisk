@@ -5,10 +5,7 @@ import { join } from 'node:path';
 import { setDbPathForTesting, closeDb } from '../../src/main/db';
 import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
-import {
-  handleAgentsCreate,
-  handleAgentsClone,
-} from '../../src/main/ipc/agents';
+import { handleAgentsCreate, handleAgentsClone } from '../../src/main/ipc/agents';
 
 let tmp: string;
 let repoId: string;
