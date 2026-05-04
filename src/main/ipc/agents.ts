@@ -1,12 +1,28 @@
 import { listAgentsForRepo, updateAgent } from '../db/agents';
+import { getRepo } from '../db/repos';
+import { getLastRunStartedAt } from '../db/runs';
 import { runAgent } from '../orchestrator/run';
+import { defaultCronFor, nextFireAt } from '../scheduler/cron';
 import { ObeliskError } from '../../shared/errors';
 import type { IpcMap } from '../../shared/types';
 
 export async function handleAgentsList(
   payload: IpcMap['agents:list']['req'],
 ): Promise<IpcMap['agents:list']['res']> {
-  return listAgentsForRepo(payload.repoId);
+  const agents = listAgentsForRepo(payload.repoId);
+  const repo = getRepo(payload.repoId);
+  const connectedAt = repo ? new Date(repo.connectedAt) : new Date();
+  return agents.map((a) => {
+    const cron = a.scheduleCron ?? defaultCronFor(a.name);
+    const lastRun = getLastRunStartedAt(payload.repoId, a.name);
+    const basis = lastRun ?? connectedAt;
+    const next = a.enabled ? nextFireAt(cron, basis) : null;
+    return {
+      ...a,
+      lastRunAt: lastRun ? lastRun.toISOString() : null,
+      nextFireAt: next ? next.toISOString() : null,
+    };
+  });
 }
 
 export async function handleAgentsRun(

@@ -6,19 +6,22 @@ import type { AgentName } from '../../shared/types';
  * GitHub; the in-app scheduler approximates it with a 5-min poll
  * interval since it shares the same machinery.
  */
-const DEFAULT_CRON: Record<AgentName, string> = {
+/**
+ * `null` means the agent is manual-only — the scheduler skips it entirely
+ * and the UI shows "manual only" instead of a next-fire timestamp. iOS QA
+ * Pilot is user-triggered: it claims one flow per `agents:run` call from
+ * the QA screen, never on a cron.
+ */
+const DEFAULT_CRON: Record<AgentName, string | null> = {
   'qa-hunter': '0 2 * * *',
   'manual-qa': '0 * * * *',
   'bug-fixer': '0 */2 * * *',
   'feature-builder': '0 */6 * * *',
   'pr-reviewer': '*/5 * * * *',
-  // iOS QA Pilot is user-triggered (no cron poll). The schedule string is
-  // present only to satisfy the AgentName-keyed map; it never fires because
-  // the agent's selectTask returns null without active flows + a green Doctor.
-  'ios-qa-pilot': '0 0 31 2 *',
+  'ios-qa-pilot': null,
 };
 
-export function defaultCronFor(agent: AgentName): string {
+export function defaultCronFor(agent: AgentName): string | null {
   return DEFAULT_CRON[agent];
 }
 
@@ -30,7 +33,8 @@ export function defaultCronFor(agent: AgentName): string {
  * Returns null on a malformed cron expression — caller should treat as
  * "skip this agent until the user fixes the schedule."
  */
-export function nextFireAt(cron: string, basis: Date): Date | null {
+export function nextFireAt(cron: string | null, basis: Date): Date | null {
+  if (!cron) return null;
   try {
     // Always interpret cron expressions in UTC. Local-time schedules drift
     // across DST boundaries; users who want a specific local time can shift
@@ -42,7 +46,7 @@ export function nextFireAt(cron: string, basis: Date): Date | null {
   }
 }
 
-export function isDue(cron: string, basis: Date, now: Date = new Date()): boolean {
+export function isDue(cron: string | null, basis: Date, now: Date = new Date()): boolean {
   const next = nextFireAt(cron, basis);
   return next !== null && next.getTime() <= now.getTime();
 }

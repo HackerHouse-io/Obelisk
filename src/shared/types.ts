@@ -43,6 +43,16 @@ export interface Agent {
   runnerOverride: RunnerKind | null;
   scheduleCron: string | null;
   timeoutMs: number;
+  /**
+   * Computed at the IPC boundary (not stored on the DB row):
+   * - `null` when the agent is manual-only (e.g. iOS QA Pilot) or its cron
+   *   expression is invalid.
+   * - Otherwise, the next time the scheduler will dispatch this agent given
+   *   its last run (or the repo's `connectedAt` if it has never run).
+   */
+  nextFireAt?: ISO | null;
+  /** Last `started_at` for any run of this agent, regardless of outcome. */
+  lastRunAt?: ISO | null;
 }
 
 export interface Run {

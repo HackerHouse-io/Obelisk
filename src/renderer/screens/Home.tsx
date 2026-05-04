@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
-import type { Agent, BacklogItem, IpcMap, Run, RunState, AgentName } from '../../shared/types';
+import type {
+  Agent,
+  BacklogItem,
+  IpcMap,
+  Run,
+  RunState,
+  AgentName,
+  SafetyMode,
+} from '../../shared/types';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
 
@@ -104,29 +112,42 @@ export function Home(): ReactElement {
             Configure
           </button>
         </div>
+        {repo.mode === 'observe' ? (
+          <div className="home-section-sub" style={{ marginBottom: 8 }}>
+            Agents run on schedule but write previews here, not GitHub. Switch to{' '}
+            <button
+              type="button"
+              className="btn ghost sm"
+              style={{ display: 'inline', padding: '0 4px' }}
+              onClick={() => setRoute('settings')}
+            >
+              File issues
+            </button>{' '}
+            to publish.
+          </div>
+        ) : null}
         {agents.length === 0 ? (
           <div className="home-table-empty">No agents installed.</div>
         ) : (
           <div className="home-table">
-            {agents.map((a) => (
-              <div key={a.id} className="home-table-row">
-                <span
-                  className="dot"
-                  style={{ background: a.enabled ? 'var(--ok)' : 'var(--t-3)' }}
-                />
-                <div>
-                  <div style={{ fontWeight: 600 }}>{labelFor(a.name)}</div>
-                  <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                    {a.runnerOverride ?? repo.defaultRunner} ·{' '}
-                    {a.scheduleCron ?? 'default schedule'}
+            {agents.map((a) => {
+              const status = agentRunStatus(a, repo.mode);
+              return (
+                <div key={a.id} className="home-table-row">
+                  <span className="dot" style={{ background: status.dotColor }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{labelFor(a.name)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                      {a.runnerOverride ?? repo.defaultRunner} · {scheduleSummary(a)}
+                    </div>
                   </div>
+                  <span className={`pill ${status.tone}`}>{status.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                    {a.timeoutMs / 1000 / 60}m timeout
+                  </span>
                 </div>
-                <span className="pill">{a.enabled ? 'enabled' : 'paused'}</span>
-                <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                  {a.timeoutMs / 1000 / 60}m timeout
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -315,6 +336,56 @@ function ObservePreviews({
       )}
     </div>
   );
+}
+
+interface AgentRunStatus {
+  label: string;
+  tone: '' | 'ok' | 'warn' | 'bad' | 'info';
+  dotColor: string;
+}
+
+/**
+ * What "enabled" actually means for the user, given the repo's safety mode.
+ * In Observe, scheduled runs only preview to the audit log — calling that
+ * "enabled" is misleading, hence the per-mode relabel.
+ */
+function agentRunStatus(agent: Agent, mode: SafetyMode): AgentRunStatus {
+  if (!agent.enabled) {
+    return { label: 'Paused', tone: '', dotColor: 'var(--t-3)' };
+  }
+  switch (mode) {
+    case 'observe':
+      return { label: 'Previewing', tone: 'info', dotColor: 'var(--info)' };
+    case 'issues':
+      return { label: 'Filing issues', tone: 'ok', dotColor: 'var(--ok)' };
+    case 'prs':
+      return { label: 'Opening PRs', tone: 'warn', dotColor: 'var(--warn)' };
+    case 'automerge':
+      return { label: 'Auto-merging', tone: 'bad', dotColor: 'var(--bad)' };
+  }
+}
+
+function scheduleSummary(agent: Agent): string {
+  if (!agent.enabled) return 'paused';
+  if (!agent.nextFireAt) return 'manual only';
+  return `next ${formatNextFire(agent.nextFireAt)}`;
+}
+
+function formatNextFire(iso: string): string {
+  const target = new Date(iso).getTime();
+  const delta = target - Date.now();
+  if (delta <= 0) return 'now';
+  const mins = Math.round(delta / 60_000);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) {
+    // Same-day: show clock time, easier to scan than "in 5h"
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  const days = Math.round(hours / 24);
+  if (days < 7) return `in ${days}d`;
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 function labelFor(name: AgentName): string {
