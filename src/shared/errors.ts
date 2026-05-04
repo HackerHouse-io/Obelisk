@@ -26,6 +26,8 @@ export const ERROR_CODES = [
   'IO',
   'NOT_FOUND',
   'CONFLICT',
+  'AGENT_SINGLETON',
+  'AGENT_BUSY',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

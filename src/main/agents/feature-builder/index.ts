@@ -1,4 +1,5 @@
-import { nextAvailable } from '../../db/backlog';
+import { ulid } from 'ulid';
+import { claimNextBacklogItem, unlockBacklogItem } from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueAuthor } from '../lib/fetch-issue-author';
 import { registerArtifactFromPath } from '../lib/register-artifact';
@@ -12,36 +13,53 @@ import type {
 
 export const featureBuilderHandler: AgentHandler = {
   name: 'feature-builder',
+  multiInstance: true,
+  addAnotherExplainer:
+    'Each instance ships a different feature in parallel — distinct backlog rows, no overlap.',
   // Feature Builder ships PRs and MUST go through the Evidence Pack gate.
   skipsEvidenceGate: false,
   producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
-    const item = nextAvailable(input.repo.id, 'feature');
-    if (!item) return null;
-
-    if (item.githubIssue) {
-      const author = await fetchIssueAuthor(input.repo.githubFullName, item.githubIssue);
-      if (author) {
-        const allow = checkActorAllowlist({
-          repoId: input.repo.id,
-          login: author,
-          source: `issue#${item.githubIssue}`,
-        });
-        if (!allow.ok) return null;
+    // Atomic claim so two parallel instances pick different feature rows.
+    const placeholder = `pending:${ulid()}`;
+    const tried = new Set<string>();
+    for (let attempts = 0; attempts < 32; attempts++) {
+      const item = claimNextBacklogItem(input.repo.id, 'feature', placeholder);
+      if (!item) return null;
+      if (tried.has(item.id)) {
+        unlockBacklogItem(item.id);
+        return null;
       }
-    }
+      tried.add(item.id);
 
-    return {
-      backlogItem: item,
-      task: {
-        ref: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
-        kind: 'feature',
-        context: item.title,
-        ...(item.githubIssue ? { githubNumber: item.githubIssue } : {}),
-      },
-      runnerOverride: item.runnerOverride,
-    };
+      if (item.githubIssue) {
+        const author = await fetchIssueAuthor(input.repo.githubFullName, item.githubIssue);
+        if (author) {
+          const allow = checkActorAllowlist({
+            repoId: input.repo.id,
+            login: author,
+            source: `issue#${item.githubIssue}`,
+          });
+          if (!allow.ok) {
+            unlockBacklogItem(item.id);
+            continue;
+          }
+        }
+      }
+
+      return {
+        backlogItem: item,
+        task: {
+          ref: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
+          kind: 'feature',
+          context: item.title,
+          ...(item.githubIssue ? { githubNumber: item.githubIssue } : {}),
+        },
+        runnerOverride: item.runnerOverride,
+      };
+    }
+    return null;
   },
 
   async interpretResult(input: InterpretResultInput): Promise<PublishPlan[]> {

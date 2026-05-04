@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
+import { runAgentByName } from '../state/agent-actions';
 import type { AgentName, BacklogItem } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 
@@ -87,10 +88,7 @@ export function Backlog(): ReactElement {
 
   async function runFixerForKind(kind: BacklogItem['kind']): Promise<void> {
     const agentName: AgentName = kind === 'bug' ? 'bug-fixer' : 'feature-builder';
-    const res = await window.obelisk.invoke('agents:run', {
-      repoId: repo!.id,
-      agentName,
-    });
+    const res = await runAgentByName(repo!.id, agentName);
     if (!res.ok) alert(res.error.message);
   }
 

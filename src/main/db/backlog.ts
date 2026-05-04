@@ -124,6 +124,37 @@ export function lockBacklogItem(id: string, runId: string): void {
     .run(runId, new Date().toISOString(), id);
 }
 
+/**
+ * Atomically pick + lock the highest-ranked backlog item of `kind` that's not
+ * already in flight, marking it as owned by `runId`. Replaces the
+ * `nextAvailable` + `lockBacklogItem` pair so two parallel runners can't both
+ * grab the same row (TOCTOU). SQLite 3.35 RETURNING gives us this in one trip.
+ */
+export function claimNextBacklogItem(
+  repoId: string,
+  kind: 'bug' | 'feature',
+  runId: string,
+): BacklogItem | null {
+  const row = getDb()
+    .prepare<[string, string, string, string], BacklogRow>(
+      `UPDATE backlog
+       SET in_progress_run = ?, last_seen_at = ?
+       WHERE id = (
+         SELECT id FROM backlog
+         WHERE repo_id = ? AND kind = ? AND in_progress_run IS NULL
+         ORDER BY
+           user_pin_rank IS NULL,
+           user_pin_rank ASC,
+           CASE priority_label WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+           added_at DESC
+         LIMIT 1
+       )
+       RETURNING *`,
+    )
+    .get(runId, new Date().toISOString(), repoId, kind);
+  return row ? mapRow(row) : null;
+}
+
 export function unlockBacklogItem(id: string): void {
   getDb()
     .prepare('UPDATE backlog SET in_progress_run = NULL, last_seen_at = ? WHERE id = ?')

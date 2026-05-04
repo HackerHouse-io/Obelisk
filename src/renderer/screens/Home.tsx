@@ -140,9 +140,9 @@ export function Home(): ReactElement {
                 <div key={a.id} className="home-table-row">
                   <span className="dot" style={{ background: status.dotColor }} title={tooltip} />
                   <div>
-                    <div style={{ fontWeight: 600 }}>{labelFor(a.name)}</div>
+                    <div style={{ fontWeight: 600 }}>{a.displayName}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                      {a.runnerOverride ?? repo.defaultRunner} · {scheduleSummary(a)}
+                      {labelFor(a.name)} · {a.runnerOverride ?? repo.defaultRunner} · {scheduleSummary(a)}
                     </div>
                   </div>
                   <span
@@ -499,10 +499,22 @@ function buildLegend(): AgentRunStatus[] {
     id: '',
     repoId: '',
     name: 'qa-hunter',
+    displayName: 'QA Hunter',
     enabled: true,
     runnerOverride: null,
+    modelOverride: null,
     scheduleCron: null,
+    schedule: null,
     timeoutMs: 0,
+    permissions: {
+      readCode: true,
+      runTests: true,
+      createIssues: true,
+      draftPrs: false,
+      merge: false,
+    },
+    createdAt: '',
+    multiInstance: false,
   };
   const rows = LEGEND_MODES.map((m) => agentRunStatus(dummy, m));
   rows.push(agentRunStatus({ ...dummy, enabled: false }, 'observe'));

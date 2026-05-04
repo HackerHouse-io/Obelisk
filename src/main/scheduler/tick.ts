@@ -1,6 +1,6 @@
 import { listRepos } from '../db/repos';
 import { listAgentsForRepo } from '../db/agents';
-import { listLiveRuns, getLastRunStartedAt } from '../db/runs';
+import { listLiveRuns, getLastRunStartedAtForAgent } from '../db/runs';
 import { runAgent } from '../orchestrator/run';
 import { reapStaleRuns } from './heartbeat-reaper';
 import { autoMergeSweep } from './auto-merge';
@@ -8,7 +8,7 @@ import { defaultCronFor, isDue } from './cron';
 import { broadcast } from '../ipc/bus';
 import { appendAudit } from '../logger/audit';
 import type { Repo } from '../../shared/types';
-import { listImplementedAgents } from '../agents/registry';
+import { getAgentHandler, listImplementedAgents } from '../agents/registry';
 
 const TICK_MS = 30_000;
 const AUTO_MERGE_EVERY_N_TICKS = 10; // = 5 min
@@ -58,25 +58,36 @@ async function tick(): Promise<void> {
 function dispatchDueAgents(repo: Repo): void {
   const agents = listAgentsForRepo(repo.id);
   const implemented = new Set(listImplementedAgents());
-  const live = new Set(listLiveRuns(repo.id).map((r) => r.agentName));
+  const liveRuns = listLiveRuns(repo.id);
+  const liveAgentIds = new Set(liveRuns.map((r) => r.agentId).filter((id): id is string => !!id));
+  const liveAgentNames = new Set(liveRuns.map((r) => r.agentName));
   const now = new Date();
 
   for (const a of agents) {
     if (!a.enabled) continue;
     if (!implemented.has(a.name)) continue;
-    if (live.has(a.name)) continue;
 
-    const dispatchKey = `${repo.id}:${a.name}`;
+    // Per-instance single-flight: this exact instance is already running.
+    if (liveAgentIds.has(a.id)) continue;
+
+    // Per-type singleton fallback: handlers that declare multiInstance:false
+    // (qa-hunter, manual-qa today) must not run two of their type at once,
+    // even if they're separate instance rows.
+    const handler = getAgentHandler(a.name);
+    if (!handler.multiInstance && liveAgentNames.has(a.name)) continue;
+
+    const dispatchKey = `${repo.id}:${a.id}`;
     if (inFlightDispatch.has(dispatchKey)) continue;
 
     const cron = a.scheduleCron ?? defaultCronFor(a.name);
-    const basis = getLastRunStartedAt(repo.id, a.name) ?? new Date(repo.connectedAt);
+    const basis = getLastRunStartedAtForAgent(a.id) ?? new Date(repo.connectedAt);
     if (!isDue(cron, basis, now)) continue;
 
     inFlightDispatch.add(dispatchKey);
     void runAgent({
       repoId: repo.id,
       agentName: a.name,
+      agentId: a.id,
       trigger: 'schedule',
     })
       .catch((e: unknown) => {

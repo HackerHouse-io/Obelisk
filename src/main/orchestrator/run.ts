@@ -4,8 +4,12 @@ import { app } from 'electron';
 import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Repo } from '../../shared/types';
 import { getRepo } from '../db/repos';
-import { listAgentsForRepo } from '../db/agents';
+import { listAgentsForRepo, getAgent } from '../db/agents';
 import { lockBacklogItem, unlockBacklogItem } from '../db/backlog';
+import {
+  attachRunToPrReviewClaim,
+  releasePrReviewClaim,
+} from '../db/pr-review-claims';
 import { createRun, transitionRun, getRun } from '../db/runs';
 import { appendAudit } from '../logger/audit';
 import { getAgentHandler } from '../agents/registry';
@@ -25,6 +29,12 @@ import type { RepoSummary, Permissions } from '../prompt-compiler';
 export interface RunAgentInput {
   repoId: string;
   agentName: AgentName;
+  /**
+   * Specific instance to attribute this run to. When omitted (legacy callers
+   * or schedule paths that haven't been migrated yet), the orchestrator picks
+   * the first agent row matching `agentName` for backward compatibility.
+   */
+  agentId?: string;
   trigger: 'manual' | 'schedule' | 'webhook';
   /**
    * Optional hint passed to the agent's `selectTask`. Used by agents that
@@ -64,30 +74,42 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
 
   const handler = getAgentHandler(input.agentName);
 
-  // 1) Pick a task.
+  // Resolve which instance owns this run. Prefer the explicit agentId; fall
+  // back to "first row of this type in the repo" for legacy paths.
+  const agentRow = input.agentId
+    ? getAgent(input.agentId)
+    : (listAgentsForRepo(repo.id).find((a) => a.name === input.agentName) ?? null);
+
+  // 1) Pick a task. multi-instance handlers use agentId to attribute claims.
   const selected = await handler.selectTask({
     repo,
     defaultRunner: repo.defaultRunner,
     taskId: input.taskId,
+    ...(agentRow ? { agentId: agentRow.id } : {}),
   });
   if (!selected) {
     return { runId: '', finalState: 'done', reason: 'nothing to do' };
   }
 
   // 2) Pick a runner: per-task override → per-agent override → repo default.
-  const agentRow = listAgentsForRepo(repo.id).find((a) => a.name === input.agentName);
   const runnerKind = selected.runnerOverride ?? agentRow?.runnerOverride ?? repo.defaultRunner;
 
-  // 3) Create the run row + lock the backlog item.
+  // 3) Create the run row + finalize any claims acquired during selectTask.
   const run = createRun({
     repoId: repo.id,
     agentName: input.agentName,
+    agentId: agentRow?.id ?? null,
     trigger: input.trigger,
     taskRef: selected.task.ref,
     runnerUsed: runnerKind,
   });
   if (selected.backlogItem) {
+    // Replaces the placeholder token used during atomic claim with the real
+    // run id so the renderer can join backlog → runs.
     lockBacklogItem(selected.backlogItem.id, run.id);
+  }
+  if (selected.prReviewClaimId) {
+    attachRunToPrReviewClaim(selected.prReviewClaimId, run.id);
   }
 
   appendAudit({
@@ -356,6 +378,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   } finally {
     if (selected?.backlogItem) {
       unlockBacklogItem(selected.backlogItem.id);
+    }
+    if (selected?.prReviewClaimId) {
+      const finalState = getRun(run.id)?.state;
+      const result: 'done' | 'failed' | 'paused' =
+        finalState === 'done'
+          ? 'done'
+          : finalState === 'paused'
+            ? 'paused'
+            : 'failed';
+      releasePrReviewClaim(selected.prReviewClaimId, result);
     }
     if (worktreeHandle) {
       const finalRun = getRun(run.id);

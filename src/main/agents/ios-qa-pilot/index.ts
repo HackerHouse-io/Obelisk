@@ -35,6 +35,11 @@ const FLOW_HINT_PREFIX = 'flow:';
 
 export const iosQaPilotHandler: AgentHandler = {
   name: 'ios-qa-pilot',
+  // qa_ios_flows.claimed_run_id (UNIQUE WHERE NOT NULL) already guarantees
+  // two instances pick different flows; same for qa_ios_sim_slots.
+  multiInstance: true,
+  addAnotherExplainer:
+    'Each instance binds to a different simulator and verifies a different flow. Cap = available sim slots.',
   skipsEvidenceGate: true,
   producesPatch: false,
 

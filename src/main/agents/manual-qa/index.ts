@@ -16,6 +16,12 @@ import type {
 
 export const manualQaHandler: AgentHandler = {
   name: 'manual-qa',
+  // Singleton: today Manual QA runs every flow in qa/critical-flows.md per
+  // sweep. A 2nd instance would duplicate the entire sweep, which is wasteful.
+  // When per-flow scoping ships, flip to true and add a flow_claims integration.
+  multiInstance: false,
+  addAnotherExplainer:
+    'Manual QA runs every flow in qa/critical-flows.md per sweep — only one is useful today.',
   skipsEvidenceGate: true,
   producesPatch: false,
 

@@ -12,6 +12,10 @@ import type {
 
 export const qaHunterHandler: AgentHandler = {
   name: 'qa-hunter',
+  // Singleton: a 2nd QA Hunter would do a redundant whole-repo sweep.
+  multiInstance: false,
+  addAnotherExplainer:
+    'QA Hunter sweeps the whole repo on every run — only one instance is useful.',
   // QA Hunter doesn't write code; it files issues. The Evidence Pack gate
   // (which is about PR evidence) doesn't apply.
   skipsEvidenceGate: true,

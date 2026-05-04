@@ -44,3 +44,102 @@ function safeParse(s: string): unknown {
     return s;
   }
 }
+
+/**
+ * 7-day aggregate stats scoped to one agent instance. Used by the detail-pane
+ * Stats card.
+ */
+export async function handleRunsStats(
+  payload: IpcMap['runs:stats']['req'],
+): Promise<IpcMap['runs:stats']['res']> {
+  const days = payload.days ?? 7;
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const since = new Date(sinceMs).toISOString();
+  const db = getDb();
+
+  const totals = db
+    .prepare<
+      [string, string],
+      {
+        runs: number;
+        avg_duration_ms: number | null;
+        failures: number;
+      }
+    >(
+      `SELECT
+         COUNT(*)                                                       AS runs,
+         AVG(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL
+                  THEN (julianday(finished_at) - julianday(started_at)) * 86400 * 1000
+             END)                                                       AS avg_duration_ms,
+         SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END)              AS failures
+       FROM runs
+       WHERE agent_id = ? AND COALESCE(started_at, finished_at) >= ?`,
+    )
+    .get(payload.agentId, since);
+
+  const totalRuns = totals?.runs ?? 0;
+  const failures = totals?.failures ?? 0;
+
+  // PRs / issues opened by counting publish-success audit lines, scoped to runs of this agent.
+  const opened = db
+    .prepare<
+      [string, string],
+      { prs: number; issues: number; reviews: number }
+    >(
+      `SELECT
+         SUM(CASE WHEN json_extract(al.payload,'$.kind') = 'pr'      THEN 1 ELSE 0 END) AS prs,
+         SUM(CASE WHEN json_extract(al.payload,'$.kind') = 'issue'   THEN 1 ELSE 0 END) AS issues,
+         SUM(CASE WHEN json_extract(al.payload,'$.kind') = 'review'  THEN 1 ELSE 0 END) AS reviews
+       FROM audit_log al
+       JOIN runs r ON r.id = al.run_id
+       WHERE al.kind = 'published'
+         AND r.agent_id = ?
+         AND al.at >= ?`,
+    )
+    .get(payload.agentId, since);
+
+  return {
+    runs: totalRuns,
+    prsOpened: opened?.prs ?? 0,
+    issuesFiled: opened?.issues ?? 0,
+    reviewsLeft: opened?.reviews ?? 0,
+    falsePositiveRate: totalRuns === 0 ? 0 : failures / totalRuns,
+    avgDurationMs: Math.round(totals?.avg_duration_ms ?? 0),
+  };
+}
+
+/**
+ * 168-hour grid (day-of-week × hour) of run counts for one agent.
+ */
+export async function handleRunsHistogram(
+  payload: IpcMap['runs:histogram']['req'],
+): Promise<IpcMap['runs:histogram']['res']> {
+  const hours = payload.hours ?? 168;
+  const sinceMs = Date.now() - hours * 60 * 60 * 1000;
+  const since = new Date(sinceMs).toISOString();
+
+  const rows = getDb()
+    .prepare<
+      [string, string],
+      { started_at: string; state: string }
+    >(
+      `SELECT started_at, state FROM runs
+       WHERE agent_id = ? AND started_at IS NOT NULL AND started_at >= ?`,
+    )
+    .all(payload.agentId, since);
+
+  // Map to (dow, hour) buckets. JS getDay: Sun=0..Sat=6; we use Mon=0..Sun=6
+  // to match the renderer's grid headers.
+  const cells = new Map<string, { dayOfWeek: number; hour: number; runs: number; issues: number }>();
+  for (const r of rows) {
+    const d = new Date(r.started_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const dow = (d.getDay() + 6) % 7; // shift so Mon=0
+    const hour = d.getHours();
+    const key = `${dow}:${hour}`;
+    const cur = cells.get(key) ?? { dayOfWeek: dow, hour, runs: 0, issues: 0 };
+    cur.runs += 1;
+    cells.set(key, cur);
+  }
+  return { cells: Array.from(cells.values()) };
+}

@@ -12,6 +12,25 @@ export interface AgentHandler {
   readonly name: AgentName;
 
   /**
+   * Whether the user can run multiple instances of this type in the same repo.
+   *
+   * Multi-instance agents must implement an atomic claim primitive in their
+   * `selectTask` so two parallel instances pick *different* units of work
+   * (different backlog items, different PRs, different flows).
+   *
+   * Singletons (qa-hunter, manual-qa today) sweep the whole repo per run and
+   * have no natural way to partition work; the renderer disables "+ Add
+   * another" for these and the IPC rejects creation with `AGENT_SINGLETON`.
+   */
+  readonly multiInstance: boolean;
+
+  /**
+   * Short blurb shown in the AddAgentPicker explaining what a 2nd instance
+   * does. The user reads this to decide if more parallelism is worth it.
+   */
+  readonly addAnotherExplainer: string;
+
+  /**
    * Pick the next task this agent should work on, or null if there's nothing
    * (queued items in flight don't count). Implementations MUST run the
    * actor-allowlist gate on any GitHub-derived task before returning it.
@@ -59,6 +78,12 @@ export interface SelectTaskInput {
    * ignored.
    */
   taskId?: string;
+  /**
+   * Calling instance's id, when available. Multi-instance handlers attach
+   * this to their atomic claim rows (e.g. pr_review_claims.agent_id).
+   * Optional so legacy / test callers don't have to provide it.
+   */
+  agentId?: string;
 }
 
 export interface SelectedTask {
@@ -70,6 +95,12 @@ export interface SelectedTask {
    * Codex"). Falls through to agent.runnerOverride / repo.defaultRunner if null.
    */
   runnerOverride?: RunnerKind | null;
+  /**
+   * If the agent acquired a pr_review_claims row at selectTask time, this is
+   * the claim id. The orchestrator (a) attaches the run id once createRun
+   * succeeds, and (b) releases the claim with a result on completion.
+   */
+  prReviewClaimId?: string;
 }
 
 export interface InterpretResultInput {

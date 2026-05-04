@@ -5,6 +5,7 @@ import { ObeliskError } from '../../../shared/errors';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { crossCheckEvidence, isEvidenceComplete } from './evidence-cross-check';
+import { claimPrReview, wasReviewed as wasReviewedAtSha } from '../../db/pr-review-claims';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -15,6 +16,9 @@ import type {
 
 export const prReviewerHandler: AgentHandler = {
   name: 'pr-reviewer',
+  multiInstance: true,
+  addAnotherExplainer:
+    'Each instance reviews a different open PR. The same PR is never reviewed twice at the same SHA.',
   // Reviews never write code, never open PRs.
   skipsEvidenceGate: true,
   producesPatch: false,
@@ -39,10 +43,16 @@ export const prReviewerHandler: AgentHandler = {
     const stored = await loadGitHubToken();
     const connectedLogin = stored?.login.toLowerCase();
 
+    // Note: input carries `agentId` so we can attribute the claim to a specific
+    // instance. SelectTaskInput was extended at the orchestrator boundary.
+    const agentId = input.agentId ?? null;
+
     for (const pr of prs) {
-      // Encoding the head SHA in task_ref means a force-push (new SHA)
-      // produces a new task and gets a fresh review — no LIKE search needed.
-      const taskRef = `pr#${pr.number}@${pr.head.sha.slice(0, 12)}`;
+      const headSha = pr.head.sha;
+      const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
+
+      // Skip if any instance already reviewed this exact SHA.
+      if (wasReviewedAtSha(input.repo.id, pr.number, headSha)) continue;
       if (alreadyReviewed(input.repo.id, taskRef)) continue;
 
       const author = pr.user?.login?.toLowerCase();
@@ -59,6 +69,29 @@ export const prReviewerHandler: AgentHandler = {
         if (!allow.ok) continue;
       }
 
+      // Atomic claim — guarantees only one reviewer instance picks this PR/SHA.
+      // If another instance got here first the partial-unique index returns 0
+      // changes and we fall through to the next candidate.
+      if (!agentId) {
+        // No agent id available (legacy callers). Skip the claim and rely on
+        // alreadyReviewed dedup; behavior matches pre-multi-instance.
+        return {
+          task: {
+            ref: taskRef,
+            kind: 'review',
+            context: prContextFor(pr),
+            githubNumber: pr.number,
+          },
+        };
+      }
+      const claim = claimPrReview({
+        repoId: input.repo.id,
+        prNumber: pr.number,
+        headSha,
+        agentId,
+      });
+      if (!claim) continue;
+
       return {
         task: {
           ref: taskRef,
@@ -66,6 +99,7 @@ export const prReviewerHandler: AgentHandler = {
           context: prContextFor(pr),
           githubNumber: pr.number,
         },
+        prReviewClaimId: claim.id,
       };
     }
 

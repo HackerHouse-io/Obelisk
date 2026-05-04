@@ -7,6 +7,7 @@ interface RunRow {
   id: string;
   repo_id: string;
   agent_name: AgentName;
+  agent_id: string | null;
   state: RunState;
   started_at: string | null;
   finished_at: string | null;
@@ -25,6 +26,7 @@ function mapRow(r: RunRow): Run {
     id: r.id,
     repoId: r.repo_id,
     agentName: r.agent_name,
+    agentId: r.agent_id,
     state: r.state,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
@@ -40,6 +42,7 @@ function mapRow(r: RunRow): Run {
 export interface CreateRunInput {
   repoId: string;
   agentName: AgentName;
+  agentId: string | null;
   trigger: 'schedule' | 'manual' | 'webhook' | 'cloud';
   taskRef: string | null;
   runnerUsed: RunnerKind;
@@ -51,15 +54,16 @@ export function createRun(input: CreateRunInput): Run {
   getDb()
     .prepare(
       `INSERT INTO runs
-        (id, repo_id, agent_name, state, started_at, last_heartbeat_at,
+        (id, repo_id, agent_name, agent_id, state, started_at, last_heartbeat_at,
          trigger, task_ref, runner_used, fallback_used, output_summary,
          error_code, worktree_path)
-       VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
     )
     .run(
       id,
       input.repoId,
       input.agentName,
+      input.agentId,
       now,
       now,
       input.trigger,
@@ -111,6 +115,20 @@ export function getLastRunStartedAt(repoId: string, agentName: AgentName): Date 
        ORDER BY started_at DESC NULLS LAST LIMIT 1`,
     )
     .get(repoId, agentName);
+  if (!row?.started_at) return null;
+  const d = new Date(row.started_at);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Per-instance variant — the scheduler needs this once instances diverge. */
+export function getLastRunStartedAtForAgent(agentId: string): Date | null {
+  const row = getDb()
+    .prepare<[string], { started_at: string | null }>(
+      `SELECT started_at FROM runs
+       WHERE agent_id = ?
+       ORDER BY started_at DESC NULLS LAST LIMIT 1`,
+    )
+    .get(agentId);
   if (!row?.started_at) return null;
   const d = new Date(row.started_at);
   return Number.isNaN(d.getTime()) ? null : d;

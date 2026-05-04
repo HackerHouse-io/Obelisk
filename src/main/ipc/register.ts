@@ -24,8 +24,12 @@ import {
   handleAgentsRun,
   handleAgentsCancel,
   handleAgentsUpdate,
+  handleAgentsCreate,
+  handleAgentsClone,
+  handleAgentsDelete,
+  handleAgentsReadMd,
 } from './agents';
-import { handleRunsList, handleRunsGet } from './runs';
+import { handleRunsList, handleRunsGet, handleRunsStats, handleRunsHistogram } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
 import { handlePlaybookGet, handlePlaybookSave } from './playbook';
 import { handlePreviewsList } from './previews';
@@ -88,10 +92,16 @@ export function registerIpcHandlers(): void {
   register('agents:run', handleAgentsRun);
   register('agents:cancel', handleAgentsCancel);
   register('agents:update', handleAgentsUpdate);
+  register('agents:create', handleAgentsCreate);
+  register('agents:clone', handleAgentsClone);
+  register('agents:delete', handleAgentsDelete);
+  register('agents:readMd', handleAgentsReadMd);
 
   // Runs (Phase 4 — real)
   register('runs:list', handleRunsList);
   register('runs:get', handleRunsGet);
+  register('runs:stats', handleRunsStats);
+  register('runs:histogram', handleRunsHistogram);
 
   // Backlog (Phase 4 — real)
   register('backlog:list', handleBacklogList);

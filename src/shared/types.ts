@@ -35,14 +35,59 @@ export interface Repo {
   connectedAt: ISO;
 }
 
+export interface AgentPermissions {
+  readCode: boolean;
+  runTests: boolean;
+  createIssues: boolean;
+  draftPrs: boolean;
+  merge: boolean;
+}
+
+export type ScheduleMode = 'event' | 'recurring' | 'cron' | 'manual';
+
+export interface ScheduleConfig {
+  mode: ScheduleMode;
+  /** Recurring */
+  every?: number;
+  unit?: 'minute' | 'hour' | 'day' | 'week';
+  at?: string; // 'HH:MM'
+  days?: [number, number, number, number, number, number, number]; // Mon..Sun
+  tz?: string;
+  /** Event */
+  events?: string[];
+  /** Cron */
+  cron?: string;
+  /** Guardrails */
+  maxConcurrent?: number;
+  maxPerDay?: number;
+  quietStart?: string;
+  quietEnd?: string;
+  pauseLowCredit?: boolean;
+}
+
 export interface Agent {
   id: string;
   repoId: string;
+  /** Type — qa-hunter / bug-fixer / etc. Multiple instances share the same name. */
   name: AgentName;
+  /** User-editable label distinguishing instances of the same type. */
+  displayName: string;
   enabled: boolean;
   runnerOverride: RunnerKind | null;
+  modelOverride: string | null;
   scheduleCron: string | null;
+  /** Mode-aware schedule blob; null until the user opens the segmented editor. */
+  schedule: ScheduleConfig | null;
   timeoutMs: number;
+  permissions: AgentPermissions;
+  createdAt: ISO;
+  /**
+   * Computed at the IPC boundary (not stored on the DB row):
+   * - `false` for singleton types (qa-hunter, manual-qa); the renderer disables
+   *   "+ Add another" for these.
+   * - `true` for types that support multiple instances.
+   */
+  multiInstance: boolean;
   /**
    * Computed at the IPC boundary (not stored on the DB row):
    * - `null` when the agent is manual-only (e.g. iOS QA Pilot) or its cron
@@ -59,6 +104,8 @@ export interface Run {
   id: string;
   repoId: string;
   agentName: AgentName;
+  /** Instance that owned this run. Null on legacy rows from before multi-instance. */
+  agentId: string | null;
   state: RunState;
   startedAt: ISO | null;
   finishedAt: ISO | null;
@@ -195,11 +242,46 @@ export interface IpcMap {
   // Agents
   'agents:list': { req: { repoId: string }; res: Agent[] };
   'agents:run': {
-    req: { repoId: string; agentName: AgentName; taskId?: string };
+    req: { agentId: string; taskId?: string };
     res: { runId: string };
   };
   'agents:cancel': { req: { runId: string }; res: { ok: true } };
   'agents:update': { req: { agentId: string; patch: Partial<Agent> }; res: Agent };
+  'agents:create': {
+    req: {
+      repoId: string;
+      name: AgentName;
+      displayName?: string;
+      scheduleCron?: string | null;
+      runnerOverride?: RunnerKind | null;
+    };
+    res: Agent;
+  };
+  'agents:clone': { req: { agentId: string }; res: Agent };
+  'agents:delete': { req: { agentId: string }; res: { ok: true } };
+  'agents:readMd': {
+    req: { repoId: string; agentName: AgentName };
+    res: { source: 'builtin' | 'override'; markdown: string; skills: string[] };
+  };
+
+  // Stats / history (Phase 2 detail-pane)
+  'runs:stats': {
+    req: { agentId: string; days?: number };
+    res: {
+      runs: number;
+      prsOpened: number;
+      issuesFiled: number;
+      reviewsLeft: number;
+      falsePositiveRate: number;
+      avgDurationMs: number;
+    };
+  };
+  'runs:histogram': {
+    req: { agentId: string; hours?: number };
+    res: {
+      cells: { dayOfWeek: number; hour: number; runs: number; issues: number }[];
+    };
+  };
 
   // Runs
   'runs:list': { req: { repoId: string; limit?: number; before?: ISO }; res: Run[] };

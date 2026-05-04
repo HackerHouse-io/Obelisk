@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
+import { runAgentByName } from '../state/agent-actions';
 import { EmptyState } from '../ui/EmptyState';
-import type { AuditLine, EvidenceItem, Run, RunState, AgentName } from '../../shared/types';
+import type { Agent, AuditLine, EvidenceItem, Run, RunState, AgentName } from '../../shared/types';
 
 /**
  * Mission Control: 7-stage pipeline + 460px right drawer with 4 tabs.
@@ -66,6 +67,7 @@ export function MissionControl(): ReactElement {
   const repo = repos.find((r) => r.id === selectedRepoId);
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
 
   // Initial fetch.
   useEffect(() => {
@@ -75,7 +77,16 @@ export function MissionControl(): ReactElement {
         for (const run of res.value) upsertRun(run);
       }
     });
+    void window.obelisk.invoke('agents:list', { repoId: repo.id }).then((res) => {
+      if (res.ok) setAgents(res.value);
+    });
   }, [repo, upsertRun]);
+
+  const agentLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agents) m.set(a.id, a.displayName);
+    return m;
+  }, [agents]);
 
   const repoRuns: Run[] = useMemo(() => {
     if (!repo) return [];
@@ -126,10 +137,7 @@ export function MissionControl(): ReactElement {
               type="button"
               className="btn primary sm"
               onClick={async () => {
-                const res = await window.obelisk.invoke('agents:run', {
-                  repoId: repo.id,
-                  agentName: 'bug-fixer',
-                });
+                const res = await runAgentByName(repo.id, 'bug-fixer');
                 if (res.ok) setSelectedRunId(res.value.runId);
                 else alert(res.error.message);
               }}
@@ -161,6 +169,7 @@ export function MissionControl(): ReactElement {
                       <RunCard
                         key={run.id}
                         run={run}
+                        instanceName={run.agentId ? agentLabels.get(run.agentId) : undefined}
                         selected={run.id === selectedRunId}
                         onClick={() => setSelectedRunId(run.id)}
                       />
@@ -179,18 +188,29 @@ export function MissionControl(): ReactElement {
 
 function RunCard({
   run,
+  instanceName,
   selected,
   onClick,
 }: {
   run: Run;
+  instanceName?: string;
   selected: boolean;
   onClick: () => void;
 }): ReactElement {
+  const typeLabel = agentLabel(run.agentName);
+  const showInstance = instanceName && instanceName !== typeLabel;
   return (
     <button type="button" className={`mc-card${selected ? ' selected' : ''}`} onClick={onClick}>
       <div className="mc-card-title">{run.taskRef ?? '(no task ref)'}</div>
       <div className="mc-card-meta">
-        <span className="pill">{agentLabel(run.agentName)}</span>
+        <span className="pill" title={showInstance ? typeLabel : undefined}>
+          {instanceName ?? typeLabel}
+        </span>
+        {showInstance ? (
+          <span className="pill" style={{ opacity: 0.7 }}>
+            {typeLabel}
+          </span>
+        ) : null}
         <span className="pill">{run.runnerUsed}</span>
         {run.fallbackUsed ? <span className="pill warn">fallback</span> : null}
         {run.errorCode ? <span className="pill bad">{run.errorCode}</span> : null}

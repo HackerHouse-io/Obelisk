@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore, type Route } from '../state/store';
+import { runAgentByName } from '../state/agent-actions';
 
 export interface Command {
   id: string;
@@ -84,10 +85,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         disabledReason: 'Connect a repo first',
         run: async () => {
           if (!hasRepo) return;
-          const res = await window.obelisk.invoke('agents:run', {
-            repoId: selectedRepoId!,
-            agentName: 'bug-fixer',
-          });
+          const res = await runAgentByName(selectedRepoId!, 'bug-fixer');
           if (!res.ok) alert(res.error.message);
           onClose();
         },
@@ -101,10 +99,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         disabledReason: 'Connect a repo first',
         run: async () => {
           if (!hasRepo) return;
-          const res = await window.obelisk.invoke('agents:run', {
-            repoId: selectedRepoId!,
-            agentName: 'qa-hunter',
-          });
+          const res = await runAgentByName(selectedRepoId!, 'qa-hunter');
           if (!res.ok) alert(res.error.message);
           onClose();
         },
@@ -118,10 +113,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         disabledReason: 'Connect a repo first',
         run: async () => {
           if (!hasRepo) return;
-          const res = await window.obelisk.invoke('agents:run', {
-            repoId: selectedRepoId!,
-            agentName: 'feature-builder',
-          });
+          const res = await runAgentByName(selectedRepoId!, 'feature-builder');
           if (!res.ok) alert(res.error.message);
           onClose();
         },

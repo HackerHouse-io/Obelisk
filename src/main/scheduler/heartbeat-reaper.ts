@@ -1,6 +1,7 @@
 import { getDb } from '../db';
 import { transitionRun } from '../db/runs';
 import { appendAudit } from '../logger/audit';
+import { releaseClaimsForRun } from '../db/pr-review-claims';
 
 interface StaleRow {
   id: string;
@@ -55,6 +56,9 @@ export function reapStaleRuns(now: Date = new Date()): { reaped: string[] } {
       errorCode: 'TIMEOUT',
       outputSummary: `No heartbeat for >${Math.round(cutoffMs / 60000)} min`,
     });
+    // Release any active claim rows owned by this run so a future tick can
+    // pick up the same unit of work (PR review, etc.).
+    releaseClaimsForRun(row.id);
     reaped.push(row.id);
   }
   return { reaped };

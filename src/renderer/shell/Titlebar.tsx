@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
+import { runAgentByName } from '../state/agent-actions';
 import { ObeliskMark } from './Obelisk';
 import { CommandPalette } from '../ui/CommandPalette';
 import { RepoSwitcher } from '../ui/RepoSwitcher';
@@ -34,10 +35,7 @@ export function Titlebar(): ReactElement {
       setNoRepoPromptOpen(true);
       return;
     }
-    const res = await window.obelisk.invoke('agents:run', {
-      repoId: repo.id,
-      agentName: 'bug-fixer',
-    });
+    const res = await runAgentByName(repo.id, 'bug-fixer');
     if (!res.ok) alert(res.error.message);
   }
 
