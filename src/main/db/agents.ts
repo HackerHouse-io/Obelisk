@@ -193,7 +193,7 @@ export function createAgent(input: CreateAgentInput): Agent {
       input.repoId,
       input.name,
       displayName,
-      input.enabled === false ? 0 : 1,
+      input.enabled === true ? 1 : 0,
       input.runnerOverride ?? null,
       input.scheduleCron ?? null,
       input.timeoutMs ?? DEFAULT_TIMEOUT[input.name],
