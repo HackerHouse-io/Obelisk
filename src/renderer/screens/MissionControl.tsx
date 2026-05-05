@@ -68,6 +68,22 @@ export function MissionControl(): ReactElement {
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('mc.drawerOpen');
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mc.drawerOpen', drawerOpen ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [drawerOpen]);
 
   // Initial fetch.
   useEffect(() => {
@@ -110,7 +126,7 @@ export function MissionControl(): ReactElement {
   }
 
   return (
-    <div className="mc">
+    <div className={`mc${drawerOpen ? '' : ' drawer-closed'}`}>
       <div className="mc-pipeline-wrap">
         <div className="mc-toolbar">
           <div className="mc-toolbar-left">
@@ -138,8 +154,10 @@ export function MissionControl(): ReactElement {
               className="btn primary sm"
               onClick={async () => {
                 const res = await runAgentByName(repo.id, 'bug-fixer');
-                if (res.ok) setSelectedRunId(res.value.runId);
-                else alert(res.error.message);
+                if (res.ok) {
+                  setSelectedRunId(res.value.runId);
+                  setDrawerOpen(true);
+                } else alert(res.error.message);
               }}
             >
               <Icon.Play size={11} /> Run Bug Fixer now
@@ -171,7 +189,10 @@ export function MissionControl(): ReactElement {
                         run={run}
                         instanceName={run.agentId ? agentLabels.get(run.agentId) : undefined}
                         selected={run.id === selectedRunId}
-                        onClick={() => setSelectedRunId(run.id)}
+                        onClick={() => {
+                          setSelectedRunId(run.id);
+                          setDrawerOpen(true);
+                        }}
                       />
                     ))
                   )}
@@ -181,7 +202,25 @@ export function MissionControl(): ReactElement {
           })}
         </div>
       </div>
-      <RunDrawer run={selectedRun} onClose={() => setSelectedRunId(null)} />
+      {drawerOpen ? (
+        <RunDrawer
+          run={selectedRun}
+          onClose={() => setSelectedRunId(null)}
+          onToggle={() => setDrawerOpen(false)}
+        />
+      ) : (
+        <aside className="mc-drawer-rail">
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={() => setDrawerOpen(true)}
+            title="Show inspector"
+            aria-pressed={false}
+          >
+            <Icon.PanelRight size={12} />
+          </button>
+        </aside>
+      )}
     </div>
   );
 }
@@ -232,7 +271,15 @@ function agentLabel(name: AgentName): string {
 
 type Tab = 'audit' | 'evidence' | 'reasoning' | 'files';
 
-function RunDrawer({ run, onClose }: { run: Run | null; onClose: () => void }): ReactElement {
+function RunDrawer({
+  run,
+  onClose,
+  onToggle,
+}: {
+  run: Run | null;
+  onClose: () => void;
+  onToggle: () => void;
+}): ReactElement {
   const [tab, setTab] = useState<Tab>('audit');
   const [details, setDetails] = useState<{
     auditLog: AuditLine[];
@@ -249,9 +296,22 @@ function RunDrawer({ run, onClose }: { run: Run | null; onClose: () => void }): 
     });
   }, [run]);
 
+  const toggleBtn = (
+    <button
+      type="button"
+      className="btn ghost icon"
+      onClick={onToggle}
+      title="Hide inspector"
+      aria-pressed={true}
+    >
+      <Icon.PanelRight size={12} />
+    </button>
+  );
+
   if (!run) {
     return (
       <aside className="mc-drawer">
+        <div className="mc-drawer-toolbar">{toggleBtn}</div>
         <div className="mc-drawer-empty">Pick a run to inspect.</div>
       </aside>
     );
@@ -262,9 +322,12 @@ function RunDrawer({ run, onClose }: { run: Run | null; onClose: () => void }): 
       <div className="mc-drawer-header">
         <div className="mc-drawer-row">
           <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
-          <button type="button" className="btn ghost icon" onClick={onClose} title="Close">
-            <Icon.Close size={11} />
-          </button>
+          <div className="row gap-1">
+            <button type="button" className="btn ghost icon" onClick={onClose} title="Close">
+              <Icon.Close size={11} />
+            </button>
+            {toggleBtn}
+          </div>
         </div>
         <div className="mc-drawer-meta">
           <span className="pill">{agentLabel(run.agentName)}</span>

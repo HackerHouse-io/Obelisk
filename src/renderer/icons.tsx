@@ -250,6 +250,12 @@ export const Icon = {
       <circle cx="5" cy="12" r="1.5" fill="var(--bg-2)" />
     </>,
   ),
+  PanelRight: make(
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M10 3v10" />
+    </>,
+  ),
   Spinner: make(
     <>
       <path d="M8 1.5v3" opacity="1" />
