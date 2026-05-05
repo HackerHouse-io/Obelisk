@@ -394,9 +394,7 @@ function RunDrawer({
           className="btn ghost icon"
           onClick={() => onDelete(run.id)}
           disabled={isActive}
-          title={
-            isActive ? 'Cancel the run before deleting' : 'Delete this run and its evidence'
-          }
+          title={isActive ? 'Cancel the run before deleting' : 'Delete this run and its evidence'}
         >
           <Icon.Trash size={11} />
         </button>

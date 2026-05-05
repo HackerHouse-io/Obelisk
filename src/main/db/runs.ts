@@ -268,10 +268,9 @@ export function deleteRunsForRepo(repoId: string, states: RunState[]): number {
   if (safe.length === 0) return 0;
   const placeholders = safe.map(() => '?').join(',');
   const rows = getDb()
-    .prepare<
-      [string, ...string[]],
-      { id: string }
-    >(`SELECT id FROM runs WHERE repo_id = ? AND state IN (${placeholders})`)
+    .prepare<[string, ...string[]], { id: string }>(
+      `SELECT id FROM runs WHERE repo_id = ? AND state IN (${placeholders})`,
+    )
     .all(repoId, ...safe);
   let deleted = 0;
   for (const r of rows) {
