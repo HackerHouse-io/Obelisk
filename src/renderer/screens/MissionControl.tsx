@@ -126,7 +126,17 @@ export function MissionControl(): ReactElement {
   }
 
   return (
-    <div className={`mc${drawerOpen ? '' : ' drawer-closed'}`}>
+    <div
+      className={`mc${drawerOpen ? '' : ' drawer-closed'}`}
+      onMouseDown={(e) => {
+        if (!drawerOpen) return;
+        const target = e.target as HTMLElement;
+        // Don't close on drawer-internal clicks, on a card (which selects a
+        // run and is meant to keep the drawer open), or on any button.
+        if (target.closest('.mc-drawer, .mc-drawer-rail, .mc-card, button')) return;
+        setDrawerOpen(false);
+      }}
+    >
       <div className="mc-pipeline-wrap">
         <div className="mc-toolbar">
           <div className="mc-toolbar-left">
