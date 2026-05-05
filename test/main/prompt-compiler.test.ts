@@ -93,7 +93,8 @@ function build(agentName: AgentName, runnerOverride: RunnerKind): CompileOptions
     runnerOverride,
     task: TASK_BY_AGENT[agentName],
     repo: REPO,
-    permissions: agentName === 'pr-reviewer' || agentName === 'qa-hunter' ? PERMS_OBSERVE : PERMS_PRS,
+    permissions:
+      agentName === 'pr-reviewer' || agentName === 'qa-hunter' ? PERMS_OBSERVE : PERMS_PRS,
     paths: PATHS,
   };
 }
@@ -167,11 +168,11 @@ describe('prompt-compiler', () => {
 
     it('runner args reference the materialized system prompt + settings paths', () => {
       const out = compile(build('bug-fixer', 'claude'));
+      expect(out.runnerArgs).toContain('-p');
       expect(out.runnerArgs).toContain('--system-prompt-file');
       expect(out.runnerArgs).toContain('.claude/SYSTEM.md');
-      expect(out.runnerArgs).toContain('--settings-file');
+      expect(out.runnerArgs).toContain('--settings');
       expect(out.runnerArgs).toContain('.claude/settings.json');
-      expect(out.runnerArgs).toContain('--non-interactive');
     });
   });
 
@@ -187,13 +188,15 @@ describe('prompt-compiler', () => {
     it('passes reasoning effort + sandbox flags as runner args', () => {
       const out = compile(build('bug-fixer', 'codex'));
       expect(out.runnerArgs[0]).toBe('exec');
-      expect(out.runnerArgs).toContain('--codex-reasoning-effort=high');
-      expect(out.runnerArgs).toContain('--codex-sandbox=workspace-write');
+      expect(out.runnerArgs).toContain('--sandbox');
+      expect(out.runnerArgs).toContain('workspace-write');
+      expect(out.runnerArgs).toContain('-c');
+      expect(out.runnerArgs).toContain('model_reasoning_effort="high"');
     });
 
     it('uses medium reasoning for non-builder agents', () => {
       const out = compile(build('qa-hunter', 'codex'));
-      expect(out.runnerArgs).toContain('--codex-reasoning-effort=medium');
+      expect(out.runnerArgs).toContain('model_reasoning_effort="medium"');
     });
   });
 

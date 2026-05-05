@@ -147,7 +147,13 @@ export interface PlaybookFile {
 export interface Playbook {
   files: PlaybookFile[];
   draft: boolean;
+  /** ISO timestamp of the last bootstrap or regenerate run, or null if unknown. */
+  generatedAt: ISO | null;
+  /** Detected framework slug from the last generation, or null if unknown. */
+  framework: string | null;
 }
+
+export type PlaybookRegenMode = 'quick' | 'deep';
 
 export interface Settings {
   defaultRunner: RunnerKind;
@@ -306,6 +312,10 @@ export interface IpcMap {
   // Playbook
   'playbook:get': { req: { repoId: string }; res: Playbook };
   'playbook:save': { req: { repoId: string; files: PlaybookFile[] }; res: { ok: true } };
+  'playbook:regenerate': {
+    req: { repoId: string; mode: PlaybookRegenMode };
+    res: { ok: true; generatedAt: ISO; fileCount: number; framework: string };
+  };
 
   // Observe-mode previews — the issues / playbook agents would have filed
   // if the repo's safety mode allowed writes.

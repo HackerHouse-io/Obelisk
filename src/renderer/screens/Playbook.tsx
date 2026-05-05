@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
-import type { PlaybookFile } from '../../shared/types';
+import { useClickOutside } from '../hooks/useClickOutside';
+import type { PlaybookFile, PlaybookRegenMode } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 
 export function Playbook(): ReactElement {
@@ -11,10 +12,13 @@ export function Playbook(): ReactElement {
 
   const [files, setFiles] = useState<PlaybookFile[]>([]);
   const [draft, setDraft] = useState(false);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [framework, setFramework] = useState<string | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [contents, setContents] = useState('');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [regenMode, setRegenMode] = useState<PlaybookRegenMode | null>(null);
 
   const refresh = async (): Promise<void> => {
     if (!repo) return;
@@ -22,11 +26,42 @@ export function Playbook(): ReactElement {
     if (!res.ok) return;
     setFiles(res.value.files);
     setDraft(res.value.draft);
+    setGeneratedAt(res.value.generatedAt);
+    setFramework(res.value.framework);
     if (!activePath && res.value.files.length > 0) {
       setActivePath(res.value.files[0]!.path);
       setContents(res.value.files[0]!.contents);
     }
   };
+
+  async function regenerate(mode: PlaybookRegenMode): Promise<void> {
+    if (!repo || regenMode) return;
+    if (
+      mode === 'deep' &&
+      !confirm(
+        'Deep regenerate spawns the default CLI runner against this repo. It can take several minutes and uses LLM tokens. Continue?',
+      )
+    ) {
+      return;
+    }
+    if (dirty && !confirm('You have unsaved edits. Regenerating will discard them. Continue?')) {
+      return;
+    }
+    setRegenMode(mode);
+    const res = await window.obelisk.invoke('playbook:regenerate', {
+      repoId: repo.id,
+      mode,
+    });
+    setRegenMode(null);
+    if (!res.ok) {
+      alert(`Couldn't regenerate playbook: ${res.error.message}`);
+      return;
+    }
+    setActivePath(null);
+    setContents('');
+    setDirty(false);
+    await refresh();
+  }
 
   useEffect(() => {
     void refresh();
@@ -58,10 +93,15 @@ export function Playbook(): ReactElement {
         title="No QA Playbook yet"
         body={
           <>
-            Obelisk usually bootstraps <span className="mono">qa/</span> on first connect.
-            Re-trigger it from Settings if it didn&apos;t run.
+            Obelisk usually bootstraps <span className="mono">qa/</span> on first connect. Generate
+            one now from this repo.
           </>
         }
+        action={{
+          label: regenMode === 'quick' ? 'Generating…' : 'Generate playbook',
+          icon: <Icon.Refresh size={13} />,
+          onClick: () => void regenerate('quick'),
+        }}
       />
     );
   }
@@ -95,25 +135,43 @@ export function Playbook(): ReactElement {
   return (
     <div className="playbook-screen">
       <aside className="playbook-files">
-        <div className="row gap-2" style={{ padding: '4px 8px 8px', alignItems: 'center' }}>
+        <div className="row gap-2" style={{ padding: '4px 8px 6px', alignItems: 'center' }}>
           <Icon.Playbook size={13} color="var(--brand)" />
           <span style={{ fontSize: 12, fontWeight: 600 }}>QA Playbook</span>
           {draft ? (
-            <span className="pill" style={{ marginLeft: 'auto' }}>
+            <span
+              className="pill"
+              style={{ marginLeft: 'auto' }}
+              title="Edits are cached locally and not yet committed to the repo. Raise the safety mode to publish."
+            >
               draft
             </span>
           ) : null}
         </div>
-        {files.map((f) => (
-          <button
-            key={f.path}
-            type="button"
-            className={`playbook-file-button${f.path === activePath ? ' selected' : ''}`}
-            onClick={() => pick(f.path)}
-          >
-            {basename(f.path)}
-          </button>
-        ))}
+        <div
+          className="playbook-meta"
+          title={
+            generatedAt
+              ? `Last sync: ${new Date(generatedAt).toLocaleString()}`
+              : 'No sync recorded yet — run Regenerate to bootstrap.'
+          }
+        >
+          <span>Last sync: {formatRelative(generatedAt)}</span>
+          {framework ? <span className="muted">framework: {framework}</span> : null}
+        </div>
+        <RegenerateMenu busy={regenMode} onPick={(mode) => void regenerate(mode)} />
+        <div className="playbook-files-list">
+          {files.map((f) => (
+            <button
+              key={f.path}
+              type="button"
+              className={`playbook-file-button${f.path === activePath ? ' selected' : ''}`}
+              onClick={() => pick(f.path)}
+            >
+              {basename(f.path)}
+            </button>
+          ))}
+        </div>
       </aside>
 
       <div className="playbook-editor">
@@ -152,4 +210,84 @@ export function Playbook(): ReactElement {
 function basename(path: string): string {
   const i = path.lastIndexOf('/');
   return i >= 0 ? path.slice(i + 1) : path;
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return 'never';
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return 'never';
+  const diff = Date.now() - then;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  const days = Math.floor(diff / 86_400_000);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+const REGEN_BUSY_LABELS: Record<PlaybookRegenMode, string> = {
+  quick: 'Regenerating…',
+  deep: 'Deep regenerating…',
+};
+
+function RegenerateMenu({
+  busy,
+  onPick,
+}: {
+  busy: PlaybookRegenMode | null;
+  onPick: (mode: PlaybookRegenMode) => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useClickOutside(open, wrapRef, () => setOpen(false));
+
+  const label = busy ? REGEN_BUSY_LABELS[busy] : 'Regenerate';
+
+  return (
+    <div ref={wrapRef} className="playbook-regen">
+      <button
+        type="button"
+        className="btn sm"
+        disabled={busy !== null}
+        onClick={() => setOpen((v) => !v)}
+        title="Re-generate the QA playbook from this repo"
+      >
+        <Icon.Refresh size={11} /> {label}
+        <Icon.ChevronDown size={9} style={{ marginLeft: 4 }} />
+      </button>
+      {open && busy === null ? (
+        <div role="menu" className="playbook-regen-pop">
+          <button
+            type="button"
+            role="menuitem"
+            className="playbook-regen-item"
+            onClick={() => {
+              setOpen(false);
+              onPick('quick');
+            }}
+          >
+            <div className="playbook-regen-item-title">Quick regenerate</div>
+            <div className="playbook-regen-item-sub">
+              Re-runs heuristics (file tree + framework sniff). Free, instant.
+            </div>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="playbook-regen-item"
+            onClick={() => {
+              setOpen(false);
+              onPick('deep');
+            }}
+          >
+            <div className="playbook-regen-item-title">Deep regenerate</div>
+            <div className="playbook-regen-item-sub">
+              Spawns the default runner to read the codebase and write real content. Costs LLM
+              tokens; takes minutes.
+            </div>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }

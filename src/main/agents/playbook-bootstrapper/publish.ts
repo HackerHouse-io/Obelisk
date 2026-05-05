@@ -119,6 +119,48 @@ export function getPlaybookDraft(repoId: string): {
   return getSetting(`repo:${repoId}`, 'playbook.draft');
 }
 
+/**
+ * Re-run heuristic bootstrap and persist the result. Used by manual
+ * "Quick regenerate" and by the auto-regen hook that fires when the
+ * repo HEAD has advanced since the last bootstrap.
+ *
+ * Observe mode → draft store. Higher modes → write through to local clone.
+ * Always updates the cached `playbook.draft` so the UI's last-sync label
+ * is accurate regardless of mode.
+ */
+export async function quickRegeneratePlaybook(
+  repo: Repo,
+): Promise<{ generatedAt: string; framework: string; files: PlaybookFile[] }> {
+  const out = bootstrapPlaybook({ repo });
+  const generatedAt = new Date().toISOString();
+
+  if (repo.mode !== 'observe') {
+    persistPlaybookFiles(repo.localPath, out.files);
+  }
+
+  setSetting(`repo:${repo.id}`, 'playbook.draft', {
+    generatedAt,
+    files: out.files,
+    framework: out.framework,
+    criticalFlows: out.criticalFlows,
+  });
+
+  return { generatedAt, framework: out.framework, files: out.files };
+}
+
+/**
+ * Write the given playbook files to `<repoPath>/<file.path>`, creating
+ * intermediate directories as needed. Overwrites silently — used by both
+ * Quick regenerate and the IPC save handlers.
+ */
+export function persistPlaybookFiles(repoPath: string, files: PlaybookFile[]): void {
+  for (const f of files) {
+    const target = join(repoPath, f.path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, f.contents, 'utf8');
+  }
+}
+
 function renderPrBody(framework: string, flowCount: number): string {
   return [
     '> Authored by Obelisk (Playbook Bootstrapper) on behalf of the connected account.',

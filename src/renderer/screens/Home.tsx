@@ -153,9 +153,23 @@ export function Home(): ReactElement {
                   >
                     {status.label}
                   </span>
-                  <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                    {a.timeoutMs / 1000 / 60}m timeout
-                  </span>
+                  <div className="row gap-2" style={{ alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn ghost sm"
+                      title={`Run ${a.displayName} now`}
+                      onClick={async () => {
+                        const res = await window.obelisk.invoke('agents:run', { agentId: a.id });
+                        if (res.ok) setRoute('mission');
+                        else alert(res.error.message);
+                      }}
+                    >
+                      <Icon.Play size={11} /> Run
+                    </button>
+                    <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                      {a.timeoutMs / 1000 / 60}m timeout
+                    </span>
+                  </div>
                 </div>
               );
             })}

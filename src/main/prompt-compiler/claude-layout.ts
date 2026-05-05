@@ -4,8 +4,9 @@ import type { CompileInput, CompiledPrompt, AttachmentFile } from './types';
  * Claude Code layout:
  *  - Skills materialized as files at `.claude/skills/<name>/SKILL.md`
  *    (the `claude` CLI auto-loads from there).
- *  - System prompt passed via `--system-prompt-file` (the runner writes it
- *    to a tempfile and points the flag at it).
+ *  - System prompt passed via `--system-prompt-file` (the runner materializes
+ *    it under `.claude/SYSTEM.md`).
+ *  - userMessage piped via stdin; `-p` (print) makes claude non-interactive.
  *  - userMessage gets the task + repo summary; skills are NOT inlined here
  *    because the CLI loads them from the materialized files.
  */
@@ -104,13 +105,6 @@ function renderClaudeSettings(input: CompileInput): string {
   );
 }
 
-function renderRunnerArgs(input: CompileInput): string[] {
-  return [
-    '--system-prompt-file',
-    '.claude/SYSTEM.md',
-    '--settings-file',
-    '.claude/settings.json',
-    '--non-interactive',
-    `--task-ref=${input.task.ref}`,
-  ];
+function renderRunnerArgs(_input: CompileInput): string[] {
+  return ['-p', '--system-prompt-file', '.claude/SYSTEM.md', '--settings', '.claude/settings.json'];
 }

@@ -99,12 +99,11 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
   ],
   "contentHash": "1132d90f5285ffd273802fa762cb63ad1689afead6e0fcd97b68fc60ea2a1d3e",
   "runnerArgs": [
+    "-p",
     "--system-prompt-file",
     ".claude/SYSTEM.md",
-    "--settings-file",
+    "--settings",
     ".claude/settings.json",
-    "--non-interactive",
-    "--task-ref=issue#142",
   ],
   "systemPrompt": "You are bug-fixer.
 
@@ -181,10 +180,12 @@ exports[`prompt-compiler > snapshot per (agent, runner) > bug-fixer × codex 1`]
   "contentHash": "e59b96659c1d6d01488d68bb539ec9476d028fa3a717ccad00b758f815ec3b9e",
   "runnerArgs": [
     "exec",
-    "--codex-model=gpt-5",
-    "--codex-reasoning-effort=high",
-    "--codex-sandbox=workspace-write",
-    "--task-ref=issue#142",
+    "--model",
+    "gpt-5",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "model_reasoning_effort="high"",
   ],
   "systemPrompt": "",
   "userMessage": "# Role: bug-fixer
@@ -585,12 +586,11 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
   ],
   "contentHash": "62618130223cef328fb5bdd90bccf2991ad8f118b5ce3fde02ccc642e03d8349",
   "runnerArgs": [
+    "-p",
     "--system-prompt-file",
     ".claude/SYSTEM.md",
-    "--settings-file",
+    "--settings",
     ".claude/settings.json",
-    "--non-interactive",
-    "--task-ref=issue#198",
   ],
   "systemPrompt": "You are feature-builder.
 
@@ -686,10 +686,12 @@ exports[`prompt-compiler > snapshot per (agent, runner) > feature-builder × cod
   "contentHash": "c6467adbf010f7548ed38392e1c57371545a70cf9d69628bac78fc4daa378b0b",
   "runnerArgs": [
     "exec",
-    "--codex-model=gpt-5",
-    "--codex-reasoning-effort=high",
-    "--codex-sandbox=workspace-write",
-    "--task-ref=issue#198",
+    "--model",
+    "gpt-5",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "model_reasoning_effort="high"",
   ],
   "systemPrompt": "",
   "userMessage": "# Role: feature-builder
@@ -1065,12 +1067,11 @@ Find the root cause, not a symptom that quiets the alarm.
   ],
   "contentHash": "3afa06876415a27df0f3fc5bccb50bb9a7fe25c3cad7c92e7bd8bd30d7275909",
   "runnerArgs": [
+    "-p",
     "--system-prompt-file",
     ".claude/SYSTEM.md",
-    "--settings-file",
+    "--settings",
     ".claude/settings.json",
-    "--non-interactive",
-    "--task-ref=manual:qa-2026-05-02T18:00",
   ],
   "systemPrompt": "You are manual-qa.
 
@@ -1159,10 +1160,12 @@ exports[`prompt-compiler > snapshot per (agent, runner) > manual-qa × codex 1`]
   "contentHash": "6ef1c553f5c5564c7718774dcff354462f12dcc5a851c345258836003eb35ae6",
   "runnerArgs": [
     "exec",
-    "--codex-model=gpt-5",
-    "--codex-reasoning-effort=medium",
-    "--codex-sandbox=workspace-write",
-    "--task-ref=manual:qa-2026-05-02T18:00",
+    "--model",
+    "gpt-5",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "model_reasoning_effort="medium"",
   ],
   "systemPrompt": "",
   "userMessage": "# Role: manual-qa
@@ -1382,12 +1385,11 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
   ],
   "contentHash": "719a140464346d9014cc06ac8d24aa60e067e4a5378e88f9a0f31507d27699f7",
   "runnerArgs": [
+    "-p",
     "--system-prompt-file",
     ".claude/SYSTEM.md",
-    "--settings-file",
+    "--settings",
     ".claude/settings.json",
-    "--non-interactive",
-    "--task-ref=pr#211",
   ],
   "systemPrompt": "You are pr-reviewer.
 
@@ -1476,10 +1478,12 @@ exports[`prompt-compiler > snapshot per (agent, runner) > pr-reviewer × codex 1
   "contentHash": "fedd4bbb972cb5426cd4d6d5458bfdb86b3f8dfb439f6c1c9ff57282990d7889",
   "runnerArgs": [
     "exec",
-    "--codex-model=gpt-5",
-    "--codex-reasoning-effort=medium",
-    "--codex-sandbox=workspace-write",
-    "--task-ref=pr#211",
+    "--model",
+    "gpt-5",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "model_reasoning_effort="medium"",
   ],
   "systemPrompt": "",
   "userMessage": "# Role: pr-reviewer
@@ -1741,12 +1745,11 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
   ],
   "contentHash": "26d73b2054369c62e61ae97518128ce575890ad43584f299533d3d6619f5de14",
   "runnerArgs": [
+    "-p",
     "--system-prompt-file",
     ".claude/SYSTEM.md",
-    "--settings-file",
+    "--settings",
     ".claude/settings.json",
-    "--non-interactive",
-    "--task-ref=manual:qa-2026-05-02T18:00",
   ],
   "systemPrompt": "You are qa-hunter.
 
@@ -1828,10 +1831,12 @@ exports[`prompt-compiler > snapshot per (agent, runner) > qa-hunter × codex 1`]
   "contentHash": "c50c4c791df1d5515d0cbaa6168490e1b3ab1a00e2b354401475ddde32c19eea",
   "runnerArgs": [
     "exec",
-    "--codex-model=gpt-5",
-    "--codex-reasoning-effort=medium",
-    "--codex-sandbox=workspace-write",
-    "--task-ref=manual:qa-2026-05-02T18:00",
+    "--model",
+    "gpt-5",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+    "model_reasoning_effort="medium"",
   ],
   "systemPrompt": "",
   "userMessage": "# Role: qa-hunter

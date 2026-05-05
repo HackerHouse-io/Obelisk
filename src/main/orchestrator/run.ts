@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { walkMarkdownFiles } from '../util/walk-markdown';
 import { app } from 'electron';
 import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Repo } from '../../shared/types';
@@ -13,10 +14,14 @@ import { getAgentHandler } from '../agents/registry';
 import { compile } from '../prompt-compiler';
 import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
+import { effectiveDefaultRunner } from '../runners/effective-default';
 import { runnerFallback, classifyOutcome } from '../runners/fallback';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
 import { createWorktree, destroyWorktree } from '../git/worktree';
 import { inferChangeKind } from '../evidence/infer-change-kind';
+import { learnFromPatch } from '../agents/playbook-learner';
+import { getPlaybookDraft, quickRegeneratePlaybook } from '../agents/playbook-bootstrapper/publish';
+import { simpleGit } from 'simple-git';
 import { saveArtifact } from '../evidence/artifact-store';
 import { checkEvidence } from '../evidence/check';
 import { renderPrBody } from '../evidence/pr-body';
@@ -69,6 +74,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   const repo = getRepo(input.repoId);
   if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${input.repoId} not found`);
 
+  // Auto-refresh the QA playbook if the repo has advanced since the last
+  // bootstrap. Cheap (heuristics only) and best-effort — failures don't
+  // block the run.
+  await maybeAutoRegenPlaybook(repo).catch(() => undefined);
+
   const handler = getAgentHandler(input.agentName);
 
   // Resolve which instance owns this run. Prefer the explicit agentId; fall
@@ -77,10 +87,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     ? getAgent(input.agentId)
     : (listAgentsForRepo(repo.id).find((a) => a.name === input.agentName) ?? null);
 
+  // The user can change the global default in Settings; that's the source
+  // of truth. The per-repo column is a fallback (used only if no global
+  // setting has ever been written).
+  const repoDefaultRunner = effectiveDefaultRunner(repo);
+
   // 1) Pick a task. multi-instance handlers use agentId to attribute claims.
   const selected = await handler.selectTask({
     repo,
-    defaultRunner: repo.defaultRunner,
+    defaultRunner: repoDefaultRunner,
     taskId: input.taskId,
     ...(agentRow ? { agentId: agentRow.id } : {}),
   });
@@ -89,7 +104,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   }
 
   // 2) Pick a runner: per-task override → per-agent override → repo default.
-  const runnerKind = selected.runnerOverride ?? agentRow?.runnerOverride ?? repo.defaultRunner;
+  const runnerKind = selected.runnerOverride ?? agentRow?.runnerOverride ?? repoDefaultRunner;
 
   // 3) Create the run row + finalize any claims acquired during selectTask.
   const run = createRun({
@@ -224,6 +239,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         filename: 'patch.diff',
         contents: ok.patch.diff,
       });
+      // Best-effort: append newly-discovered flows to qa/critical-flows.md.
+      // Failures are silent — the playbook is non-critical to the run.
+      try {
+        const learned = learnFromPatch({ repo, filesChanged: ok.patch.filesChanged });
+        if (learned.appendedFlows.length > 0) {
+          appendAudit({
+            runId: run.id,
+            kind: 'reasoning',
+            payload: {
+              summary: 'playbook learner',
+              appendedFlows: learned.appendedFlows,
+            },
+          });
+        }
+      } catch {
+        // ignore — learner is best-effort
+      }
     }
     saveArtifact({
       runId: run.id,
@@ -479,9 +511,6 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
 }
 
 function buildRepoSummary(repo: Repo, worktreePath: string): RepoSummary {
-  // Phase 4 produces a deterministic minimal summary. Phase 5 enriches this
-  // with real README parsing, framework detection, and changed-files since
-  // last successful run for this agent.
   return {
     fullName: repo.githubFullName,
     defaultBranch: repo.defaultBranch,
@@ -490,8 +519,49 @@ function buildRepoSummary(repo: Repo, worktreePath: string): RepoSummary {
     languages: [],
     toolchain: [],
     changedFilesSinceLastRun: [],
-    qaPlaybookSummary: '',
+    qaPlaybookSummary: readQaPlaybookSummary(repo.localPath),
   };
+}
+
+const QA_SUMMARY_BUDGET = 16 * 1024;
+
+function readQaPlaybookSummary(repoRoot: string): string {
+  const files = walkMarkdownFiles(join(repoRoot, 'qa'));
+  if (files.length === 0) return '';
+
+  const parts: string[] = [];
+  let used = 0;
+  for (const f of files) {
+    const block = `\n\n--- qa/${f.relPath} ---\n${f.contents.trim()}`;
+    if (used + block.length > QA_SUMMARY_BUDGET) {
+      parts.push('\n\n(truncated — playbook exceeds prompt budget)');
+      break;
+    }
+    parts.push(block);
+    used += block.length;
+  }
+  return parts.join('').trim();
+}
+
+async function maybeAutoRegenPlaybook(repo: Repo): Promise<void> {
+  const draft = getPlaybookDraft(repo.id);
+  if (!draft?.generatedAt) {
+    // No prior bootstrap recorded → seed it now.
+    await quickRegeneratePlaybook(repo);
+    return;
+  }
+  let headIso: string | null = null;
+  try {
+    const git = simpleGit(repo.localPath);
+    const log = await git.log({ maxCount: 1 });
+    headIso = log.latest?.date ?? null;
+  } catch {
+    return;
+  }
+  if (!headIso) return;
+  if (new Date(headIso).getTime() > new Date(draft.generatedAt).getTime()) {
+    await quickRegeneratePlaybook(repo);
+  }
 }
 
 function permissionsForRepo(repo: Repo): Permissions {

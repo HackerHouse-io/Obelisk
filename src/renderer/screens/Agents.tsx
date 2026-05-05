@@ -337,23 +337,16 @@ function AgentGroup({
           </span>
         </span>
         <div style={{ flex: 1 }} />
-        <button
-          type="button"
-          className="btn ghost sm"
-          onClick={onAddAnother}
-          disabled={addDisabled}
-          title={
-            addDisabled
-              ? 'This type sweeps the whole repo — only one instance is useful.'
-              : `Add another ${meta.label}`
-          }
-          style={{
-            opacity: addDisabled ? 0.4 : 1,
-            cursor: addDisabled ? 'not-allowed' : 'pointer',
-          }}
-        >
-          <Icon.Plus size={10} />
-        </button>
+        {addDisabled ? null : (
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={onAddAnother}
+            title={`Add another ${meta.label}`}
+          >
+            <Icon.Plus size={10} />
+          </button>
+        )}
       </div>
       {instances.length === 0 ? (
         <div
@@ -415,6 +408,7 @@ function SidebarRow({
         type="button"
         className={`agents-list-item${selected ? ' selected' : ''}`}
         onClick={onSelect}
+        style={{ paddingRight: 70 }}
       >
         <div className="agents-list-item-icon">
           <IconCmp size={14} color="var(--brand)" />
@@ -430,27 +424,38 @@ function SidebarRow({
             {agent.runnerOverride ?? 'default'} · {scheduleSummary(agent, meta)}
           </div>
         </div>
-        <span className="dot" style={{ background: dotColor, color: dotColor }} />
       </button>
-      <button
-        type="button"
-        className="btn ghost icon"
-        title="More actions"
-        onClick={(e) => {
-          e.stopPropagation();
-          setMenuOpen((m) => !m);
-        }}
+      <div
         style={{
           position: 'absolute',
-          top: 8,
-          right: 8,
-          height: 22,
-          width: 22,
-          opacity: 0.7,
+          top: '50%',
+          right: 10,
+          transform: 'translateY(-50%)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          pointerEvents: 'none',
         }}
       >
-        ⋯
-      </button>
+        <span className="dot" style={{ background: dotColor, color: dotColor }} />
+        <button
+          type="button"
+          className="btn ghost icon"
+          title="More actions"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((m) => !m);
+          }}
+          style={{
+            height: 22,
+            width: 22,
+            opacity: 0.7,
+            pointerEvents: 'auto',
+          }}
+        >
+          ⋯
+        </button>
+      </div>
       {menuOpen ? (
         <div
           style={{

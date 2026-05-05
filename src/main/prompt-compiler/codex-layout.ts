@@ -5,7 +5,8 @@ import type { CompileInput, CompiledPrompt } from './types';
  *  - Skills inlined into userMessage as fenced sections under `## Skills`.
  *  - System prompt prepended to userMessage (Codex CLI doesn't take a
  *    separate system-prompt file).
- *  - Tool sandbox + reasoning effort encoded into runner args.
+ *  - userMessage piped to `codex exec` via stdin (no positional prompt arg).
+ *  - Sandbox + model picked via flags; reasoning effort set via `-c` override.
  */
 export function compileCodex(input: CompileInput): CompiledPrompt {
   const systemBlock = renderSystem(input);
@@ -81,16 +82,17 @@ function renderTask(input: CompileInput): string {
 }
 
 function renderRunnerArgs(input: CompileInput): string[] {
-  // The exact reasoning effort + sandbox flags are version-dependent; we
-  // pin a sensible default per agent and let runner-level overrides apply
-  // in the runner module if needed.
   const reasoning =
     input.agent.name === 'feature-builder' || input.agent.name === 'bug-fixer' ? 'high' : 'medium';
+  // codex exec reads the prompt from stdin (we pipe userMessage in the runner).
+  // Reasoning effort isn't a top-level flag — set it via -c config override.
   return [
     'exec',
-    '--codex-model=gpt-5',
-    `--codex-reasoning-effort=${reasoning}`,
-    '--codex-sandbox=workspace-write',
-    `--task-ref=${input.task.ref}`,
+    '--model',
+    'gpt-5',
+    '--sandbox',
+    'workspace-write',
+    '-c',
+    `model_reasoning_effort="${reasoning}"`,
   ];
 }

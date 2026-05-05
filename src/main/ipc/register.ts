@@ -38,7 +38,7 @@ import {
   handleRunsDeleteCompleted,
 } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
-import { handlePlaybookGet, handlePlaybookSave } from './playbook';
+import { handlePlaybookGet, handlePlaybookRegenerate, handlePlaybookSave } from './playbook';
 import { handlePreviewsList } from './previews';
 import {
   handleQaDoctor,
@@ -117,9 +117,10 @@ export function registerIpcHandlers(): void {
   register('backlog:reorder', handleBacklogReorder);
   register('backlog:setOverride', handleBacklogSetOverride);
 
-  // Playbook (Phase 5 — get; Phase 9 — save)
+  // Playbook
   register('playbook:get', handlePlaybookGet);
   register('playbook:save', handlePlaybookSave);
+  register('playbook:regenerate', handlePlaybookRegenerate);
 
   // Observe-mode previews
   register('previews:list', handlePreviewsList);
