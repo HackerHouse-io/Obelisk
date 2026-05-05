@@ -127,26 +127,44 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
     transitionRun(run.id, 'running', { worktreePath: worktreeHandle.worktreePath });
 
-    // 5) Compile the prompt.
+    // 5) Compile the prompt. We compile per-runner because the layout differs
+    //    (Claude takes --system-prompt-file + attachments; Codex inlines the
+    //    system block into the user message). Memoize so a same-runner retry
+    //    doesn't recompile, but a fallback to the other runner gets the right
+    //    args / userMessage / attachments.
     const repoSummary = buildRepoSummary(repo, worktreeHandle.worktreePath);
     const permissions = permissionsForRepo(repo);
-    const prompt = compile({
-      agentName: input.agentName,
-      runnerOverride: runnerKind,
-      task: selected.task,
-      repo: repoSummary,
-      permissions,
-      paths: {
-        builtinAgentsDir: builtinAgentsDir(),
-        builtinSkillsDir: builtinSkillsDir(),
-        ...maybeRepoOverrideDirs(repo.localPath),
-      },
-    });
-    appendAudit({
-      runId: run.id,
-      kind: 'reasoning',
-      payload: { summary: 'compiled prompt', contentHash: prompt.contentHash },
-    });
+    const promptCache: Partial<
+      Record<'claude' | 'codex', import('../prompt-compiler').CompiledPrompt>
+    > = {};
+    const compileFor = (
+      runner: 'claude' | 'codex',
+    ): import('../prompt-compiler').CompiledPrompt => {
+      const cached = promptCache[runner];
+      if (cached) return cached;
+      const compiled = compile({
+        agentName: input.agentName,
+        runnerOverride: runner,
+        task: selected.task,
+        repo: repoSummary,
+        permissions,
+        paths: {
+          builtinAgentsDir: builtinAgentsDir(),
+          builtinSkillsDir: builtinSkillsDir(),
+          ...maybeRepoOverrideDirs(repo.localPath),
+        },
+      });
+      promptCache[runner] = compiled;
+      appendAudit({
+        runId: run.id,
+        kind: 'reasoning',
+        payload: { summary: 'compiled prompt', runner, contentHash: compiled.contentHash },
+      });
+      return compiled;
+    };
+    // Eagerly compile the preferred runner so the audit log shows it before
+    // the spawn audit lines.
+    compileFor(runnerKind);
 
     // 6) Run with auto-fallback policy. The CLI authenticates itself —
     //    Obelisk doesn't pass credentials.
@@ -156,7 +174,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       preferredRunner: runnerKind,
       factory,
       worktreePath: worktreeHandle.worktreePath,
-      prompt,
+      compileFor,
       timeoutMs: agentRow?.timeoutMs ?? 30 * 60 * 1000,
     });
 
@@ -404,7 +422,7 @@ interface FallbackInput {
   preferredRunner: 'claude' | 'codex';
   factory: (k: 'claude' | 'codex') => CodingAgentRunner;
   worktreePath: string;
-  prompt: import('../prompt-compiler').CompiledPrompt;
+  compileFor: (runner: 'claude' | 'codex') => import('../prompt-compiler').CompiledPrompt;
   timeoutMs: number;
 }
 
@@ -421,11 +439,12 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
 
   while (runner !== null) {
     const impl = input.factory(runner);
+    const prompt = input.compileFor(runner);
     const abortController = new AbortController();
     const result = await impl.run(
       {
         worktreePath: input.worktreePath,
-        prompt: input.prompt,
+        prompt,
         timeoutMs: input.timeoutMs,
         onAudit: (line) => {
           appendAudit({
