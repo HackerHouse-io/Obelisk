@@ -33,6 +33,8 @@ interface ObeliskState {
   /* runs */
   runs: Record<string, Run>; // keyed by run id
   upsertRun: (run: Run) => void;
+  removeRun: (runId: string) => void;
+  removeRunsByRepo: (repoId: string, states?: Run['state'][]) => void;
 
   /* backlog */
   backlog: Record<string, BacklogItem[]>; // keyed by repoId
@@ -68,6 +70,22 @@ export const useStore = create<ObeliskState>((set) => ({
 
   runs: {},
   upsertRun: (run) => set((s) => ({ runs: { ...s.runs, [run.id]: run } })),
+  removeRun: (runId) =>
+    set((s) => {
+      if (!(runId in s.runs)) return s;
+      const next = { ...s.runs };
+      delete next[runId];
+      return { runs: next };
+    }),
+  removeRunsByRepo: (repoId, states) =>
+    set((s) => {
+      const next: Record<string, Run> = {};
+      for (const [id, run] of Object.entries(s.runs)) {
+        if (run.repoId === repoId && (!states || states.includes(run.state))) continue;
+        next[id] = run;
+      }
+      return { runs: next };
+    }),
 
   backlog: {},
   setBacklog: (repoId, items) => set((s) => ({ backlog: { ...s.backlog, [repoId]: items } })),

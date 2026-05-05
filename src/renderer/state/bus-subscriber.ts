@@ -33,6 +33,10 @@ export function startBusSubscriber(): () => void {
         // Phase 4 wires this into Mission Control's audit drawer.
         return;
 
+      case 'run.deleted':
+        state.removeRun(event.runId);
+        return;
+
       case 'backlog.changed':
       case 'evidence.missing':
         // Phase 4-5 will refetch the affected slice.

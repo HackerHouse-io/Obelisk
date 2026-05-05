@@ -289,6 +289,11 @@ export interface IpcMap {
     req: { runId: string };
     res: Run & { auditLog: AuditLine[]; evidence: EvidenceItem[] };
   };
+  'runs:delete': { req: { runId: string }; res: { ok: true } };
+  'runs:deleteCompleted': {
+    req: { repoId: string; states?: RunState[] };
+    res: { deleted: number };
+  };
 
   // Backlog
   'backlog:list': { req: { repoId: string }; res: BacklogItem[] };
@@ -359,6 +364,7 @@ export type BusEvent =
   | { type: 'run.created'; run: Run }
   | { type: 'run.transition'; runId: string; state: RunState; at: ISO }
   | { type: 'run.audit'; runId: string; line: AuditLine }
+  | { type: 'run.deleted'; runId: string; repoId: string }
   | { type: 'backlog.changed'; repoId: string }
   | { type: 'auth.changed'; signedIn: boolean }
   | { type: 'evidence.missing'; runId: string; missing: string[] }

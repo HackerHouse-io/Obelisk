@@ -250,6 +250,14 @@ export const Icon = {
       <circle cx="5" cy="12" r="1.5" fill="var(--bg-2)" />
     </>,
   ),
+  Trash: make(
+    <>
+      <path d="M3 4.5h10" />
+      <path d="M5.5 4.5V3a.5.5 0 01.5-.5h4a.5.5 0 01.5.5v1.5" />
+      <path d="M4.5 4.5l.7 8a1 1 0 001 .9h3.6a1 1 0 001-.9l.7-8" />
+      <path d="M7 7v4M9 7v4" />
+    </>,
+  ),
   PanelRight: make(
     <>
       <rect x="2" y="3" width="12" height="10" rx="1.5" />

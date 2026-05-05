@@ -1,4 +1,4 @@
-import { listRuns, getRun } from '../db/runs';
+import { listRuns, getRun, deleteRun, deleteRunsForRepo } from '../db/runs';
 import { listArtifacts } from '../db/evidence';
 import { ObeliskError } from '../../shared/errors';
 import { getDb } from '../db';
@@ -35,6 +35,21 @@ export async function handleRunsGet(
     sha256: a.sha256,
   }));
   return { ...run, auditLog, evidence };
+}
+
+export async function handleRunsDelete(
+  payload: IpcMap['runs:delete']['req'],
+): Promise<IpcMap['runs:delete']['res']> {
+  deleteRun(payload.runId);
+  return { ok: true };
+}
+
+export async function handleRunsDeleteCompleted(
+  payload: IpcMap['runs:deleteCompleted']['req'],
+): Promise<IpcMap['runs:deleteCompleted']['res']> {
+  const states = payload.states ?? ['done', 'failed'];
+  const deleted = deleteRunsForRepo(payload.repoId, states);
+  return { deleted };
 }
 
 function safeParse(s: string): unknown {

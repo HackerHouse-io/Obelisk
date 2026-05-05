@@ -64,6 +64,8 @@ export function MissionControl(): ReactElement {
   const selectedRepoId = useStore((s) => s.selectedRepoId);
   const runs = useStore((s) => s.runs);
   const upsertRun = useStore((s) => s.upsertRun);
+  const removeRun = useStore((s) => s.removeRun);
+  const removeRunsByRepo = useStore((s) => s.removeRunsByRepo);
   const repo = repos.find((r) => r.id === selectedRepoId);
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -71,9 +73,9 @@ export function MissionControl(): ReactElement {
   const [drawerOpen, setDrawerOpen] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem('mc.drawerOpen');
-      return v === null ? true : v === '1';
+      return v === '1';
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -108,6 +110,44 @@ export function MissionControl(): ReactElement {
     if (!repo) return [];
     return Object.values(runs).filter((r) => r.repoId === repo.id);
   }, [runs, repo]);
+
+  const completedCount = useMemo(
+    () => repoRuns.filter((r) => r.state === 'done' || r.state === 'failed').length,
+    [repoRuns],
+  );
+
+  const handleDeleteRun = async (runId: string): Promise<void> => {
+    const run = runs[runId];
+    const label = run?.taskRef ? `"${run.taskRef}"` : 'this run';
+    if (!confirm(`Delete ${label}? This removes the run, audit log, and saved evidence.`)) return;
+    const res = await window.obelisk.invoke('runs:delete', { runId });
+    if (res.ok) {
+      removeRun(runId);
+      if (selectedRunId === runId) setSelectedRunId(null);
+    } else {
+      alert(`Couldn't delete run: ${res.error.message}`);
+    }
+  };
+
+  const handleClearCompleted = async (): Promise<void> => {
+    if (!repo || completedCount === 0) return;
+    if (
+      !confirm(
+        `Delete ${completedCount} completed run${completedCount === 1 ? '' : 's'} (done + failed) for this repo? Audit logs and evidence will be removed too.`,
+      )
+    ) {
+      return;
+    }
+    const res = await window.obelisk.invoke('runs:deleteCompleted', {
+      repoId: repo.id,
+      states: ['done', 'failed'],
+    });
+    if (res.ok) {
+      removeRunsByRepo(repo.id, ['done', 'failed']);
+    } else {
+      alert(`Couldn't clear runs: ${res.error.message}`);
+    }
+  };
 
   const selectedRun = selectedRunId ? (runs[selectedRunId] ?? null) : null;
 
@@ -158,6 +198,20 @@ export function MissionControl(): ReactElement {
               }}
             >
               <Icon.Refresh size={11} /> Refresh
+            </button>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={handleClearCompleted}
+              disabled={completedCount === 0}
+              title={
+                completedCount === 0
+                  ? 'No completed runs to clear'
+                  : `Delete ${completedCount} completed run${completedCount === 1 ? '' : 's'}`
+              }
+            >
+              <Icon.Trash size={11} /> Clear completed
+              {completedCount > 0 ? ` (${completedCount})` : ''}
             </button>
             <button
               type="button"
@@ -217,6 +271,7 @@ export function MissionControl(): ReactElement {
           run={selectedRun}
           onClose={() => setSelectedRunId(null)}
           onToggle={() => setDrawerOpen(false)}
+          onDelete={(id) => void handleDeleteRun(id)}
         />
       ) : (
         <aside className="mc-drawer-rail">
@@ -285,10 +340,12 @@ function RunDrawer({
   run,
   onClose,
   onToggle,
+  onDelete,
 }: {
   run: Run | null;
   onClose: () => void;
   onToggle: () => void;
+  onDelete: (runId: string) => void;
 }): ReactElement {
   const [tab, setTab] = useState<Tab>('audit');
   const [details, setDetails] = useState<{
@@ -327,18 +384,30 @@ function RunDrawer({
     );
   }
 
+  const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
+
   return (
     <aside className="mc-drawer">
+      <div className="mc-drawer-toolbar">
+        <button
+          type="button"
+          className="btn ghost icon"
+          onClick={() => onDelete(run.id)}
+          disabled={isActive}
+          title={
+            isActive ? 'Cancel the run before deleting' : 'Delete this run and its evidence'
+          }
+        >
+          <Icon.Trash size={11} />
+        </button>
+        <div style={{ flex: 1 }} />
+        <button type="button" className="btn ghost icon" onClick={onClose} title="Deselect">
+          <Icon.Close size={11} />
+        </button>
+        {toggleBtn}
+      </div>
       <div className="mc-drawer-header">
-        <div className="mc-drawer-row">
-          <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
-          <div className="row gap-1">
-            <button type="button" className="btn ghost icon" onClick={onClose} title="Close">
-              <Icon.Close size={11} />
-            </button>
-            {toggleBtn}
-          </div>
-        </div>
+        <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
         <div className="mc-drawer-meta">
           <span className="pill">{agentLabel(run.agentName)}</span>
           <span className="pill">{run.runnerUsed}</span>

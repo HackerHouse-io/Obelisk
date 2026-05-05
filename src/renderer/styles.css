@@ -1296,6 +1296,10 @@ body {
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.4;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mc-drawer-meta {
@@ -1414,9 +1418,14 @@ body {
 
 .mc-drawer-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+.mc-drawer-row .row {
+  flex: 0 0 auto;
 }
 
 .mc-drawer-summary {

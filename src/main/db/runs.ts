@@ -1,6 +1,9 @@
+import { rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { ulid } from 'ulid';
 import { getDb } from './index';
 import { broadcast } from '../ipc/bus';
+import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Run, RunState, RunnerKind } from '../../shared/types';
 
 interface RunRow {
@@ -192,6 +195,94 @@ export function heartbeat(id: string): void {
   getDb()
     .prepare('UPDATE runs SET last_heartbeat_at = ? WHERE id = ?')
     .run(new Date().toISOString(), id);
+}
+
+const ACTIVE_STATES: RunState[] = ['queued', 'running', 'publishing'];
+const DELETABLE_STATES: RunState[] = ['done', 'failed', 'paused'];
+
+/**
+ * Delete a single run and all its dependent rows. Refuses to delete a run
+ * that's still active so an in-flight orchestrator step can't have its rows
+ * yanked out from under it. Best-effort cleanup of the on-disk artifact dir
+ * — DB rows go even if the disk cleanup fails.
+ */
+export function deleteRun(runId: string): void {
+  const run = getRun(runId);
+  if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${runId} not found`);
+  if (ACTIVE_STATES.includes(run.state)) {
+    throw new ObeliskError(
+      'RUN_ACTIVE',
+      `run ${runId} is still ${run.state}; cancel it before deleting.`,
+    );
+  }
+
+  const db = getDb();
+  // Snapshot artifact paths before the cascade wipes them. We delete the
+  // run-level directory, not each file individually, so we don't get
+  // confused by symlinks or shared paths.
+  const artifactPaths = db
+    .prepare<[string], { path: string }>('SELECT path FROM evidence_artifacts WHERE run_id = ?')
+    .all(runId)
+    .map((r) => r.path);
+
+  const tx = db.transaction((id: string) => {
+    // backlog.in_progress_run and non_bugs_learned.source_run reference runs
+    // WITHOUT ON DELETE CASCADE — null them out so the DELETE doesn't trip
+    // the FK constraint.
+    db.prepare('UPDATE backlog SET in_progress_run = NULL WHERE in_progress_run = ?').run(id);
+    db.prepare('UPDATE non_bugs_learned SET source_run = NULL WHERE source_run = ?').run(id);
+    // audit_log + evidence_artifacts cascade.
+    db.prepare('DELETE FROM runs WHERE id = ?').run(id);
+  });
+  tx(runId);
+
+  // Best-effort disk cleanup. Records live at
+  //   <recordsRoot>/<repoId>/<runId>/<kind>/<file>
+  // Remove the per-run dir; if multiple artifacts share a parent dir we
+  // collapse to that parent (which is the run dir).
+  const runDirs = new Set<string>();
+  for (const p of artifactPaths) {
+    // Walk up two levels: <repoId>/<runId>/<kind>/<file> → <repoId>/<runId>
+    const kindDir = dirname(p);
+    const runDir = dirname(kindDir);
+    runDirs.add(runDir);
+  }
+  for (const dir of runDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  broadcast({ type: 'run.deleted', runId, repoId: run.repoId });
+}
+
+/**
+ * Bulk delete every run for a repo whose state is in `states`. Active runs
+ * are always skipped, even if a caller asks for them. Returns the number of
+ * rows actually deleted.
+ */
+export function deleteRunsForRepo(repoId: string, states: RunState[]): number {
+  const safe = states.filter((s) => DELETABLE_STATES.includes(s));
+  if (safe.length === 0) return 0;
+  const placeholders = safe.map(() => '?').join(',');
+  const rows = getDb()
+    .prepare<
+      [string, ...string[]],
+      { id: string }
+    >(`SELECT id FROM runs WHERE repo_id = ? AND state IN (${placeholders})`)
+    .all(repoId, ...safe);
+  let deleted = 0;
+  for (const r of rows) {
+    try {
+      deleteRun(r.id);
+      deleted += 1;
+    } catch {
+      /* skip rows that race into an active state */
+    }
+  }
+  return deleted;
 }
 
 export function getWorktreePath(id: string): string | null {
