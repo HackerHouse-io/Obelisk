@@ -1144,8 +1144,9 @@ body {
 }
 
 .mc-stage {
-  width: 230px;
-  flex: 0 0 230px;
+  flex: 1 0 230px;
+  max-width: 320px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-1);
@@ -1197,6 +1198,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
   transition:
     border-color 140ms var(--ease),
     transform 120ms var(--ease);
@@ -1214,6 +1218,12 @@ body {
   font-size: 12px;
   line-height: 1.35;
   color: var(--t-0);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .mc-card-meta {
@@ -1223,6 +1233,14 @@ body {
   flex-wrap: wrap;
   color: var(--t-2);
   font-size: 10.5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mc-card-meta .pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mc-empty-stage {
