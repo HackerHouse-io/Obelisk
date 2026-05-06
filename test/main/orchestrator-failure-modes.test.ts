@@ -12,6 +12,7 @@ import { createBacklogItem } from '../../src/main/db/backlog';
 import { listArtifacts } from '../../src/main/db/evidence';
 import { runAgent } from '../../src/main/orchestrator/run';
 import { MockRunner, type MockRecipe } from '../helpers/mock-runner';
+import { seedTestPlanFile } from '../helpers/seed-plan';
 import type { CodingAgentRunner } from '../../src/main/runners/types';
 
 // Stub Octokit so neither selectTask's fetchIssueAuthor nor publish's
@@ -251,6 +252,7 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
     });
     createAgent({ repoId: repo.id, name: 'qa-hunter' });
     addToAllowlist(repo.id, 'test-user', 'auto');
+    seedTestPlanFile({ repoPath, agentName: 'qa-hunter' });
 
     const result = await runAgent({
       repoId: repo.id,

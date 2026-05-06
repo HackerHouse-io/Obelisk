@@ -10,22 +10,32 @@ import { mirrorEvidenceToRepo } from './artifact-mirror';
 export interface PublishInput {
   repo: Repo;
   runId: string;
-  worktreePath: string;
-  branch: string;
   agentName: import('../../shared/types').AgentName;
+  /** Required for `plan.kind === 'pr'`; ignored otherwise. */
+  worktreePath?: string;
+  /** Required for `plan.kind === 'pr'`; ignored otherwise. */
+  branch?: string;
   /** From repos.attribution_mode (Phase 9 surfaces this in Settings). */
   attributionMode?: 'user' | 'bot' | 'custom';
   attributionCustom?: { name?: string; email?: string };
   /** The plan from agent.interpretResult — what should be created on GitHub. */
   plan: PublishPlan;
-  /** PR-body Summary line for the commit message. */
-  commitSubject: string;
+  /** PR-body Summary line for the commit message. Required for `plan.kind === 'pr'`. */
+  commitSubject?: string;
   /** Multi-line commit body. */
   commitBody?: string;
   /** Issue or PR number this run is tied to (for label lifecycle). */
   sourceIssueNumber?: number;
   /** PR number we're operating on (for review plans). */
   sourcePrNumber?: number;
+  /**
+   * True when a human explicitly initiated the publish from the UI (e.g. clicking
+   * "Send to GitHub" on a previewed finding). The safety mode gate governs
+   * autonomous agent behavior; a deliberate user click is a different trust act.
+   * Honored only for `kind='issue'` and `kind='comment'` — never for `pr` or `review`,
+   * which involve writing code or formal review state on the user's behalf.
+   */
+  manual?: boolean;
 }
 
 export type PublishOutput =
@@ -69,6 +79,13 @@ function ensureModeAllows(repo: Repo, action: string): void {
   }
 }
 
+const MANUAL_ALLOWED_ACTIONS: ReadonlySet<string> = new Set(['create_issue', 'post_comment']);
+
+function checkAction(input: PublishInput, action: string): void {
+  if (input.manual && MANUAL_ALLOWED_ACTIONS.has(action)) return;
+  ensureModeAllows(input.repo, action);
+}
+
 /**
  * Dispatches a `PublishPlan` to GitHub. `noop` is a hatch for agents that
  * decided to do nothing. Every other kind is gated by `ensureModeAllows`
@@ -89,7 +106,7 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
       return { kind: 'noop', reason: input.plan.reason };
 
     case 'issue': {
-      ensureModeAllows(input.repo, 'create_issue');
+      checkAction(input, 'create_issue');
       const created = await gh.issues.create({
         owner,
         repo: repoName,
@@ -108,6 +125,13 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
       ensureModeAllows(input.repo, 'commit');
       ensureModeAllows(input.repo, 'push');
       ensureModeAllows(input.repo, 'open_pr');
+
+      if (!input.worktreePath || !input.branch || !input.commitSubject) {
+        throw new ObeliskError(
+          'INVALID_INPUT',
+          'PR plans require worktreePath, branch, and commitSubject.',
+        );
+      }
 
       const attr = await resolveAttribution(input.worktreePath, {
         mode: input.attributionMode ?? 'user',
@@ -180,7 +204,7 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
     }
 
     case 'comment': {
-      ensureModeAllows(input.repo, 'post_comment');
+      checkAction(input, 'post_comment');
       const created = await gh.issues.createComment({
         owner,
         repo: repoName,

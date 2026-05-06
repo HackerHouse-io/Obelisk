@@ -151,6 +151,8 @@ release/
 .obelisk-records/
 .obelisk-worktrees/
 .obelisk-test-data/
+test-results/
+playwright-report/
 
 # OS
 .DS_Store

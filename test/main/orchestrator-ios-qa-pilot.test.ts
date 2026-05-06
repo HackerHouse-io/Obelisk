@@ -14,6 +14,7 @@ import {
   upsertSimSlot,
 } from '../../src/main/db/qa-flows';
 import { MockRunner, type MockRecipe } from '../helpers/mock-runner';
+import { seedTestPlanFile } from '../helpers/seed-plan';
 
 vi.mock('../../src/main/github/client', () => ({
   getGithub: vi.fn(async () => null),
@@ -84,6 +85,9 @@ beforeEach(async () => {
   setSetupAt(repoId, new Date().toISOString());
   upsertSimSlot({ slotIndex: 0, udid: 'udid-0', appiumPort: 4723, wdaPort: 8100 });
   upsertSimSlot({ slotIndex: 1, udid: 'udid-1', appiumPort: 4724, wdaPort: 8101 });
+
+  // Plan gate: a test plan must exist for the agent to run.
+  seedTestPlanFile({ repoPath, agentName: 'ios-qa-pilot' });
 });
 
 afterEach(() => {

@@ -25,13 +25,18 @@ import { isConfigured, loadIosConfig, type IosConfig } from './config';
 import { loadFlowsFromRepo, syncFlowsToRegistry } from './flows';
 import { buildPublishPlan, registerEvidenceArtifacts } from './issue';
 import { parseFlowMarkers, parseIosQaFindings } from './parser';
+import { parsePlanHint, resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 
 /**
  * The optional task hint format. The orchestrator passes `taskId` from
- * `agents:run` straight through to `selectTask`; we encode the user's
- * "Run selected" choice as `flow:<flow_id>` so it survives that hop.
+ * `agents:run` straight through to `selectTask`; we accept two shapes:
+ *   - `flow:<flow_id>`  — pick a specific flow from the registry
+ *   - `plan:<plan_id>`  — assign a test plan; flow is still chosen by the
+ *                         normal picker (claimNextFlow). When neither is
+ *                         set, we read the (single) repo plan or refuse.
  */
 const FLOW_HINT_PREFIX = 'flow:';
+const PLAN_HINT_PREFIX = 'plan:';
 
 export const iosQaPilotHandler: AgentHandler = {
   name: 'ios-qa-pilot',
@@ -47,6 +52,16 @@ export const iosQaPilotHandler: AgentHandler = {
     const cfg = loadIosConfig(input.repo.localPath);
     if (!isConfigured(cfg)) return null;
     if (!getSetupAt(input.repo.id)) return null; // Doctor hasn't run yet
+
+    // Plan gate: iOS QA Pilot needs a plan for context, but the flow-registry
+    // is still what picks WHICH flow to execute. parsePlanHint accepts the
+    // explicit `plan:<id>` form; without it, resolvePlanForAgentRun looks up
+    // the (single) plan registered for this agent or throws TEST_PLAN_REQUIRED.
+    const planTaskId = parsePlanHint(input.taskId)
+      ? input.taskId
+      : `${PLAN_HINT_PREFIX}` + (resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', undefined).frontmatter.id);
+    const plan = resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', planTaskId);
+    const assigned = toAssignedPlan(plan);
 
     ensureRepoState(input.repo.id);
     const flowsParsed = loadFlowsFromRepo(input.repo.localPath, cfg.flowsDir);
@@ -78,6 +93,7 @@ export const iosQaPilotHandler: AgentHandler = {
           repoPath: input.repo.localPath,
           ts,
         }),
+        assignedPlan: assigned,
       },
     };
   },

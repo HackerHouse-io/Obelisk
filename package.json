@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "pretest": "npm rebuild better-sqlite3 keytar",
     "posttest": "electron-builder install-app-deps",
+    "test:e2e": "pnpm build && playwright test --config=test/e2e/playwright.config.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
@@ -34,17 +35,18 @@
     "@octokit/rest": "^21.1.0",
     "better-sqlite3": "^11.7.0",
     "cron-parser": "^4.9.0",
+    "gray-matter": "^4.0.3",
     "keytar": "^7.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "simple-git": "^3.27.0",
-    "gray-matter": "^4.0.3",
     "ulid": "^2.3.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
     "@eslint/js": "^9.16.0",
+    "@playwright/test": "^1.59.1",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",

@@ -9,6 +9,23 @@ export interface TaskPayload {
   context: string;
   /** GitHub issue or PR number, if applicable. */
   githubNumber?: number;
+  /**
+   * The full test plan markdown the agent must execute, if assigned. Set by
+   * QA agents (qa-hunter, manual-qa, ios-qa-pilot) when the renderer dispatches
+   * `agents:run` with `taskId='plan:<id>'`. The compiler splices this into the
+   * user message as an "Assigned test plan" section so the agent can read it
+   * verbatim.
+   */
+  assignedPlan?: AssignedPlan;
+}
+
+export interface AssignedPlan {
+  id: string;
+  name: string;
+  /** Pre-rendered markdown (frontmatter stripped). */
+  body: string;
+  /** Helps the agent index findings back to specific cases. */
+  caseRefs: { sectionTitle: string; caseId: string; caseTitle: string }[];
 }
 
 export interface RepoSummary {

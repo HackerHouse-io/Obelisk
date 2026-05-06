@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
 import type {
   Agent,
@@ -8,11 +8,24 @@ import type {
   RunState,
   AgentName,
   SafetyMode,
+  PreviewedFinding,
 } from '../../shared/types';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
+import { FindingPreview } from '../components/FindingPreview';
+import { FileIssueModal } from '../components/FileIssueModal';
+import {
+  PlanGateDialog,
+  gateStateFor,
+  QA_AGENT_NAMES_FOR_GATE,
+  type PlanGateState,
+} from '../components/PlanGateDialog';
+import { labelForAgent } from '../format';
 
 type PreviewsResponse = IpcMap['previews:list']['res'];
+
+/** Agents that need a preflight (Doctor green) before Run is meaningful. */
+const PREFLIGHT_AGENTS: ReadonlySet<AgentName> = new Set(['ios-qa-pilot', 'manual-qa']);
 
 /**
  * Home (Project Command Center).
@@ -35,6 +48,18 @@ export function Home(): ReactElement {
     findings: [],
     playbookDraft: null,
   });
+  const [modalFinding, setModalFinding] = useState<PreviewedFinding | null>(null);
+  const [runState, setRunState] = useState<{
+    pending: Set<string>;
+    error: { agentId: string; message: string; hint?: string } | null;
+  }>({ pending: new Set(), error: null });
+  const [planGate, setPlanGate] = useState<PlanGateState>({ kind: 'closed' });
+
+  const refreshPreviews = useCallback(async () => {
+    if (!repo) return;
+    const p = await window.obelisk.invoke('previews:list', { repoId: repo.id });
+    if (p.ok) setPreviews(p.value);
+  }, [repo]);
 
   useEffect(() => {
     if (!repo) return;
@@ -50,6 +75,184 @@ export function Home(): ReactElement {
       if (p.ok) setPreviews(p.value);
     });
   }, [repo]);
+
+  useEffect(() => {
+    if (!repo) return;
+    return window.obelisk.subscribe((evt) => {
+      if (evt.type === 'previews.changed' && evt.repoId === repo.id) {
+        void refreshPreviews();
+      }
+    });
+  }, [repo, refreshPreviews]);
+
+  const dispatchRun = useCallback(
+    async (a: Agent, taskId?: string) => {
+      const res = await window.obelisk.invoke('agents:run', {
+        agentId: a.id,
+        ...(taskId ? { taskId } : {}),
+      });
+      if (res.ok) {
+        setRunState({ pending: new Set(), error: null });
+        setRoute('mission');
+        return;
+      }
+      setRunState((s) => {
+        const pending = new Set(s.pending);
+        pending.delete(a.id);
+        return {
+          pending,
+          error: {
+            agentId: a.id,
+            message: res.error.message,
+            ...(res.error.hint ? { hint: res.error.hint } : {}),
+          },
+        };
+      });
+    },
+    [setRoute],
+  );
+
+  const runAgent = useCallback(
+    async (a: Agent) => {
+      setRunState((s) => ({
+        pending: new Set([...s.pending, a.id]),
+        error: null,
+      }));
+      try {
+        if (PREFLIGHT_AGENTS.has(a.name)) {
+          const doctorRes = await window.obelisk.invoke('qa:doctor', { repoId: a.repoId });
+          if (!doctorRes.ok) {
+            setRunState((s) => {
+              const pending = new Set(s.pending);
+              pending.delete(a.id);
+              return {
+                pending,
+                error: { agentId: a.id, message: doctorRes.error.message },
+              };
+            });
+            return;
+          }
+          if (doctorRes.value.overall !== 'green') {
+            setRunState((s) => {
+              const pending = new Set(s.pending);
+              pending.delete(a.id);
+              return { pending, error: null };
+            });
+            setRoute('qa');
+            return;
+          }
+        }
+
+        // QA agents must have an assigned test plan. Gate at this layer so
+        // the orchestrator never sees a plan-less invocation.
+        if (QA_AGENT_NAMES_FOR_GATE.has(a.name)) {
+          const plansRes = await window.obelisk.invoke('testPlans:list', {
+            repoId: a.repoId,
+            agentName: a.name,
+          });
+          if (!plansRes.ok) {
+            setRunState((s) => {
+              const pending = new Set(s.pending);
+              pending.delete(a.id);
+              return {
+                pending,
+                error: { agentId: a.id, message: plansRes.error.message },
+              };
+            });
+            return;
+          }
+          const next = gateStateFor({ agent: a, plans: plansRes.value });
+          if (next.kind !== 'closed') {
+            setRunState((s) => {
+              const pending = new Set(s.pending);
+              pending.delete(a.id);
+              return { pending, error: null };
+            });
+            setPlanGate(next);
+            return;
+          }
+          // Exactly one plan → use it without a picker.
+          await dispatchRun(a, `plan:${plansRes.value[0]!.id}`);
+          return;
+        }
+
+        await dispatchRun(a);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setRunState((s) => {
+          const pending = new Set(s.pending);
+          pending.delete(a.id);
+          return { pending, error: { agentId: a.id, message } };
+        });
+      }
+    },
+    [setRoute, dispatchRun],
+  );
+
+  const generatePlanFromGate = useCallback(
+    async (input: { scope: 'whole-app' | 'feature'; featureName?: string }) => {
+      if (planGate.kind !== 'newPlanForm') return;
+      const agent = planGate.agent;
+      setPlanGate({ ...planGate, busy: true, error: null });
+      const res = await window.obelisk.invoke('testPlans:generate', {
+        repoId: agent.repoId,
+        agentName: agent.name,
+        scope: input.scope,
+        ...(input.featureName ? { featureName: input.featureName } : {}),
+      });
+      if (!res.ok) {
+        setPlanGate({ ...planGate, busy: false, error: res.error.message });
+        return;
+      }
+      setPlanGate({ kind: 'closed' });
+      // Take the user to the plan editor so they can review before running.
+      setRoute('test-plans');
+    },
+    [planGate, setRoute],
+  );
+
+  const onPickFromGate = useCallback(
+    async (planId: string) => {
+      if (planGate.kind !== 'pick') return;
+      const agent = planGate.agent;
+      setPlanGate({ kind: 'closed' });
+      await dispatchRun(agent, `plan:${planId}`);
+    },
+    [planGate, dispatchRun],
+  );
+
+  const onAddNewFromPicker = useCallback(() => {
+    if (planGate.kind !== 'pick') return;
+    setPlanGate({
+      kind: 'newPlanForm',
+      agent: planGate.agent,
+      scope: 'whole-app',
+      featureName: '',
+      busy: false,
+      error: null,
+    });
+  }, [planGate]);
+
+  const advanceFromNoPlan = useCallback(() => {
+    if (planGate.kind !== 'noPlan') return;
+    setPlanGate({
+      kind: 'newPlanForm',
+      agent: planGate.agent,
+      scope: 'whole-app',
+      featureName: '',
+      busy: false,
+      error: null,
+    });
+  }, [planGate]);
+
+  const dismissRunError = useCallback(() => {
+    setRunState((s) => ({ pending: s.pending, error: null }));
+  }, []);
+
+  const dismissPreview = useCallback(async (f: PreviewedFinding) => {
+    const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
+    if (!res.ok) alert(res.error.message);
+  }, []);
 
   const kpis = useMemo(() => {
     const liveRuns = runs.filter((r) => LIVE_STATES.includes(r.state)).length;
@@ -95,13 +298,19 @@ export function Home(): ReactElement {
         <KpiCard label="Backlog" value={kpis.backlogTotal} sub="items waiting" />
       </div>
 
-      {repo.mode === 'observe' &&
-      (previews.findings.length > 0 || previews.playbookDraft !== null) ? (
+      {repo.mode === 'observe' ? (
         <ObservePreviews
           findings={previews.findings}
           playbookDraft={previews.playbookDraft}
+          repoMode={repo.mode}
+          installedAgents={agents}
+          runState={runState}
           onUpgradeMode={() => setRoute('settings')}
           onOpenPlaybook={() => setRoute('playbook')}
+          onOpenFinding={setModalFinding}
+          onDismissFinding={dismissPreview}
+          onRunAgent={runAgent}
+          onDismissError={dismissRunError}
         />
       ) : null}
 
@@ -142,7 +351,7 @@ export function Home(): ReactElement {
                   <div>
                     <div style={{ fontWeight: 600 }}>{a.displayName}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                      {labelFor(a.name)} · {a.runnerOverride ?? repo.defaultRunner} ·{' '}
+                      {labelForAgent(a.name)} · {a.runnerOverride ?? repo.defaultRunner} ·{' '}
                       {scheduleSummary(a)}
                     </div>
                   </div>
@@ -154,18 +363,12 @@ export function Home(): ReactElement {
                     {status.label}
                   </span>
                   <div className="row gap-2" style={{ alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      className="btn ghost sm"
-                      title={`Run ${a.displayName} now`}
-                      onClick={async () => {
-                        const res = await window.obelisk.invoke('agents:run', { agentId: a.id });
-                        if (res.ok) setRoute('mission');
-                        else alert(res.error.message);
-                      }}
-                    >
-                      <Icon.Play size={11} /> Run
-                    </button>
+                    <RunButton
+                      agent={a}
+                      pending={runState.pending.has(a.id)}
+                      onRun={() => void runAgent(a)}
+                      variant="ghost"
+                    />
                     <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {a.timeoutMs / 1000 / 60}m timeout
                     </span>
@@ -194,7 +397,7 @@ export function Home(): ReactElement {
                 <div>
                   <div style={{ fontWeight: 600 }}>{r.taskRef ?? '(no task ref)'}</div>
                   <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                    {labelFor(r.agentName)} · {r.runnerUsed} · {r.outputSummary ?? '—'}
+                    {labelForAgent(r.agentName)} · {r.runnerUsed} · {r.outputSummary ?? '—'}
                   </div>
                 </div>
                 <span className={`pill ${stateTone(r.state)}`}>{r.state}</span>
@@ -241,6 +444,22 @@ export function Home(): ReactElement {
           </div>
         )}
       </div>
+      <FileIssueModal
+        open={modalFinding !== null}
+        finding={modalFinding}
+        onClose={() => setModalFinding(null)}
+        onFiled={() => {
+          // Bus broadcast will refresh; nothing extra needed here.
+        }}
+      />
+      <PlanGateDialog
+        state={planGate}
+        onClose={() => setPlanGate({ kind: 'closed' })}
+        onAdvanceFromNoPlan={advanceFromNoPlan}
+        onGenerate={(input) => void generatePlanFromGate(input)}
+        onPick={(planId) => void onPickFromGate(planId)}
+        onAddNewFromPicker={onAddNewFromPicker}
+      />
     </div>
   );
 }
@@ -349,18 +568,76 @@ function KpiCard({
   );
 }
 
+const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+
+interface RunStateMap {
+  pending: Set<string>;
+  error: { agentId: string; message: string; hint?: string } | null;
+}
+
+function RunButton({
+  agent,
+  pending,
+  onRun,
+  variant,
+}: {
+  agent: Agent;
+  pending: boolean;
+  onRun: () => void;
+  variant: 'ghost' | 'primary';
+}): ReactElement {
+  const baseClass = variant === 'primary' ? 'btn primary sm' : 'btn ghost sm';
+  return (
+    <button
+      type="button"
+      className={baseClass}
+      onClick={onRun}
+      disabled={pending}
+      title={
+        pending
+          ? `Starting ${agent.displayName}…`
+          : PREFLIGHT_AGENTS.has(agent.name)
+            ? `Run ${agent.displayName} now (preflight required)`
+            : `Run ${agent.displayName} now`
+      }
+      data-testid={`run-${agent.name}`}
+    >
+      {pending ? (
+        <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+      ) : (
+        <Icon.Play size={11} />
+      )}{' '}
+      {pending ? 'Starting…' : variant === 'primary' ? `Run ${labelForAgent(agent.name)}` : 'Run'}
+    </button>
+  );
+}
+
 function ObservePreviews({
   findings,
   playbookDraft,
+  installedAgents,
+  runState,
   onUpgradeMode,
   onOpenPlaybook,
+  onOpenFinding,
+  onDismissFinding,
+  onRunAgent,
+  onDismissError,
 }: {
   findings: PreviewsResponse['findings'];
   playbookDraft: PreviewsResponse['playbookDraft'];
+  repoMode: SafetyMode;
+  installedAgents: Agent[];
+  runState: RunStateMap;
   onUpgradeMode: () => void;
   onOpenPlaybook: () => void;
+  onOpenFinding: (f: PreviewedFinding) => void;
+  onDismissFinding: (f: PreviewedFinding) => void;
+  onRunAgent: (a: Agent) => Promise<void> | void;
+  onDismissError: () => void;
 }): ReactElement {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const visible = findings.filter((f) => !f.dismissed);
+  const qaAgents = installedAgents.filter((a) => QA_AGENT_NAMES.includes(a.name));
   return (
     <div className="home-section observe-previews">
       <div className="home-section-title">
@@ -374,7 +651,7 @@ function ObservePreviews({
       </div>
       <div className="home-section-sub">
         Safety mode is set to <span className="mono">observe</span>, so nothing has been written to
-        GitHub. These are the issues and playbook files agents would have filed otherwise.
+        GitHub. Findings show up here — review and click <em>Open issue</em> to file each one.
       </div>
 
       {playbookDraft ? (
@@ -404,45 +681,64 @@ function ObservePreviews({
         </div>
       ) : null}
 
-      {findings.length === 0 ? (
-        <div className="home-table-empty">
-          No previewed findings yet. QA Hunter and Manual QA write here on their next run.
+      {runState.error ? (
+        <div className="observe-error" role="alert" data-testid="run-error">
+          <div className="observe-error-icon">
+            <Icon.AlertTri size={13} />
+          </div>
+          <div className="observe-error-body">
+            <div className="observe-error-title">Could not start agent</div>
+            <div className="observe-error-msg">{runState.error.message}</div>
+            {runState.error.hint ? (
+              <div className="observe-error-hint">{runState.error.hint}</div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={onDismissError}
+            aria-label="Dismiss error"
+          >
+            <Icon.Close size={11} />
+          </button>
+        </div>
+      ) : null}
+
+      {visible.length === 0 ? (
+        <div className="observe-empty">
+          <div className="observe-empty-title">No findings yet</div>
+          <div className="observe-empty-sub">
+            Run a QA agent to walk your code or app and surface bugs here. Each finding gets a
+            review modal — edit the title and body before sending it to GitHub.
+          </div>
+          <div className="row gap-2 observe-empty-actions">
+            {qaAgents.length === 0 ? (
+              <span className="observe-empty-hint">
+                No QA agents installed. Add one from <em>Configure</em>.
+              </span>
+            ) : (
+              qaAgents.map((a) => (
+                <RunButton
+                  key={a.id}
+                  agent={a}
+                  pending={runState.pending.has(a.id)}
+                  onRun={() => void onRunAgent(a)}
+                  variant="primary"
+                />
+              ))
+            )}
+          </div>
         </div>
       ) : (
-        <div className="home-table">
-          {findings.map((f) => {
-            const expanded = expandedId === f.id;
-            return (
-              <div key={f.id} className="preview-row">
-                <button
-                  type="button"
-                  className="preview-row-head"
-                  onClick={() => setExpandedId(expanded ? null : f.id)}
-                >
-                  <Icon.Issue size={13} color="var(--t-2)" />
-                  <div className="preview-row-title">
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{f.title}</div>
-                    <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                      {labelFor(f.agentName)} · {short(f.at)}
-                    </div>
-                  </div>
-                  <div className="row gap-1">
-                    {f.labels.map((l) => (
-                      <span key={l} className="pill">
-                        {l}
-                      </span>
-                    ))}
-                  </div>
-                  <Icon.ChevronDown
-                    size={11}
-                    color="var(--t-2)"
-                    style={{ transform: expanded ? 'rotate(180deg)' : undefined }}
-                  />
-                </button>
-                {expanded ? <pre className="preview-row-body">{f.body}</pre> : null}
-              </div>
-            );
-          })}
+        <div className="finding-list">
+          {visible.map((f) => (
+            <FindingPreview
+              key={f.id}
+              finding={f}
+              onOpen={onOpenFinding}
+              onDismiss={onDismissFinding}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -557,17 +853,6 @@ function formatNextFire(iso: string): string {
   const days = Math.round(hours / 24);
   if (days < 7) return `in ${days}d`;
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-function labelFor(name: AgentName): string {
-  return {
-    'qa-hunter': 'QA Hunter',
-    'manual-qa': 'Manual QA',
-    'bug-fixer': 'Bug Fixer',
-    'feature-builder': 'Feature Builder',
-    'pr-reviewer': 'PR Reviewer',
-    'ios-qa-pilot': 'iOS QA Pilot',
-  }[name];
 }
 
 function stateTone(s: RunState): string {

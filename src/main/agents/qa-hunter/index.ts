@@ -1,7 +1,7 @@
-import { ulid } from 'ulid';
 import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { parseFencedJson } from '../lib/parse-fenced-json';
+import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -22,14 +22,17 @@ export const qaHunterHandler: AgentHandler = {
   producesPatch: false,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
-    // QA Hunter sweeps the entire repo on a schedule. Synthesize a single
-    // task per run; there's no backlog item to lock.
+    // QA Hunter must run against a test plan — the gate is enforced by
+    // resolvePlanForAgentRun, which throws TEST_PLAN_REQUIRED if none exists.
+    const plan = resolvePlanForAgentRun(input.repo, 'qa-hunter', input.taskId);
+    const assigned = toAssignedPlan(plan);
     const ts = new Date().toISOString();
     return {
       task: {
-        ref: `sweep:${input.repo.id}:${ulid()}`,
+        ref: `plan:${plan.frontmatter.id}`,
         kind: 'sweep',
-        context: `Scan ${input.repo.githubFullName} for likely bugs and weak coverage. Output as JSON.\n\nGenerated at ${ts}.`,
+        context: `Run ${plan.frontmatter.name} against ${input.repo.githubFullName}. Execute every test case in the assigned plan and emit findings as JSON.\n\nGenerated at ${ts}.`,
+        assignedPlan: assigned,
       },
     };
   },

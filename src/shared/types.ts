@@ -155,6 +155,53 @@ export interface Playbook {
 
 export type PlaybookRegenMode = 'quick' | 'deep';
 
+/* ---------- Test plans ---------- */
+
+export type TestPlanScope = 'whole-app' | 'feature';
+
+export interface TestPlanFrontmatter {
+  id: string;
+  name: string;
+  scope: TestPlanScope;
+  feature: string | null;
+  agentName: AgentName;
+  generatedAt: ISO;
+  generatedBy: 'claude' | 'codex' | 'heuristic' | 'manual';
+  version: number;
+}
+
+export type TestPlanBlock =
+  | { kind: 'section'; id: string; title: string }
+  | {
+      kind: 'case';
+      id: string;
+      title: string;
+      expected: string | null;
+      repro: string | null;
+      severity: FindingSeverity | null;
+    };
+
+export interface TestPlan {
+  frontmatter: TestPlanFrontmatter;
+  blocks: TestPlanBlock[];
+  /** Convenience aggregates the renderer uses without re-walking blocks. */
+  caseCount: number;
+  filePath: string;
+  /** Last-modified time of the on-disk file (mtime), used for "edited 2m ago". */
+  updatedAt: ISO;
+}
+
+export interface TestPlanSummary {
+  id: string;
+  name: string;
+  scope: TestPlanScope;
+  feature: string | null;
+  agentName: AgentName;
+  caseCount: number;
+  generatedAt: ISO;
+  updatedAt: ISO;
+}
+
 export interface Settings {
   defaultRunner: RunnerKind;
   attributionMode: AttributionMode;
@@ -166,6 +213,33 @@ export interface EvidenceItem {
   path: string;
   bytes: number;
   sha256: string;
+}
+
+export type FindingSeverity = 'P0' | 'P1' | 'P2';
+
+export interface PreviewEvidence {
+  /** Stable artifact id from evidence_artifacts. Used to build obelisk:// URLs. */
+  id: string;
+  kind: string;
+  basename: string;
+  bytes: number;
+}
+
+export interface PreviewedFinding {
+  /** audit_log row id. Stable cursor for list pagination + the action key. */
+  id: number;
+  runId: string;
+  agentName: AgentName;
+  at: ISO;
+  title: string;
+  body: string;
+  labels: string[];
+  severity: FindingSeverity | null;
+  evidence: PreviewEvidence[];
+  /** When the user has manually published this finding to GitHub already. */
+  published: { issueNumber: number; htmlUrl: string; at: ISO } | null;
+  /** When the user dismissed this finding (false-positive). */
+  dismissed: boolean;
 }
 
 /* ---------- iOS QA Pilot ---------- */
@@ -322,15 +396,7 @@ export interface IpcMap {
   'previews:list': {
     req: { repoId: string };
     res: {
-      findings: {
-        id: number;
-        runId: string;
-        agentName: AgentName;
-        at: ISO;
-        title: string;
-        body: string;
-        labels: string[];
-      }[];
+      findings: PreviewedFinding[];
       playbookDraft: {
         generatedAt: ISO;
         framework: string;
@@ -339,6 +405,38 @@ export interface IpcMap {
       } | null;
     };
   };
+  'previews:get': { req: { previewId: number }; res: PreviewedFinding };
+  'previews:fileIssue': {
+    req: { previewId: number; title: string; body: string; labels: string[] };
+    res: { issueNumber: number; htmlUrl: string };
+  };
+  'previews:dismiss': { req: { previewId: number }; res: { ok: true } };
+
+  // Test plans — gate the QA agent run flow.
+  'testPlans:list': {
+    req: { repoId: string; agentName?: AgentName };
+    res: TestPlanSummary[];
+  };
+  'testPlans:get': { req: { planId: string; repoId: string }; res: TestPlan };
+  'testPlans:save': {
+    req: {
+      planId: string;
+      repoId: string;
+      blocks: TestPlanBlock[];
+      name?: string;
+    };
+    res: { savedAt: ISO };
+  };
+  'testPlans:generate': {
+    req: {
+      repoId: string;
+      agentName: AgentName;
+      scope: TestPlanScope;
+      featureName?: string;
+    };
+    res: { planId: string };
+  };
+  'testPlans:delete': { req: { planId: string; repoId: string }; res: { ok: true } };
 
   // iOS QA Pilot
   'qa:list': { req: { repoId: string }; res: QaFlow[] };
@@ -380,6 +478,8 @@ export type BusEvent =
   | { type: 'evidence.missing'; runId: string; missing: string[] }
   | { type: 'qa.flowChanged'; repoId: string; flowId: string }
   | { type: 'qa.doctorChanged'; repoId: string }
+  | { type: 'previews.changed'; repoId: string }
+  | { type: 'testPlans.changed'; repoId: string }
   | { type: 'system.heartbeat'; at: ISO };
 
 /* ---------- Renderer-side bridge surface ---------- */

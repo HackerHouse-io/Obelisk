@@ -13,8 +13,10 @@ import { runAgent } from '../orchestrator/run';
 import { defaultCronFor, nextFireAt } from '../scheduler/cron';
 import { ObeliskError } from '../../shared/errors';
 import { getAgentHandler } from '../agents/registry';
-import type { Agent, IpcMap } from '../../shared/types';
+import type { Agent, IpcMap, RunnerKind } from '../../shared/types';
 import { readAgentMd } from '../agents/skill-loader';
+import { ClaudeCodeRunner } from '../runners/claude-code';
+import { CodexRunner } from '../runners/codex';
 
 function decorate(agent: Agent, connectedAt: Date): Agent {
   const handler = (() => {
@@ -52,6 +54,7 @@ export async function handleAgentsRun(
   if (!agent) {
     throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
   }
+  await ensureRunnerAvailable();
   const result = await runAgent({
     repoId: agent.repoId,
     agentName: agent.name,
@@ -63,6 +66,18 @@ export async function handleAgentsRun(
     throw new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.');
   }
   return { runId: result.runId };
+}
+
+async function ensureRunnerAvailable(): Promise<RunnerKind> {
+  const claude = await new ClaudeCodeRunner().isInstalled();
+  if (claude.ok) return 'claude';
+  const codex = await new CodexRunner().isInstalled();
+  if (codex.ok) return 'codex';
+  throw new ObeliskError(
+    'RUNNER_NOT_INSTALLED',
+    'Neither Claude Code nor Codex CLI is installed.',
+    "Install one of them and make sure it's on PATH. Try 'claude --version' or 'codex --version' in a terminal.",
+  );
 }
 
 export async function handleAgentsCancel(

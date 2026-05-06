@@ -52,6 +52,7 @@ function renderSystemPrompt(input: CompileInput): string {
 
 function renderUserMessage(input: CompileInput): string {
   const { task, repo } = input;
+  const planBlock = renderAssignedPlanBlock(task);
   return [
     `# Task: ${task.ref}`,
     `Kind: ${task.kind}`,
@@ -60,6 +61,7 @@ function renderUserMessage(input: CompileInput): string {
     '# Context',
     task.context,
     '',
+    planBlock,
     '# Repository',
     `Full name: ${repo.fullName}`,
     `Default branch: ${repo.defaultBranch}`,
@@ -80,6 +82,21 @@ function renderUserMessage(input: CompileInput): string {
   ]
     .filter((s) => s !== '')
     .join('\n');
+}
+
+function renderAssignedPlanBlock(task: import('./types').TaskPayload): string {
+  if (!task.assignedPlan) return '';
+  return [
+    '# Assigned test plan',
+    `Plan: ${task.assignedPlan.name} (id: ${task.assignedPlan.id})`,
+    '',
+    'Execute every test case below. For each case that fails, emit a finding',
+    'whose `case_id` field matches the id from the plan so the user can map',
+    'findings back to specific cases.',
+    '',
+    task.assignedPlan.body,
+    '',
+  ].join('\n');
 }
 
 function renderClaudeSettings(input: CompileInput): string {

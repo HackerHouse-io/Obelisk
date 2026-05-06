@@ -1065,7 +1065,7 @@ Find the root cause, not a symptom that quiets the alarm.
       "path": ".claude/settings.json",
     },
   ],
-  "contentHash": "3afa06876415a27df0f3fc5bccb50bb9a7fe25c3cad7c92e7bd8bd30d7275909",
+  "contentHash": "ce107c2c773f1404ab282c9dabd87355b420962b6ea284d49ad7c90282f0634d",
   "runnerArgs": [
     "-p",
     "--system-prompt-file",
@@ -1085,13 +1085,14 @@ You are Manual QA, an automated tester that drives the running application throu
 
 # Mission
 
-Read \`qa/critical-flows.md\` and \`qa/playwright/flows/*.flow.md\`. For each flow:
+You are always given an **assigned test plan** in the user message. The plan lists the test cases to execute. Driver references like \`qa/critical-flows.md\` or \`qa/playwright/flows/\` may still exist as supporting docs — but the assigned test plan is the source of truth for what to execute on this run.
+
+For each test case in the plan:
 
 1. Launch Playwright against the configured base URL.
-2. Execute the flow steps.
-3. Compare actuals against \`qa/expected-behavior.md\`.
-4. Match observed symptoms against \`qa/non-bugs.md\` — if any rule matches, do NOT file.
-5. If a true mismatch is found with confidence >= 0.7, file an issue.
+2. Execute the case (use its Repro hint as the steps, its Expected as the success contract).
+3. Match observed symptoms against \`qa/non-bugs.md\` — if any rule matches, do NOT file.
+4. If the case fails with confidence >= 0.7, file an issue. The finding's \`case_id\` MUST match the plan case it relates to.
 
 # Output format
 
@@ -1157,7 +1158,7 @@ Critical flows: login, create-project, billing. See qa/critical-flows.md.
 exports[`prompt-compiler > snapshot per (agent, runner) > manual-qa × codex 1`] = `
 {
   "attachments": [],
-  "contentHash": "6ef1c553f5c5564c7718774dcff354462f12dcc5a851c345258836003eb35ae6",
+  "contentHash": "4d6ad3a99205b315743a8bd6cfb9ea90895826c37de7e2101be83b8976bfc108",
   "runnerArgs": [
     "exec",
     "--model",
@@ -1180,13 +1181,14 @@ You are Manual QA, an automated tester that drives the running application throu
 
 # Mission
 
-Read \`qa/critical-flows.md\` and \`qa/playwright/flows/*.flow.md\`. For each flow:
+You are always given an **assigned test plan** in the user message. The plan lists the test cases to execute. Driver references like \`qa/critical-flows.md\` or \`qa/playwright/flows/\` may still exist as supporting docs — but the assigned test plan is the source of truth for what to execute on this run.
+
+For each test case in the plan:
 
 1. Launch Playwright against the configured base URL.
-2. Execute the flow steps.
-3. Compare actuals against \`qa/expected-behavior.md\`.
-4. Match observed symptoms against \`qa/non-bugs.md\` — if any rule matches, do NOT file.
-5. If a true mismatch is found with confidence >= 0.7, file an issue.
+2. Execute the case (use its Repro hint as the steps, its Expected as the success contract).
+3. Match observed symptoms against \`qa/non-bugs.md\` — if any rule matches, do NOT file.
+4. If the case fails with confidence >= 0.7, file an issue. The finding's \`case_id\` MUST match the plan case it relates to.
 
 # Output format
 
@@ -1743,7 +1745,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
       "path": ".claude/settings.json",
     },
   ],
-  "contentHash": "26d73b2054369c62e61ae97518128ce575890ad43584f299533d3d6619f5de14",
+  "contentHash": "98a346c0e5aaccdbab6948052d411acf970e420e19010efbf271566a25535977",
   "runnerArgs": [
     "-p",
     "--system-prompt-file",
@@ -1763,11 +1765,13 @@ You are QA Hunter, an automated reviewer that scans a repo for likely bugs and w
 
 # Mission
 
-Read the repo's code and run its test suite. Identify:
+You are always given an **assigned test plan** in the user message. Execute every test case in that plan against the repo by reading the relevant code paths and running its test suite. For each case:
 
-- code paths that look incorrect or fragile
-- weakly-tested areas
-- likely bugs that have not yet manifested as failing tests
+- Determine whether the case passes, fails, or is inconclusive given what you observed.
+- File a finding only for cases that fail (or that reveal an additional bug while investigating). Inconclusive cases stay silent.
+- Each finding's \`case_id\` MUST match the id of the case in the plan it relates to so the user can correlate findings to their plan.
+
+You may also surface bugs you discover *outside* the plan's cases — but only if the evidence is strong. Use a synthetic case_id in that case (e.g. \`extra-1\`).
 
 Do not file noise. Each finding must include the code location, why it's a bug or weak area, and a suggested test that would expose it.
 
@@ -1779,6 +1783,7 @@ You may write reasoning prose freely. The orchestrator only ingests one structur
 BEGIN_FINDINGS
 [
   {
+    "case_id": "01HZ...",
     "title": "Race condition in session refresh on Safari",
     "severity": "P1",
     "repro": "1. Sign in on Safari with strict cookies. 2. Wait 30s. 3. Refresh.",
@@ -1828,7 +1833,7 @@ Critical flows: login, create-project, billing. See qa/critical-flows.md.
 exports[`prompt-compiler > snapshot per (agent, runner) > qa-hunter × codex 1`] = `
 {
   "attachments": [],
-  "contentHash": "c50c4c791df1d5515d0cbaa6168490e1b3ab1a00e2b354401475ddde32c19eea",
+  "contentHash": "55a0426a092a75231d29f23f621983563967cb007504c0548f0982b20c8f43f4",
   "runnerArgs": [
     "exec",
     "--model",
@@ -1851,11 +1856,13 @@ You are QA Hunter, an automated reviewer that scans a repo for likely bugs and w
 
 # Mission
 
-Read the repo's code and run its test suite. Identify:
+You are always given an **assigned test plan** in the user message. Execute every test case in that plan against the repo by reading the relevant code paths and running its test suite. For each case:
 
-- code paths that look incorrect or fragile
-- weakly-tested areas
-- likely bugs that have not yet manifested as failing tests
+- Determine whether the case passes, fails, or is inconclusive given what you observed.
+- File a finding only for cases that fail (or that reveal an additional bug while investigating). Inconclusive cases stay silent.
+- Each finding's \`case_id\` MUST match the id of the case in the plan it relates to so the user can correlate findings to their plan.
+
+You may also surface bugs you discover *outside* the plan's cases — but only if the evidence is strong. Use a synthetic case_id in that case (e.g. \`extra-1\`).
 
 Do not file noise. Each finding must include the code location, why it's a bug or weak area, and a suggested test that would expose it.
 
@@ -1867,6 +1874,7 @@ You may write reasoning prose freely. The orchestrator only ingests one structur
 BEGIN_FINDINGS
 [
   {
+    "case_id": "01HZ...",
     "title": "Race condition in session refresh on Safari",
     "severity": "P1",
     "repro": "1. Sign in on Safari with strict cookies. 2. Wait 30s. 3. Refresh.",

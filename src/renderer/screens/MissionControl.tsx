@@ -1,10 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { runAgentByName } from '../state/agent-actions';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { EmptyState } from '../ui/EmptyState';
-import type { Agent, AuditLine, EvidenceItem, Run, RunState, AgentName } from '../../shared/types';
+import { FindingPreview } from '../components/FindingPreview';
+import { FileIssueModal } from '../components/FileIssueModal';
+import { labelForAgent } from '../format';
+import type {
+  Agent,
+  AuditLine,
+  EvidenceItem,
+  Run,
+  RunState,
+  PreviewedFinding,
+} from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
 
 /**
@@ -309,7 +319,7 @@ function RunCard({
   onClick: () => void;
   onDelete: () => void;
 }): ReactElement {
-  const typeLabel = agentLabel(run.agentName);
+  const typeLabel = labelForAgent(run.agentName);
   const showInstance = instanceName && instanceName !== typeLabel;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -452,18 +462,7 @@ function runStateHelp(state: RunState): string {
   }
 }
 
-function agentLabel(name: AgentName): string {
-  return {
-    'qa-hunter': 'QA Hunter',
-    'manual-qa': 'Manual QA',
-    'bug-fixer': 'Bug Fixer',
-    'feature-builder': 'Feature Builder',
-    'pr-reviewer': 'PR Reviewer',
-    'ios-qa-pilot': 'iOS QA Pilot',
-  }[name];
-}
-
-type Tab = 'audit' | 'evidence' | 'reasoning' | 'files';
+type Tab = 'findings' | 'audit' | 'evidence' | 'reasoning' | 'files';
 
 function RunDrawer({
   run,
@@ -481,16 +480,51 @@ function RunDrawer({
     auditLog: AuditLine[];
     evidence: EvidenceItem[];
   } | null>(null);
+  const [findings, setFindings] = useState<PreviewedFinding[]>([]);
+  const [modalFinding, setModalFinding] = useState<PreviewedFinding | null>(null);
+
+  const refreshFindings = useCallback(async (runId: string, repoId: string) => {
+    const res = await window.obelisk.invoke('previews:list', { repoId });
+    if (!res.ok) return;
+    setFindings(res.value.findings.filter((f) => f.runId === runId));
+  }, []);
 
   useEffect(() => {
     if (!run) {
       setDetails(null);
+      setFindings([]);
       return;
     }
     void window.obelisk.invoke('runs:get', { runId: run.id }).then((res) => {
       if (res.ok) setDetails({ auditLog: res.value.auditLog, evidence: res.value.evidence });
     });
-  }, [run]);
+    void refreshFindings(run.id, run.repoId);
+  }, [run, refreshFindings]);
+
+  useEffect(() => {
+    if (!run) return;
+    return window.obelisk.subscribe((evt) => {
+      if (evt.type === 'previews.changed' && evt.repoId === run.repoId) {
+        void refreshFindings(run.id, run.repoId);
+      }
+    });
+  }, [run, refreshFindings]);
+
+  const hasFindings = findings.filter((f) => !f.dismissed).length > 0;
+  const isTerminal = run?.state === 'done' || run?.state === 'failed';
+  const tabSetForRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (!run) return;
+    if (tabSetForRun.current === run.id) return;
+    tabSetForRun.current = run.id;
+    if (hasFindings && isTerminal) setTab('findings');
+    else setTab('audit');
+  }, [run, hasFindings, isTerminal]);
+
+  async function dismissFinding(f: PreviewedFinding): Promise<void> {
+    const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
+    if (!res.ok) alert(res.error.message);
+  }
 
   const toggleBtn = (
     <button
@@ -536,8 +570,8 @@ function RunDrawer({
       <div className="mc-drawer-header">
         <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
         <div className="mc-drawer-meta">
-          <span className="pill" title={`Agent type: ${agentLabel(run.agentName)}`}>
-            {agentLabel(run.agentName)}
+          <span className="pill" title={`Agent type: ${labelForAgent(run.agentName)}`}>
+            {labelForAgent(run.agentName)}
           </span>
           <span className="pill" title={runnerHelp(run.runnerUsed)}>
             {run.runnerUsed}
@@ -559,24 +593,62 @@ function RunDrawer({
         {run.outputSummary ? <div className="mc-drawer-summary">{run.outputSummary}</div> : null}
       </div>
       <div className="mc-tabs">
-        {(['audit', 'evidence', 'reasoning', 'files'] as Tab[]).map((t) => (
+        {(hasFindings
+          ? (['findings', 'audit', 'evidence', 'reasoning', 'files'] as Tab[])
+          : (['audit', 'evidence', 'reasoning', 'files'] as Tab[])
+        ).map((t) => (
           <button
             key={t}
             type="button"
             className={`mc-tab${tab === t ? ' active' : ''}`}
             onClick={() => setTab(t)}
           >
-            {t}
+            {t === 'findings' ? `findings (${findings.filter((f) => !f.dismissed).length})` : t}
           </button>
         ))}
       </div>
       <div className="mc-tab-body">
+        {tab === 'findings' && (
+          <FindingsTab
+            findings={findings}
+            onOpen={setModalFinding}
+            onDismiss={dismissFinding}
+          />
+        )}
         {tab === 'audit' && <AuditTab lines={details?.auditLog ?? []} />}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
         {tab === 'reasoning' && <ReasoningTab lines={details?.auditLog ?? []} />}
         {tab === 'files' && <FilesTab evidence={details?.evidence ?? []} />}
       </div>
+      <FileIssueModal
+        open={modalFinding !== null}
+        finding={modalFinding}
+        onClose={() => setModalFinding(null)}
+        onFiled={() => {
+          // Bus broadcast triggers refresh.
+        }}
+      />
     </aside>
+  );
+}
+
+function FindingsTab({
+  findings,
+  onOpen,
+  onDismiss,
+}: {
+  findings: PreviewedFinding[];
+  onOpen: (f: PreviewedFinding) => void;
+  onDismiss: (f: PreviewedFinding) => void;
+}): ReactElement {
+  const visible = findings.filter((f) => !f.dismissed);
+  if (visible.length === 0) return <Empty>No findings to review.</Empty>;
+  return (
+    <div className="mc-findings col gap-1">
+      {visible.map((f) => (
+        <FindingPreview key={f.id} finding={f} onOpen={onOpen} onDismiss={onDismiss} />
+      ))}
+    </div>
   );
 }
 

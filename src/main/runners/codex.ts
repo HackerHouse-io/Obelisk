@@ -37,11 +37,14 @@ export class CodexRunner implements CodingAgentRunner {
       return { ok: false, reason: 'timeout', detail: `> ${opts.timeoutMs}ms` };
     }
     if (result.exitCode !== 0) {
-      return {
-        ok: false,
-        reason: 'non_zero_exit',
-        detail: `codex exited ${result.exitCode ?? '?'}; stderr: ${result.stderr.slice(-500)}`,
-      };
+      const stderr = result.stderr.trim();
+      const stdoutTail = result.stdout.trim().split('\n').slice(-3).join(' | ').slice(-300);
+      const detail = stderr
+        ? `codex exited ${result.exitCode ?? '?'}; stderr: ${stderr.slice(-500)}`
+        : stdoutTail
+          ? `codex exited ${result.exitCode ?? '?'} with no stderr; last stdout: ${stdoutTail}`
+          : `codex exited ${result.exitCode ?? '?'} with no output. Verify 'codex' is installed and authenticated (run 'codex --version' in a terminal).`;
+      return { ok: false, reason: 'non_zero_exit', detail };
     }
 
     return collectPatch(opts, result.stdout);

@@ -29,6 +29,7 @@ export const ERROR_CODES = [
   'AGENT_SINGLETON',
   'AGENT_BUSY',
   'RUN_ACTIVE',
+  'TEST_PLAN_REQUIRED',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

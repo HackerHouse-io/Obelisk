@@ -50,11 +50,14 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
       return { ok: false, reason: 'timeout', detail: `> ${opts.timeoutMs}ms` };
     }
     if (result.exitCode !== 0) {
-      return {
-        ok: false,
-        reason: 'non_zero_exit',
-        detail: `claude exited ${result.exitCode ?? '?'}; stderr: ${result.stderr.slice(-500)}`,
-      };
+      const stderr = result.stderr.trim();
+      const stdoutTail = result.stdout.trim().split('\n').slice(-3).join(' | ').slice(-300);
+      const detail = stderr
+        ? `claude exited ${result.exitCode ?? '?'}; stderr: ${stderr.slice(-500)}`
+        : stdoutTail
+          ? `claude exited ${result.exitCode ?? '?'} with no stderr; last stdout: ${stdoutTail}`
+          : `claude exited ${result.exitCode ?? '?'} with no output. Verify 'claude' is installed and authenticated (run 'claude --version' in a terminal).`;
+      return { ok: false, reason: 'non_zero_exit', detail };
     }
 
     return collectPatch(opts, result.stdout);

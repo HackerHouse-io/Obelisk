@@ -7,6 +7,7 @@ export type Route =
   | 'backlog'
   | 'agents'
   | 'playbook'
+  | 'test-plans'
   | 'qa'
   | 'connect'
   | 'settings';

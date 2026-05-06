@@ -51,6 +51,19 @@ function renderSkills(input: CompileInput): string {
 
 function renderTask(input: CompileInput): string {
   const { task, repo } = input;
+  const planBlock = task.assignedPlan
+    ? [
+        '## Assigned test plan',
+        `Plan: ${task.assignedPlan.name} (id: ${task.assignedPlan.id})`,
+        '',
+        'Execute every test case below. For each case that fails, emit a finding whose',
+        '`case_id` field matches the id from the plan so the user can map findings back',
+        'to specific cases.',
+        '',
+        task.assignedPlan.body,
+        '',
+      ].join('\n')
+    : '';
   return [
     `## Task: ${task.ref}`,
     `Kind: ${task.kind}`,
@@ -59,6 +72,7 @@ function renderTask(input: CompileInput): string {
     '## Context',
     task.context,
     '',
+    planBlock,
     '## Repository',
     `Full name: ${repo.fullName}`,
     `Default branch: ${repo.defaultBranch}`,

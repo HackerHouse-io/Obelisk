@@ -1,11 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ulid } from 'ulid';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { obeliskArtifactUrl } from '../../protocol/obelisk-protocol';
 import { fetchOpenIssueTitles, titleConflicts } from '../lib/find-existing-issue';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { registerArtifactFromPath } from '../lib/register-artifact';
+import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -26,16 +26,17 @@ export const manualQaHandler: AgentHandler = {
   producesPatch: false,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
-    const flowsPath = join(input.repo.localPath, 'qa', 'critical-flows.md');
-    const hasFlows = existsSync(flowsPath);
+    // Manual QA must run against an explicit test plan — the gate is enforced
+    // by resolvePlanForAgentRun, which throws TEST_PLAN_REQUIRED if none exists.
+    const plan = resolvePlanForAgentRun(input.repo, 'manual-qa', input.taskId);
+    const assigned = toAssignedPlan(plan);
     const ts = new Date().toISOString();
     return {
       task: {
-        ref: `qa-sweep:${input.repo.id}:${ulid()}`,
+        ref: `plan:${plan.frontmatter.id}`,
         kind: 'qa',
-        context: hasFlows
-          ? `Run Playwright against the configured base URL for every flow in qa/critical-flows.md. Generated at ${ts}.`
-          : `qa/critical-flows.md not found — run universal bug rules only and emit a banner asking the user to bootstrap the playbook. Generated at ${ts}.`,
+        context: `Run Playwright against the configured base URL and execute every test case in "${plan.frontmatter.name}". Generated at ${ts}.`,
+        assignedPlan: assigned,
       },
     };
   },

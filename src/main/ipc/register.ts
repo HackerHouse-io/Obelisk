@@ -39,7 +39,19 @@ import {
 } from './runs';
 import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
 import { handlePlaybookGet, handlePlaybookRegenerate, handlePlaybookSave } from './playbook';
-import { handlePreviewsList } from './previews';
+import {
+  handlePreviewsList,
+  handlePreviewsGet,
+  handlePreviewsFileIssue,
+  handlePreviewsDismiss,
+} from './previews';
+import {
+  handleTestPlansList,
+  handleTestPlansGet,
+  handleTestPlansSave,
+  handleTestPlansGenerate,
+  handleTestPlansDelete,
+} from './test-plans';
 import {
   handleQaDoctor,
   handleQaDoctorSetup,
@@ -124,6 +136,16 @@ export function registerIpcHandlers(): void {
 
   // Observe-mode previews
   register('previews:list', handlePreviewsList);
+  register('previews:get', handlePreviewsGet);
+  register('previews:fileIssue', handlePreviewsFileIssue);
+  register('previews:dismiss', handlePreviewsDismiss);
+
+  // Test plans (gate the QA agent run flow)
+  register('testPlans:list', handleTestPlansList);
+  register('testPlans:get', handleTestPlansGet);
+  register('testPlans:save', handleTestPlansSave);
+  register('testPlans:generate', handleTestPlansGenerate);
+  register('testPlans:delete', handleTestPlansDelete);
 
   // iOS QA Pilot
   register('qa:list', handleQaList);
