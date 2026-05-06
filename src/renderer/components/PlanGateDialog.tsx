@@ -1,10 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
-import type {
-  Agent,
-  AgentName,
-  TestPlanScope,
-  TestPlanSummary,
-} from '../../shared/types';
+import type { Agent, AgentName, TestPlanScope, TestPlanSummary } from '../../shared/types';
 import { Icon } from '../icons';
 import { labelForAgent, shortDate } from '../format';
 
@@ -55,7 +50,10 @@ export function PlanGateDialog({
   if (state.kind === 'closed') return null;
 
   return (
-    <div className="modal-overlay" onClick={() => state.kind !== 'newPlanForm' || !state.busy ? onClose() : undefined}>
+    <div
+      className="modal-overlay"
+      onClick={() => (state.kind !== 'newPlanForm' || !state.busy ? onClose() : undefined)}
+    >
       <div
         className="modal-panel new-plan-panel"
         role="dialog"
@@ -91,8 +89,8 @@ function NoPlanView({
     <div>
       <div className="modal-title">{labelForAgent(state.agent.name)} needs a test plan</div>
       <div className="modal-body">
-        QA agents only run against an explicit test plan so you always know exactly which test
-        cases will be exercised. Generate one now — the plan is markdown in your repo at{' '}
+        QA agents only run against an explicit test plan so you always know exactly which test cases
+        will be exercised. Generate one now — the plan is markdown in your repo at{' '}
         <span className="mono">qa/test-plans/</span>, and every case is editable.
       </div>
       {state.error ? (
@@ -138,7 +136,10 @@ function NewPlanFormView({
     e.preventDefault();
     if (state.busy) return;
     if (scope === 'feature' && !feature.trim()) return;
-    onSubmit({ scope, ...(scope === 'feature' && feature.trim() ? { featureName: feature.trim() } : {}) });
+    onSubmit({
+      scope,
+      ...(scope === 'feature' && feature.trim() ? { featureName: feature.trim() } : {}),
+    });
   }
 
   return (
@@ -269,10 +270,7 @@ function PickView({
 }
 
 /** Used by Home to compute the right initial state once a list loads. */
-export function gateStateFor(opts: {
-  agent: Agent;
-  plans: TestPlanSummary[];
-}): PlanGateState {
+export function gateStateFor(opts: { agent: Agent; plans: TestPlanSummary[] }): PlanGateState {
   if (opts.plans.length === 0) {
     return { kind: 'noPlan', agent: opts.agent, busy: false, error: null };
   }

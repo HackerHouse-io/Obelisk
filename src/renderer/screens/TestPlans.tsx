@@ -472,7 +472,12 @@ function SectionRow({
           <button type="button" className="btn ghost icon" onClick={onMoveDown} title="Move down">
             <Icon.ChevronDown size={11} />
           </button>
-          <button type="button" className="btn ghost icon" onClick={onDelete} title="Delete section">
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={onDelete}
+            title="Delete section"
+          >
             <Icon.Trash size={11} />
           </button>
         </div>
@@ -511,10 +516,7 @@ function CaseRow({
           placeholder="Test case title"
           onCommit={(title) => onChange({ title })}
         />
-        <SeveritySelect
-          value={block.severity}
-          onChange={(severity) => onChange({ severity })}
-        />
+        <SeveritySelect value={block.severity} onChange={(severity) => onChange({ severity })} />
         <div className="plan-block-actions">
           <button type="button" className="btn ghost icon" onClick={onMoveUp} title="Move up">
             <Icon.ChevronDown size={11} style={{ transform: 'rotate(180deg)' }} />
@@ -725,28 +727,18 @@ function NewPlanDialog({
           ) : null}
 
           <div className="modal-actions">
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={onClose}
-              disabled={state.busy}
-            >
+            <button type="button" className="btn ghost" onClick={onClose} disabled={state.busy}>
               Cancel
             </button>
             <button
               type="submit"
               className="btn primary"
-              disabled={
-                state.busy || (state.scope === 'feature' && !state.featureName.trim())
-              }
+              disabled={state.busy || (state.scope === 'feature' && !state.featureName.trim())}
               data-testid="plan-generate-submit"
             >
               {state.busy ? (
                 <>
-                  <Icon.Spinner
-                    size={12}
-                    style={{ animation: 'spin 0.9s linear infinite' }}
-                  />{' '}
+                  <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
                   Generating…
                 </>
               ) : (

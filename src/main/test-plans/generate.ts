@@ -112,7 +112,15 @@ function claudeArgs(): string[] {
 }
 
 function codexArgs(): string[] {
-  return ['exec', '--model', 'gpt-5', '--sandbox', 'read-only', '-c', 'model_reasoning_effort="high"'];
+  return [
+    'exec',
+    '--model',
+    'gpt-5',
+    '--sandbox',
+    'read-only',
+    '-c',
+    'model_reasoning_effort="high"',
+  ];
 }
 
 const GEN_SYSTEM_PROMPT =
@@ -125,9 +133,7 @@ function generatorPrompt(input: GenerateInput, skeleton: TestPlanBlock[]): strin
       : `Produce a test plan covering every user-facing feature of this codebase. Read the repo layout (src/, app/, lib/) to identify features. Produce one section per feature plus a "Smoke" section.`;
 
   const seedSummary = skeleton
-    .map((b) =>
-      b.kind === 'section' ? `## ${b.title}` : `- [ ] ${b.title}`,
-    )
+    .map((b) => (b.kind === 'section' ? `## ${b.title}` : `- [ ] ${b.title}`))
     .join('\n');
 
   return [
@@ -186,7 +192,10 @@ function parseBlocksJson(stdout: string): TestPlanBlock[] | null {
       continue;
     }
     if (o.kind === 'case' && typeof o.title === 'string') {
-      const sev = typeof o.severity === 'string' && /^P[012]$/.test(o.severity) ? (o.severity as 'P0' | 'P1' | 'P2') : null;
+      const sev =
+        typeof o.severity === 'string' && /^P[012]$/.test(o.severity)
+          ? (o.severity as 'P0' | 'P1' | 'P2')
+          : null;
       blocks.push({
         kind: 'case',
         id: ulid(),

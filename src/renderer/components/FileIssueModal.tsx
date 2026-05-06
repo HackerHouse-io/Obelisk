@@ -260,12 +260,7 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
           ) : null}
 
           <div className="modal-actions file-issue-actions">
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={onClose}
-              disabled={sending}
-            >
+            <button type="button" className="btn ghost" onClick={onClose} disabled={sending}>
               Cancel
             </button>
             <button
@@ -295,7 +290,9 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
 }
 
 function extractReproSummary(body: string): string | null {
-  const m = body.match(/(?:^|\n)\s*(?:\*\*)?(?:Steps to reproduce|Repro)(?:\*\*)?[:\s]*\n([\s\S]*?)(?:\n\s*\n|$)/i);
+  const m = body.match(
+    /(?:^|\n)\s*(?:\*\*)?(?:Steps to reproduce|Repro)(?:\*\*)?[:\s]*\n([\s\S]*?)(?:\n\s*\n|$)/i,
+  );
   if (!m || !m[1]) return null;
   const steps = m[1].split('\n').filter((l) => /^\s*(\d+\.|[-*])/.test(l)).length;
   if (steps === 0) return null;

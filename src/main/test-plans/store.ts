@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { ObeliskError } from '../../shared/errors';
 import type {
@@ -116,7 +124,7 @@ export function createPlan(input: CreatePlanInput): TestPlan {
     id,
     name: defaultPlanName(input),
     scope: input.scope,
-    feature: input.scope === 'feature' ? input.featureName?.trim() ?? null : null,
+    feature: input.scope === 'feature' ? (input.featureName?.trim() ?? null) : null,
     agentName: input.agentName,
     generatedAt: new Date().toISOString(),
     generatedBy: input.generatedBy,
@@ -159,11 +167,13 @@ function nextPlanId(input: CreatePlanInput): string {
 }
 
 function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 48) || 'plan';
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+      .slice(0, 48) || 'plan'
+  );
 }
 
 function capitalize(s: string): string {

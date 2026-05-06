@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { runAgentByName } from '../state/agent-actions';
@@ -609,11 +617,7 @@ function RunDrawer({
       </div>
       <div className="mc-tab-body">
         {tab === 'findings' && (
-          <FindingsTab
-            findings={findings}
-            onOpen={setModalFinding}
-            onDismiss={dismissFinding}
-          />
+          <FindingsTab findings={findings} onOpen={setModalFinding} onDismiss={dismissFinding} />
         )}
         {tab === 'audit' && <AuditTab lines={details?.auditLog ?? []} />}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}

@@ -59,7 +59,8 @@ export const iosQaPilotHandler: AgentHandler = {
     // the (single) plan registered for this agent or throws TEST_PLAN_REQUIRED.
     const planTaskId = parsePlanHint(input.taskId)
       ? input.taskId
-      : `${PLAN_HINT_PREFIX}` + (resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', undefined).frontmatter.id);
+      : `${PLAN_HINT_PREFIX}` +
+        resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', undefined).frontmatter.id;
     const plan = resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', planTaskId);
     const assigned = toAssignedPlan(plan);
 

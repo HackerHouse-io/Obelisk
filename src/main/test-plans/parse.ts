@@ -45,10 +45,7 @@ export function parsePlanFile(raw: string): ParsedPlan {
   return { frontmatter: fm, blocks };
 }
 
-export function serializePlan(
-  frontmatter: TestPlanFrontmatter,
-  blocks: TestPlanBlock[],
-): string {
+export function serializePlan(frontmatter: TestPlanFrontmatter, blocks: TestPlanBlock[]): string {
   const fmYaml = [
     `id: ${frontmatter.id}`,
     `name: ${quoteIfNeeded(frontmatter.name)}`,
@@ -138,14 +135,15 @@ function normalizeFrontmatter(raw: Record<string, unknown>): TestPlanFrontmatter
   const feature = stringField(raw, 'feature');
   const agentName = (stringField(raw, 'agentName') ?? 'qa-hunter') as AgentName;
   const generatedAt = stringField(raw, 'generatedAt') ?? new Date().toISOString();
-  const generatedBy = (stringField(raw, 'generatedBy') ?? 'manual') as TestPlanFrontmatter['generatedBy'];
+  const generatedBy = (stringField(raw, 'generatedBy') ??
+    'manual') as TestPlanFrontmatter['generatedBy'];
   const versionRaw = raw['version'];
   const version = typeof versionRaw === 'number' ? versionRaw : 1;
   return {
     id,
     name,
     scope: scope === 'feature' ? 'feature' : 'whole-app',
-    feature: scope === 'feature' ? feature ?? null : null,
+    feature: scope === 'feature' ? (feature ?? null) : null,
     agentName,
     generatedAt,
     generatedBy,

@@ -44,10 +44,7 @@ export async function handleTestPlansGenerate(
 ): Promise<IpcMap['testPlans:generate']['res']> {
   const repo = repoOrThrow(payload.repoId);
   if (payload.scope === 'feature' && !payload.featureName?.trim()) {
-    throw new ObeliskError(
-      'INVALID_INPUT',
-      'A feature name is required for feature-scoped plans.',
-    );
+    throw new ObeliskError('INVALID_INPUT', 'A feature name is required for feature-scoped plans.');
   }
   const plan = await generateTestPlan({
     repo,

@@ -115,7 +115,11 @@ export function FindingPreview({
 
 function SeverityPill({ severity }: { severity: FindingSeverity | null }): ReactElement {
   if (!severity) return <span className="finding-sev-spacer" aria-hidden="true" />;
-  return <span className={`pill sev-${severity.toLowerCase()} ${SEVERITY_TONE[severity]}`}>{severity}</span>;
+  return (
+    <span className={`pill sev-${severity.toLowerCase()} ${SEVERITY_TONE[severity]}`}>
+      {severity}
+    </span>
+  );
 }
 
 export function EvidenceStrip({ finding }: { finding: PreviewedFinding }): ReactElement {

@@ -71,10 +71,7 @@ function loadEvidenceMap(runIds: string[]): Map<string, PreviewEvidence[]> {
   if (runIds.length === 0) return map;
   const placeholders = runIds.map(() => '?').join(',');
   const rows = getDb()
-    .prepare<
-      string[],
-      { run_id: string; id: string; kind: string; path: string; bytes: number }
-    >(
+    .prepare<string[], { run_id: string; id: string; kind: string; path: string; bytes: number }>(
       `SELECT run_id, id, kind, path, bytes
        FROM evidence_artifacts
        WHERE run_id IN (${placeholders})
@@ -96,10 +93,7 @@ function loadAuditMarkerMap<T>(
 ): Map<number, T> {
   const map = new Map<number, T>();
   const rows = getDb()
-    .prepare<
-      [string],
-      { src: number | null; payload: string; at: string }
-    >(
+    .prepare<[string], { src: number | null; payload: string; at: string }>(
       `SELECT json_extract(payload,'$.sourcePreviewId') AS src, payload, at
        FROM audit_log
        WHERE kind = ?

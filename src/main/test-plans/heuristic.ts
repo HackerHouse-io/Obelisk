@@ -70,8 +70,12 @@ function smokeCases(agentName: AgentName): TestPlanBlock[] {
     ),
     caseBlock(
       'Primary navigation works',
-      ui ? 'All top-level nav items load their target screens.' : 'Routes resolve to expected modules.',
-      ui ? 'Click each item in the top-level navigation.' : 'Inspect router config and render targets.',
+      ui
+        ? 'All top-level nav items load their target screens.'
+        : 'Routes resolve to expected modules.',
+      ui
+        ? 'Click each item in the top-level navigation.'
+        : 'Inspect router config and render targets.',
       'P1',
     ),
   ];
