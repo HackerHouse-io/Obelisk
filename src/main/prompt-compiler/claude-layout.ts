@@ -1,3 +1,4 @@
+import { resolveRunnerModel } from '../runners/effective-default';
 import type { CompileInput, CompiledPrompt, AttachmentFile } from './types';
 
 /**
@@ -101,25 +102,26 @@ function renderAssignedPlanBlock(task: import('./types').TaskPayload): string {
 
 function renderClaudeSettings(input: CompileInput): string {
   // The shape mirrors what the `claude` CLI consumes for tool gating.
-  // Phase 3 keeps this minimal; Phase 4+ wires real tool ACLs.
-  return JSON.stringify(
-    {
-      permissions: {
-        allowedTools: ['fs.read', 'fs.write', 'shell.run', 'git.commit'],
-        deny:
-          input.permissions.mode === 'observe'
-            ? ['git.push', 'github.create_issue', 'github.create_pr', 'github.merge']
-            : input.permissions.mode === 'issues'
-              ? ['github.create_pr', 'github.merge']
-              : input.permissions.mode === 'prs'
-                ? ['github.merge']
-                : [],
-      },
-      defaultModel: 'claude-sonnet-4-6',
+  // `defaultModel` is set ONLY when the user configured a Claude model in
+  // Settings — hardcoding a name like `claude-sonnet-4-6` rots fast as new
+  // model versions ship, and pinning a model the user's account doesn't
+  // license breaks the CLI invocation. Empty Settings → claude picks.
+  const claudeModel = resolveRunnerModel('claude', undefined);
+  const settings: Record<string, unknown> = {
+    permissions: {
+      allowedTools: ['fs.read', 'fs.write', 'shell.run', 'git.commit'],
+      deny:
+        input.permissions.mode === 'observe'
+          ? ['git.push', 'github.create_issue', 'github.create_pr', 'github.merge']
+          : input.permissions.mode === 'issues'
+            ? ['github.create_pr', 'github.merge']
+            : input.permissions.mode === 'prs'
+              ? ['github.merge']
+              : [],
     },
-    null,
-    2,
-  );
+  };
+  if (claudeModel) settings['defaultModel'] = claudeModel;
+  return JSON.stringify(settings, null, 2);
 }
 
 function renderRunnerArgs(_input: CompileInput): string[] {

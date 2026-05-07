@@ -50,6 +50,8 @@ import {
   handleTestPlansGet,
   handleTestPlansSave,
   handleTestPlansGenerate,
+  handleTestPlansGenerationJobs,
+  handleTestPlansDismissJob,
   handleTestPlansDelete,
 } from './test-plans';
 import {
@@ -145,6 +147,8 @@ export function registerIpcHandlers(): void {
   register('testPlans:get', handleTestPlansGet);
   register('testPlans:save', handleTestPlansSave);
   register('testPlans:generate', handleTestPlansGenerate);
+  register('testPlans:generationJobs', handleTestPlansGenerationJobs);
+  register('testPlans:dismissJob', handleTestPlansDismissJob);
   register('testPlans:delete', handleTestPlansDelete);
 
   // iOS QA Pilot

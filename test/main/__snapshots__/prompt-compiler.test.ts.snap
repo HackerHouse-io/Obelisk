@@ -91,8 +91,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     "deny": [
       "github.merge"
     ]
-  },
-  "defaultModel": "claude-sonnet-4-6"
+  }
 }",
       "path": ".claude/settings.json",
     },
@@ -180,8 +179,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > bug-fixer × codex 1`]
   "contentHash": "e59b96659c1d6d01488d68bb539ec9476d028fa3a717ccad00b758f815ec3b9e",
   "runnerArgs": [
     "exec",
-    "--model",
-    "gpt-5",
+    "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
     "-c",
@@ -578,8 +576,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     "deny": [
       "github.merge"
     ]
-  },
-  "defaultModel": "claude-sonnet-4-6"
+  }
 }",
       "path": ".claude/settings.json",
     },
@@ -686,8 +683,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > feature-builder × cod
   "contentHash": "c6467adbf010f7548ed38392e1c57371545a70cf9d69628bac78fc4daa378b0b",
   "runnerArgs": [
     "exec",
-    "--model",
-    "gpt-5",
+    "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
     "-c",
@@ -1059,8 +1055,7 @@ Find the root cause, not a symptom that quiets the alarm.
     "deny": [
       "github.merge"
     ]
-  },
-  "defaultModel": "claude-sonnet-4-6"
+  }
 }",
       "path": ".claude/settings.json",
     },
@@ -1161,8 +1156,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > manual-qa × codex 1`]
   "contentHash": "4d6ad3a99205b315743a8bd6cfb9ea90895826c37de7e2101be83b8976bfc108",
   "runnerArgs": [
     "exec",
-    "--model",
-    "gpt-5",
+    "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
     "-c",
@@ -1379,8 +1373,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
       "github.create_pr",
       "github.merge"
     ]
-  },
-  "defaultModel": "claude-sonnet-4-6"
+  }
 }",
       "path": ".claude/settings.json",
     },
@@ -1480,8 +1473,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > pr-reviewer × codex 1
   "contentHash": "fedd4bbb972cb5426cd4d6d5458bfdb86b3f8dfb439f6c1c9ff57282990d7889",
   "runnerArgs": [
     "exec",
-    "--model",
-    "gpt-5",
+    "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
     "-c",
@@ -1739,8 +1731,7 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
       "github.create_pr",
       "github.merge"
     ]
-  },
-  "defaultModel": "claude-sonnet-4-6"
+  }
 }",
       "path": ".claude/settings.json",
     },
@@ -1836,8 +1827,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > qa-hunter × codex 1`]
   "contentHash": "55a0426a092a75231d29f23f621983563967cb007504c0548f0982b20c8f43f4",
   "runnerArgs": [
     "exec",
-    "--model",
-    "gpt-5",
+    "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
     "-c",

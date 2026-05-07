@@ -204,11 +204,11 @@ export function Home(): ReactElement {
         setPlanGate({ ...planGate, busy: false, error: res.error.message });
         return;
       }
+      // Generation runs in the background; close the modal and let the
+      // floating toast surface progress + the "Open" CTA on completion.
       setPlanGate({ kind: 'closed' });
-      // Take the user to the plan editor so they can review before running.
-      setRoute('test-plans');
     },
-    [planGate, setRoute],
+    [planGate],
   );
 
   const onPickFromGate = useCallback(
@@ -301,12 +301,11 @@ export function Home(): ReactElement {
       {repo.mode === 'observe' ? (
         <ObservePreviews
           findings={previews.findings}
-          playbookDraft={previews.playbookDraft}
           repoMode={repo.mode}
           installedAgents={agents}
           runState={runState}
           onUpgradeMode={() => setRoute('settings')}
-          onOpenPlaybook={() => setRoute('playbook')}
+          onOpenTestPlans={() => setRoute('test-plans')}
           onOpenFinding={setModalFinding}
           onDismissFinding={dismissPreview}
           onRunAgent={runAgent}
@@ -614,23 +613,21 @@ function RunButton({
 
 function ObservePreviews({
   findings,
-  playbookDraft,
   installedAgents,
   runState,
   onUpgradeMode,
-  onOpenPlaybook,
+  onOpenTestPlans,
   onOpenFinding,
   onDismissFinding,
   onRunAgent,
   onDismissError,
 }: {
   findings: PreviewsResponse['findings'];
-  playbookDraft: PreviewsResponse['playbookDraft'];
   repoMode: SafetyMode;
   installedAgents: Agent[];
   runState: RunStateMap;
   onUpgradeMode: () => void;
-  onOpenPlaybook: () => void;
+  onOpenTestPlans: () => void;
   onOpenFinding: (f: PreviewedFinding) => void;
   onDismissFinding: (f: PreviewedFinding) => void;
   onRunAgent: (a: Agent) => Promise<void> | void;
@@ -653,33 +650,6 @@ function ObservePreviews({
         Safety mode is set to <span className="mono">observe</span>, so nothing has been written to
         GitHub. Findings show up here — review and click <em>Open issue</em> to file each one.
       </div>
-
-      {playbookDraft ? (
-        <div className="preview-card">
-          <div className="row gap-2" style={{ alignItems: 'center' }}>
-            <Icon.Playbook size={13} color="var(--t-1)" />
-            <div style={{ fontWeight: 600, fontSize: 13 }}>QA playbook draft</div>
-            <span className="pill" style={{ marginLeft: 'auto' }}>
-              draft
-            </span>
-          </div>
-          <div className="preview-card-sub">
-            Detected framework <span className="mono">{playbookDraft.framework}</span> ·{' '}
-            {playbookDraft.fileCount} file{playbookDraft.fileCount === 1 ? '' : 's'} ·{' '}
-            {playbookDraft.criticalFlows.length} critical flow
-            {playbookDraft.criticalFlows.length === 1 ? '' : 's'} · generated{' '}
-            {short(playbookDraft.generatedAt)}
-          </div>
-          <div className="row gap-2">
-            <button type="button" className="btn sm" onClick={onOpenPlaybook}>
-              <Icon.Doc size={11} /> Review draft
-            </button>
-            <button type="button" className="btn sm" onClick={onUpgradeMode}>
-              Open as PR
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       {runState.error ? (
         <div className="observe-error" role="alert" data-testid="run-error">
@@ -708,8 +678,8 @@ function ObservePreviews({
         <div className="observe-empty">
           <div className="observe-empty-title">No findings yet</div>
           <div className="observe-empty-sub">
-            Run a QA agent to walk your code or app and surface bugs here. Each finding gets a
-            review modal — edit the title and body before sending it to GitHub.
+            Pick a QA agent and a test plan; the agent runs, surfaces bugs here, and you choose
+            which to file as GitHub issues.
           </div>
           <div className="row gap-2 observe-empty-actions">
             {qaAgents.length === 0 ? (
@@ -717,15 +687,20 @@ function ObservePreviews({
                 No QA agents installed. Add one from <em>Configure</em>.
               </span>
             ) : (
-              qaAgents.map((a) => (
-                <RunButton
-                  key={a.id}
-                  agent={a}
-                  pending={runState.pending.has(a.id)}
-                  onRun={() => void onRunAgent(a)}
-                  variant="primary"
-                />
-              ))
+              <>
+                {qaAgents.map((a) => (
+                  <RunButton
+                    key={a.id}
+                    agent={a}
+                    pending={runState.pending.has(a.id)}
+                    onRun={() => void onRunAgent(a)}
+                    variant="primary"
+                  />
+                ))}
+                <button type="button" className="btn ghost sm" onClick={onOpenTestPlans}>
+                  <Icon.Doc size={11} /> Manage test plans
+                </button>
+              </>
             )}
           </div>
         </div>

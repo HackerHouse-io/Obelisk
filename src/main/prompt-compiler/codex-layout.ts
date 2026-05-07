@@ -1,3 +1,4 @@
+import { resolveRunnerModel } from '../runners/effective-default';
 import type { CompileInput, CompiledPrompt } from './types';
 
 /**
@@ -100,13 +101,39 @@ function renderRunnerArgs(input: CompileInput): string[] {
     input.agent.name === 'feature-builder' || input.agent.name === 'bug-fixer' ? 'high' : 'medium';
   // codex exec reads the prompt from stdin (we pipe userMessage in the runner).
   // Reasoning effort isn't a top-level flag — set it via -c config override.
-  return [
+  // `--model` is only added when the user explicitly configured one in Settings.
+  // Hardcoding model names breaks ChatGPT-account Codex sign-ins (which reject
+  // `gpt-5` etc.) and rots fast as model versions ship.
+  return buildCodexExecArgs({ sandbox: 'workspace-write', reasoning });
+}
+
+export function buildCodexExecArgs(opts: {
+  sandbox: 'workspace-write' | 'read-only';
+  reasoning: 'high' | 'medium' | 'low';
+  /**
+   * Per-call model override. `undefined` means "fall through to Settings",
+   * a non-empty string means "use this exact model name", and `null`
+   * (or the empty string after trim) means "force CLI default — skip the
+   * --model flag entirely". The `null`/empty path is what unblocks
+   * ChatGPT-account Codex sign-ins.
+   */
+  modelOverride?: string | null;
+}): string[] {
+  // `--skip-git-repo-check` is required for Obelisk: we run codex inside an
+  // ephemeral per-run git worktree, which the user has never pre-trusted via
+  // codex's interactive trust-prompt. Without this flag codex exits 1 with
+  // "Not inside a trusted directory" before even reading the prompt.
+  const args = [
     'exec',
-    '--model',
-    'gpt-5',
+    '--skip-git-repo-check',
     '--sandbox',
-    'workspace-write',
+    opts.sandbox,
     '-c',
-    `model_reasoning_effort="${reasoning}"`,
+    `model_reasoning_effort="${opts.reasoning}"`,
   ];
+  const resolved = resolveRunnerModel('codex', opts.modelOverride);
+  if (resolved) {
+    args.splice(1, 0, '--model', resolved);
+  }
+  return args;
 }

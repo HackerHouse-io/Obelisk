@@ -202,8 +202,44 @@ export interface TestPlanSummary {
   updatedAt: ISO;
 }
 
+export type TestPlanGenerationStage =
+  | 'queued'
+  | 'spawning'
+  | 'reading'
+  | 'drafting'
+  | 'writing'
+  | 'done'
+  | 'failed';
+
+export interface TestPlanGenerationJob {
+  jobId: string;
+  repoId: string;
+  agentName: AgentName;
+  scope: TestPlanScope;
+  feature: string | null;
+  stage: TestPlanGenerationStage;
+  /** Human-readable status line, advances with the stage. */
+  status: string;
+  startedAt: ISO;
+  finishedAt: ISO | null;
+  /** Set on stage='done'. */
+  planId: string | null;
+  /** Set on stage='failed'. */
+  errorMessage: string | null;
+  errorHint: string | null;
+}
+
 export interface Settings {
   defaultRunner: RunnerKind;
+  /**
+   * Default model name passed to the Claude Code CLI. Empty string means
+   * "let the CLI use its own default" — preferred when the user hasn't
+   * explicitly chosen, since model identifiers rotate frequently and
+   * pinning one the user's account doesn't license breaks the call.
+   */
+  claudeModel: string;
+  /** Default model name passed to the Codex CLI. Same semantics as `claudeModel`. */
+  codexModel: string;
   attributionMode: AttributionMode;
   cloudExecutionEnabled: boolean; // v0.1: always false
 }
@@ -424,6 +460,7 @@ export interface IpcMap {
       repoId: string;
       blocks: TestPlanBlock[];
       name?: string;
+      agentName?: AgentName;
     };
     res: { savedAt: ISO };
   };
@@ -433,9 +470,18 @@ export interface IpcMap {
       agentName: AgentName;
       scope: TestPlanScope;
       featureName?: string;
+      /** Per-generation override; falls through to Settings when absent. */
+      runnerOverride?: RunnerKind;
+      /** Per-generation override; falls through to Settings when absent. Empty string clears. */
+      modelOverride?: string;
     };
-    res: { planId: string };
+    res: { jobId: string };
   };
+  'testPlans:generationJobs': {
+    req: { repoId?: string };
+    res: TestPlanGenerationJob[];
+  };
+  'testPlans:dismissJob': { req: { jobId: string }; res: { ok: true } };
   'testPlans:delete': { req: { planId: string; repoId: string }; res: { ok: true } };
 
   // iOS QA Pilot
@@ -480,6 +526,7 @@ export type BusEvent =
   | { type: 'qa.doctorChanged'; repoId: string }
   | { type: 'previews.changed'; repoId: string }
   | { type: 'testPlans.changed'; repoId: string }
+  | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }
   | { type: 'system.heartbeat'; at: ISO };
 
 /* ---------- Renderer-side bridge surface ---------- */

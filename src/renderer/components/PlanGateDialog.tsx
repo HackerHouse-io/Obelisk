@@ -209,10 +209,12 @@ function NewPlanFormView({
           {state.busy ? (
             <>
               <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
-              Generating…
+              Starting…
             </>
           ) : (
-            <>Generate plan</>
+            <>
+              <Icon.Sparkles size={12} /> Draft plan
+            </>
           )}
         </button>
       </div>

@@ -201,7 +201,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       !result.ok && result.reason === 'no_changes' && handler.producesPatch === false;
 
     if (!result.ok && !isReadOnlyNoChanges) {
-      const errorCode = errorCodeForReason(result.reason);
+      const errorCode = errorCodeForFailure(result.reason, result.detail);
       appendAudit({
         runId: run.id,
         kind: 'state',
@@ -327,6 +327,31 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
     const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
 
+    // Observe-mode preview path comes first so QA agents that produced zero
+    // findings still get a friendly "Plan executed; no findings." summary
+    // (the generic noop-summary below would otherwise win and confuse users).
+    if (handler.skipsEvidenceGate && repo.mode === 'observe') {
+      for (const plan of plans) {
+        appendAudit({
+          runId: run.id,
+          kind: 'preview',
+          payload: plan,
+        });
+      }
+      const summary =
+        plans.length === 0
+          ? 'Plan executed; no findings.'
+          : plans.length === 1
+            ? 'Filed 1 preview — review on Home.'
+            : `Filed ${plans.length} previews — review on Home.`;
+      transitionRun(run.id, 'done', {
+        outputSummary: summary,
+        runnerUsed: runResult.runnerUsed,
+        fallbackUsed: runResult.fallbackUsed,
+      });
+      return { runId: run.id, finalState: 'done', reason: 'previewed' };
+    }
+
     if (plans.length === 0) {
       const summary = 'agent produced no actionable findings';
       appendAudit({ runId: run.id, kind: 'state', payload: { outcome: 'noop', reason: summary } });
@@ -336,24 +361,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         fallbackUsed: runResult.fallbackUsed,
       });
       return { runId: run.id, finalState: 'done', reason: summary };
-    }
-
-    // Observe-mode preview: PR-opening agents ALWAYS need writes; issue-only
-    // agents (skipsEvidenceGate=true) preview to audit_log instead.
-    if (handler.skipsEvidenceGate && repo.mode === 'observe') {
-      for (const plan of plans) {
-        appendAudit({
-          runId: run.id,
-          kind: 'preview',
-          payload: plan,
-        });
-      }
-      transitionRun(run.id, 'done', {
-        outputSummary: `Previewed ${plans.length} finding${plans.length === 1 ? '' : 's'} (observe mode)`,
-        runnerUsed: runResult.runnerUsed,
-        fallbackUsed: runResult.fallbackUsed,
-      });
-      return { runId: run.id, finalState: 'done', reason: 'previewed' };
     }
 
     // Iterate plans. PR plans get the rendered Evidence body filled in.
@@ -601,12 +608,20 @@ function maybeRepoOverrideDirs(repoPath: string): {
   return out;
 }
 
-function errorCodeForReason(reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes'): string {
+function errorCodeForFailure(
+  reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes',
+  detail: string,
+): string {
   switch (reason) {
     case 'timeout':
       return 'TIMEOUT';
     case 'crash':
+      return 'INTERNAL';
     case 'non_zero_exit':
+      // The CLI runners format their detail strings with a "with no output"
+      // suffix when neither stdout nor stderr was produced; that's almost
+      // always an install/auth issue worth distinguishing from a crash.
+      if (/with no output\b/i.test(detail)) return 'RUNNER_NO_OUTPUT';
       return 'INTERNAL';
     case 'no_changes':
       return 'INTERNAL';

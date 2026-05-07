@@ -138,21 +138,25 @@ describe('toAssignedPlan', () => {
   });
 });
 
-describe('generateTestPlan (heuristic fallback path)', () => {
-  it('falls back to the heuristic skeleton when no LLM runner is on PATH', async () => {
-    // Force the runner check to fail by clearing PATH for this test.
-    const originalPath = process.env['PATH'];
-    process.env['PATH'] = '';
-    try {
-      const plan = await generateTestPlan({
-        repo: fakeRepo(),
-        agentName: 'qa-hunter',
-        scope: 'whole-app',
-      });
-      expect(plan.frontmatter.generatedBy).toBe('heuristic');
-      expect(plan.caseCount).toBeGreaterThan(0);
-    } finally {
-      process.env['PATH'] = originalPath;
-    }
-  });
+describe('generateTestPlan (LLM-only)', () => {
+  it(
+    'rejects when no runner is installed (no silent skeleton fallback)',
+    async () => {
+      // Force the runner check to fail by clearing PATH for this test.
+      const originalPath = process.env['PATH'];
+      process.env['PATH'] = '';
+      try {
+        await expect(
+          generateTestPlan({
+            repo: fakeRepo(),
+            agentName: 'qa-hunter',
+            scope: 'whole-app',
+          }),
+        ).rejects.toThrow(/Neither Claude Code nor Codex/);
+      } finally {
+        process.env['PATH'] = originalPath;
+      }
+    },
+    20_000,
+  );
 });

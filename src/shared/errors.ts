@@ -30,6 +30,8 @@ export const ERROR_CODES = [
   'AGENT_BUSY',
   'RUN_ACTIVE',
   'TEST_PLAN_REQUIRED',
+  'RUNNER_NO_OUTPUT',
+  'FINDINGS_NOT_PARSEABLE',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -90,6 +90,8 @@ export interface SavePlanInput {
   blocks: TestPlanBlock[];
   /** Allow renaming via save without forcing a separate IPC round-trip. */
   name?: string;
+  /** Switch which QA agent this plan targets at run time. */
+  agentName?: AgentName;
 }
 
 export function savePlan(input: SavePlanInput): TestPlan {
@@ -101,6 +103,7 @@ export function savePlan(input: SavePlanInput): TestPlan {
   const next: TestPlanFrontmatter = {
     ...existing.frontmatter,
     name: input.name?.trim() || existing.frontmatter.name,
+    agentName: input.agentName ?? existing.frontmatter.agentName,
     version: existing.frontmatter.version + 1,
   };
   ensureDir(plansDir(input.repoPath));

@@ -7,6 +7,7 @@ import { createWorktree, destroyWorktree } from '../../git/worktree';
 import { spawnAgentCli } from '../../runners/spawn';
 import { runnerEnv } from '../../runners/env';
 import { effectiveDefaultRunner } from '../../runners/effective-default';
+import { buildCodexExecArgs } from '../../prompt-compiler/codex-layout';
 import { walkMarkdownFiles } from '../../util/walk-markdown';
 import { bootstrapPlaybook, type PlaybookFile } from '../playbook-bootstrapper';
 
@@ -94,15 +95,10 @@ function claudeArgs(): string[] {
 }
 
 function codexArgs(): string[] {
-  return [
-    'exec',
-    '--model',
-    'gpt-5',
-    '--sandbox',
-    'workspace-write',
-    '-c',
-    'model_reasoning_effort="high"',
-  ];
+  // Single source of truth for codex args — picks up the user's configured
+  // model from Settings (or omits --model entirely when empty, which is the
+  // only configuration ChatGPT-account Codex sign-ins accept).
+  return buildCodexExecArgs({ sandbox: 'workspace-write', reasoning: 'high' });
 }
 
 function curatorPrompt(repo: Repo, framework: string): string {

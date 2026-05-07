@@ -1,6 +1,7 @@
 import { ObeliskError } from '../../shared/errors';
 import { getRepo } from '../db/repos';
-import { generateTestPlan } from '../test-plans/generate';
+import { startGenerationJob } from '../test-plans/generate';
+import { dismissJob, listJobs } from '../test-plans/jobs';
 import { deletePlan, getPlan, listPlans, savePlan } from '../test-plans/store';
 import { broadcast } from './bus';
 import type { IpcMap } from '../../shared/types';
@@ -34,6 +35,7 @@ export async function handleTestPlansSave(
     planId: payload.planId,
     blocks: payload.blocks,
     ...(payload.name ? { name: payload.name } : {}),
+    ...(payload.agentName ? { agentName: payload.agentName } : {}),
   });
   broadcast({ type: 'testPlans.changed', repoId: repo.id });
   return { savedAt: saved.updatedAt };
@@ -46,14 +48,30 @@ export async function handleTestPlansGenerate(
   if (payload.scope === 'feature' && !payload.featureName?.trim()) {
     throw new ObeliskError('INVALID_INPUT', 'A feature name is required for feature-scoped plans.');
   }
-  const plan = await generateTestPlan({
+  // Returns immediately with a jobId; the actual generation runs in the
+  // background and broadcasts `testPlanGeneration.progress` events.
+  const jobId = startGenerationJob({
     repo,
     agentName: payload.agentName,
     scope: payload.scope,
     ...(payload.featureName ? { featureName: payload.featureName } : {}),
+    ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
+    ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
   });
-  broadcast({ type: 'testPlans.changed', repoId: repo.id });
-  return { planId: plan.frontmatter.id };
+  return { jobId };
+}
+
+export async function handleTestPlansGenerationJobs(
+  payload: IpcMap['testPlans:generationJobs']['req'],
+): Promise<IpcMap['testPlans:generationJobs']['res']> {
+  return listJobs(payload.repoId);
+}
+
+export async function handleTestPlansDismissJob(
+  payload: IpcMap['testPlans:dismissJob']['req'],
+): Promise<IpcMap['testPlans:dismissJob']['res']> {
+  dismissJob(payload.jobId);
+  return { ok: true };
 }
 
 export async function handleTestPlansDelete(

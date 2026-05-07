@@ -77,6 +77,7 @@ export function spawnAgentCli(opts: SpawnOpts): Promise<SpawnResult> {
         stderr += chunk;
         for (const line of chunk.split(/\r?\n/)) {
           if (line.length === 0) continue;
+          if (isRunnerSetupNoise(line)) continue;
           opts.onAudit({ at: new Date().toISOString(), kind: 'stderr', payload: line });
         }
       });
@@ -98,6 +99,36 @@ export function spawnAgentCli(opts: SpawnOpts): Promise<SpawnResult> {
       resolve({ exitCode: code, signal, stdout, stderr, timedOut });
     });
   });
+}
+
+/**
+ * The codex / claude CLIs print their startup banner + config to stderr
+ * before the actual run begins. These lines are operational noise — they
+ * tell the user nothing about the run itself, but they bury the signal in
+ * the audit log. Suppress them at capture time; the full stderr is still
+ * retained on the SpawnResult for failure-detail surfacing.
+ */
+const RUNNER_NOISE_PREFIXES = [
+  'Reading prompt from stdin',
+  'OpenAI Codex',
+  'workdir:',
+  'model:',
+  'provider:',
+  'approval:',
+  'sandbox:',
+  'reasoning effort:',
+  'reasoning summaries:',
+  'session id:',
+];
+
+function isRunnerSetupNoise(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return true;
+  if (/^-{3,}$/.test(trimmed)) return true;
+  for (const p of RUNNER_NOISE_PREFIXES) {
+    if (trimmed.startsWith(p)) return true;
+  }
+  return false;
 }
 
 /**

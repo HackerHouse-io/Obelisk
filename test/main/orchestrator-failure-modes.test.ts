@@ -213,6 +213,72 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
     expect(run?.error_code).toBe('TIMEOUT');
   });
 
+  it('RUNNER_NO_OUTPUT — empty-stderr non-zero exit gets a distinct error code', async () => {
+    const repo = createRepo({
+      githubFullName: 'test/x',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'observe',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'qa-hunter' });
+    addToAllowlist(repo.id, 'test-user', 'auto');
+    seedTestPlanFile({ repoPath, agentName: 'qa-hunter' });
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'qa-hunter',
+      trigger: 'manual',
+      runnerFactory: factoryFor({
+        filesToWrite: [],
+        failWith: {
+          reason: 'non_zero_exit',
+          detail: "claude exited 1 with no output. Verify 'claude' is installed and authenticated.",
+        },
+      }),
+    });
+
+    expect(result.finalState).toBe('failed');
+    const row = getDb()
+      .prepare<[string], { error_code: string | null; output_summary: string | null }>(
+        'SELECT error_code, output_summary FROM runs WHERE id = ?',
+      )
+      .get(result.runId);
+    expect(row?.error_code).toBe('RUNNER_NO_OUTPUT');
+    expect(row?.output_summary).toMatch(/no output/);
+  });
+
+  it('Observe-mode QA run with zero findings ends as done with friendly summary', async () => {
+    const repo = createRepo({
+      githubFullName: 'test/x',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'observe',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'qa-hunter' });
+    addToAllowlist(repo.id, 'test-user', 'auto');
+    seedTestPlanFile({ repoPath, agentName: 'qa-hunter' });
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'qa-hunter',
+      trigger: 'manual',
+      runnerFactory: factoryFor({
+        filesToWrite: [],
+        reasoning: 'Scanned. BEGIN_FINDINGS\n[]\nEND_FINDINGS',
+      }),
+    });
+
+    expect(result.finalState).toBe('done');
+    const row = getDb()
+      .prepare<[string], { output_summary: string | null }>(
+        'SELECT output_summary FROM runs WHERE id = ?',
+      )
+      .get(result.runId);
+    expect(row?.output_summary).toBe('Plan executed; no findings.');
+  });
+
   it('no_changes from a PR-opening agent fails the run', async () => {
     const repo = createRepo({
       githubFullName: 'test/x',

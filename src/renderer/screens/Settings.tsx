@@ -112,6 +112,16 @@ export function SettingsScreen(): ReactElement {
     if (res.ok) setLocalSettings(res.value);
   }
 
+  async function changeClaudeModel(model: string): Promise<void> {
+    const res = await window.obelisk.invoke('settings:update', { claudeModel: model });
+    if (res.ok) setLocalSettings(res.value);
+  }
+
+  async function changeCodexModel(model: string): Promise<void> {
+    const res = await window.obelisk.invoke('settings:update', { codexModel: model });
+    if (res.ok) setLocalSettings(res.value);
+  }
+
   async function changeAttribution(mode: AttributionMode): Promise<void> {
     const res = await window.obelisk.invoke('settings:update', { attributionMode: mode });
     if (res.ok) setLocalSettings(res.value);
@@ -158,7 +168,14 @@ export function SettingsScreen(): ReactElement {
 
       <SafetyCard mode={repo.mode} busy={busy} onChange={changeMode} />
 
-      <RunnerCard defaultRunner={settings.defaultRunner} onChange={changeDefaultRunner} />
+      <RunnerCard
+        defaultRunner={settings.defaultRunner}
+        claudeModel={settings.claudeModel}
+        codexModel={settings.codexModel}
+        onChange={changeDefaultRunner}
+        onChangeClaudeModel={changeClaudeModel}
+        onChangeCodexModel={changeCodexModel}
+      />
 
       <AttributionCard mode={settings.attributionMode} onChange={changeAttribution} />
 
@@ -230,10 +247,18 @@ function SafetyCard({
 
 function RunnerCard({
   defaultRunner,
+  claudeModel,
+  codexModel,
   onChange,
+  onChangeClaudeModel,
+  onChangeCodexModel,
 }: {
   defaultRunner: RunnerKind;
+  claudeModel: string;
+  codexModel: string;
   onChange: (r: RunnerKind) => void;
+  onChangeClaudeModel: (m: string) => void;
+  onChangeCodexModel: (m: string) => void;
 }): ReactElement {
   return (
     <div className="settings-card">
@@ -257,7 +282,62 @@ function RunnerCard({
           </button>
         ))}
       </div>
+
+      <div className="settings-runner-models">
+        <div className="settings-card-sub" style={{ marginTop: 12 }}>
+          Default model per runner. Leave blank to let the CLI use its account default — the safe
+          choice if you sign in with a ChatGPT account or aren&rsquo;t sure which models you have
+          access to. Model names rotate often; we never hardcode one for you.
+        </div>
+        <ModelInput
+          label="Claude model"
+          placeholder="e.g. claude-sonnet-4-6 (blank = CLI default)"
+          value={claudeModel}
+          onCommit={onChangeClaudeModel}
+        />
+        <ModelInput
+          label="Codex model"
+          placeholder="e.g. gpt-5-codex (blank = CLI default)"
+          value={codexModel}
+          onCommit={onChangeCodexModel}
+        />
+      </div>
     </div>
+  );
+}
+
+function ModelInput({
+  label,
+  placeholder,
+  value,
+  onCommit,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onCommit: (next: string) => void;
+}): ReactElement {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  return (
+    <label className="settings-model-input">
+      <span className="settings-model-label">{label}</span>
+      <input
+        type="text"
+        className="file-issue-input"
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft.trim() !== value.trim()) onCommit(draft.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        }}
+      />
+    </label>
   );
 }
 

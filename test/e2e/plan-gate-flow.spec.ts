@@ -7,7 +7,7 @@ test.afterEach(async () => {
   if (ctx) await ctx.cleanup();
 });
 
-test('Run QA Hunter with no plans opens the no-plan dialog and routes through generation', async () => {
+test('Run QA Hunter with no plans opens the no-plan dialog and starts an async generation', async () => {
   ctx = await launchApp({
     seedFixtures: {
       mode: 'observe',
@@ -28,13 +28,17 @@ test('Run QA Hunter with no plans opens the no-plan dialog and routes through ge
   await page.getByTestId('plan-gate-generate-cta').click();
   await expect(dialog).toContainText(/Generate test plan/i);
 
-  // Whole-app is the default scope; submit
+  // Whole-app is the default scope; submit kicks off async generation
   await page.getByTestId('plan-gate-submit').click();
 
-  // Generation falls back to the heuristic path on a developer machine
-  // without a real LLM CLI; it should land in the Test Plans editor.
-  await expect(page.getByText('Full app sweep').first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('plan-run-button')).toBeVisible();
+  // The dialog closes immediately and a toast appears with progress.
+  // Without an LLM runner installed (the e2e default), the toast eventually
+  // shows the "Generation failed" state with a retry-friendly message.
+  await expect(dialog).toBeHidden({ timeout: 5_000 });
+  const toast = page.locator('.tpg-toast').first();
+  await expect(toast).toBeVisible({ timeout: 30_000 });
+  // Either still drafting or already failed — both are non-silent feedback.
+  await expect(toast).toContainText(/Drafting test plan|Generation failed|Test plan ready/);
 });
 
 test('Run QA Hunter with one plan dispatches directly without dialog', async () => {
@@ -102,7 +106,7 @@ test('Test Plans screen lists seeded plans and the Run button dispatches with pl
   const page = ctx.window;
 
   // Navigate to Test Plans via the sidebar
-  await page.getByRole('button', { name: 'Test Plans' }).click();
+  await page.getByRole('button', { name: 'Test Plans', exact: true }).click();
 
   // Plan in the sidebar list
   await expect(page.getByTestId('plan-item-full-app')).toBeVisible();
