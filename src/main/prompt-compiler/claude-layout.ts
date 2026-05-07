@@ -102,11 +102,12 @@ function renderAssignedPlanBlock(task: import('./types').TaskPayload): string {
 
 function renderClaudeSettings(input: CompileInput): string {
   // The shape mirrors what the `claude` CLI consumes for tool gating.
-  // `defaultModel` is set ONLY when the user configured a Claude model in
-  // Settings — hardcoding a name like `claude-sonnet-4-6` rots fast as new
+  // `defaultModel` is set when (a) the caller passed a per-run modelOverride
+  // (Test Plans popover) OR (b) the user configured a Claude model in
+  // Settings. Hardcoding a name like `claude-sonnet-4-6` rots fast as new
   // model versions ship, and pinning a model the user's account doesn't
-  // license breaks the CLI invocation. Empty Settings → claude picks.
-  const claudeModel = resolveRunnerModel('claude', undefined);
+  // license breaks the CLI invocation. Empty everywhere → claude picks.
+  const claudeModel = resolveRunnerModel('claude', input.modelOverride);
   const settings: Record<string, unknown> = {
     permissions: {
       allowedTools: ['fs.read', 'fs.write', 'shell.run', 'git.commit'],

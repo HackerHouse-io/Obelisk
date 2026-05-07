@@ -38,7 +38,7 @@ export type RunResult =
   | { ok: true; patch: GitPatch; testsRun: TestRun[]; reasoning: string }
   | {
       ok: false;
-      reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes';
+      reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes' | 'auth_required';
       detail: string;
       /**
        * Captured stdout. Only meaningful for `no_changes` (read-only agents

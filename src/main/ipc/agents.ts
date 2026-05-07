@@ -61,6 +61,8 @@ export async function handleAgentsRun(
     agentId: agent.id,
     trigger: 'manual',
     taskId: payload.taskId,
+    ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
+    ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
   });
   if (!result.runId) {
     throw new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.');
@@ -81,12 +83,36 @@ async function ensureRunnerAvailable(): Promise<RunnerKind> {
 }
 
 export async function handleAgentsCancel(
-  _payload: IpcMap['agents:cancel']['req'],
+  payload: IpcMap['agents:cancel']['req'],
 ): Promise<IpcMap['agents:cancel']['res']> {
-  throw new ObeliskError(
-    'NOT_IMPLEMENTED',
-    'Cancel mid-run lands in Phase 10 alongside the scheduler.',
-  );
+  const { cancelRun, isActive } = await import('../orchestrator/active-runs');
+  const { getRun, transitionRun } = await import('../db/runs');
+  const { appendAudit } = await import('../logger/audit');
+
+  const run = getRun(payload.runId);
+  if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${payload.runId} not found`);
+  if (run.state === 'done' || run.state === 'failed' || run.state === 'cancelled') {
+    // Already terminal — silently no-op so double-clicks don't error.
+    return { ok: true };
+  }
+
+  if (isActive(payload.runId)) {
+    // Abort the live spawn. The orchestrator's runIsCancelled() check then
+    // transitions the run to 'cancelled' (not 'failed') after the spawn dies.
+    cancelRun(payload.runId);
+    return { ok: true };
+  }
+
+  // Run is queued / publishing but not in our in-memory active map — likely
+  // a stale row from a previous process. Mark it cancelled directly so the
+  // user can clear it from Mission Control.
+  appendAudit({
+    runId: payload.runId,
+    kind: 'state',
+    payload: { from: run.state, to: 'cancelled', reason: 'user_cancelled' },
+  });
+  transitionRun(payload.runId, 'cancelled', { outputSummary: 'Stopped by the user.' });
+  return { ok: true };
 }
 
 export async function handleAgentsUpdate(

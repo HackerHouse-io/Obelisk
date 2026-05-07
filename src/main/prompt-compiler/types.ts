@@ -60,6 +60,13 @@ export interface CompileInput {
   repo: RepoSummary;
   runnerKind: RunnerKind;
   permissions: Permissions;
+  /**
+   * Per-call model override. `undefined` falls through to Settings/CLI default;
+   * an explicit non-empty string is passed to the runner verbatim; an empty
+   * string forces the CLI default (no --model flag — required for ChatGPT
+   * Codex sign-ins).
+   */
+  modelOverride?: string;
 }
 
 export interface AttachmentFile {
@@ -96,6 +103,11 @@ export interface CompileOptions {
   agentName: AgentName;
   /** Override agent.defaultRunner if a per-agent runner is configured. */
   runnerOverride?: RunnerKind;
+  /**
+   * Per-call model override. See `CompileInput.modelOverride` for the
+   * three-way semantics (undefined / empty / explicit).
+   */
+  modelOverride?: string;
   task: TaskPayload;
   repo: RepoSummary;
   permissions: Permissions;

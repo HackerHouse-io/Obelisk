@@ -158,7 +158,9 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
             </button>
           </header>
 
-          <div className="file-issue-grid">
+          <div
+            className={`file-issue-grid${finding.evidence.length > 0 ? ' has-evidence' : ''}`}
+          >
             <div className="file-issue-fields">
               <label className="file-issue-label">
                 <span>Title</span>
@@ -236,16 +238,12 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
               </div>
             </div>
 
-            <aside className="file-issue-evidence">
-              <div className="file-issue-evidence-title">Evidence</div>
-              {finding.evidence.length === 0 ? (
-                <div className="file-issue-evidence-empty">
-                  No screenshots or recordings captured for this run.
-                </div>
-              ) : (
+            {finding.evidence.length > 0 ? (
+              <aside className="file-issue-evidence">
+                <div className="file-issue-evidence-title">Evidence</div>
                 <EvidenceStrip finding={finding} />
-              )}
-            </aside>
+              </aside>
+            ) : null}
           </div>
 
           {post.status === 'error' && post.error ? (

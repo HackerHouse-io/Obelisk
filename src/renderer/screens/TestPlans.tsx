@@ -12,6 +12,8 @@ import { useStore } from '../state/store';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { ModelSelect } from '../components/ModelSelect';
+import { useClickOutside } from '../hooks/useClickOutside';
 import { shortDate, labelForAgent } from '../format';
 import type {
   AgentName,
@@ -31,6 +33,8 @@ interface NewPlanState {
   runnerOverride: '' | 'claude' | 'codex';
   /** '' means "use Settings default model" (no --model flag). */
   modelOverride: string;
+  /** Coverage-aware focus: bias the AI toward uncovered/churned files. */
+  focusOnChangedOrUncovered: boolean;
   busy: boolean;
   error: string | null;
 }
@@ -42,6 +46,7 @@ const INITIAL_NEW_PLAN_STATE: NewPlanState = {
   featureName: '',
   runnerOverride: '',
   modelOverride: '',
+  focusOnChangedOrUncovered: false,
   busy: false,
   error: null,
 };
@@ -58,6 +63,7 @@ export function TestPlans(): ReactElement {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<TestPlanSummary | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [runStarting, setRunStarting] = useState(false);
   const [newPlan, setNewPlan] = useState<NewPlanState>(INITIAL_NEW_PLAN_STATE);
 
   const refreshList = useCallback(async () => {
@@ -171,6 +177,7 @@ export function TestPlans(): ReactElement {
     featureName?: string;
     runnerOverride?: 'claude' | 'codex';
     modelOverride?: string;
+    focusOnChangedOrUncovered?: boolean;
   }): Promise<void> {
     if (!repo) return;
     setNewPlan((s) => ({ ...s, busy: true, error: null }));
@@ -181,6 +188,7 @@ export function TestPlans(): ReactElement {
       ...(opts.featureName ? { featureName: opts.featureName } : {}),
       ...(opts.runnerOverride ? { runnerOverride: opts.runnerOverride } : {}),
       ...(opts.modelOverride !== undefined ? { modelOverride: opts.modelOverride } : {}),
+      ...(opts.focusOnChangedOrUncovered ? { focusOnChangedOrUncovered: true } : {}),
     });
     if (!res.ok) {
       setNewPlan((s) => ({ ...s, busy: false, error: res.error.message }));
@@ -192,28 +200,57 @@ export function TestPlans(): ReactElement {
     setNewPlan(INITIAL_NEW_PLAN_STATE);
   }
 
-  async function runWithPlan(plan: TestPlan): Promise<void> {
-    if (!repo) return;
+  async function runWithPlan(
+    plan: TestPlan,
+    overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
+  ): Promise<void> {
+    if (!repo || runStarting) return;
     setRunError(null);
-    const agentsRes = await window.obelisk.invoke('agents:list', { repoId: repo.id });
-    if (!agentsRes.ok) {
-      setRunError(agentsRes.error.message);
-      return;
+    setRunStarting(true);
+    try {
+      const agentsRes = await window.obelisk.invoke('agents:list', { repoId: repo.id });
+      if (!agentsRes.ok) {
+        setRunError(agentsRes.error.message);
+        setRunStarting(false);
+        return;
+      }
+      const agent = agentsRes.value.find((a) => a.name === plan.frontmatter.agentName);
+      if (!agent) {
+        setRunError(
+          `No ${labelForAgent(plan.frontmatter.agentName)} agent installed for this repo.`,
+        );
+        setRunStarting(false);
+        return;
+      }
+      const res = await window.obelisk.invoke('agents:run', {
+        agentId: agent.id,
+        taskId: `plan:${plan.frontmatter.id}`,
+        ...(overrides?.runnerOverride ? { runnerOverride: overrides.runnerOverride } : {}),
+        ...(overrides?.modelOverride !== undefined
+          ? { modelOverride: overrides.modelOverride }
+          : {}),
+      });
+      if (!res.ok) {
+        setRunError(`${res.error.message}${res.error.hint ? ` — ${res.error.hint}` : ''}`);
+        setRunStarting(false);
+        return;
+      }
+      window.dispatchEvent(
+        new CustomEvent('obelisk:run-started', {
+          detail: {
+            runId: res.value.runId,
+            agentName: plan.frontmatter.agentName,
+            planName: plan.frontmatter.name,
+            caseCount: plan.caseCount,
+          },
+        }),
+      );
+      setRoute('mission');
+      // Component unmounts on route change; no need to clear runStarting.
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Failed to start the run.');
+      setRunStarting(false);
     }
-    const agent = agentsRes.value.find((a) => a.name === plan.frontmatter.agentName);
-    if (!agent) {
-      setRunError(`No ${labelForAgent(plan.frontmatter.agentName)} agent installed for this repo.`);
-      return;
-    }
-    const res = await window.obelisk.invoke('agents:run', {
-      agentId: agent.id,
-      taskId: `plan:${plan.frontmatter.id}`,
-    });
-    if (!res.ok) {
-      setRunError(`${res.error.message}${res.error.hint ? ` — ${res.error.hint}` : ''}`);
-      return;
-    }
-    setRoute('mission');
   }
 
   async function deletePlan(planId: string): Promise<void> {
@@ -295,10 +332,11 @@ export function TestPlans(): ReactElement {
             plan={activePlan}
             savedAt={savedAt}
             runError={runError}
+            runStarting={runStarting}
             onChange={onChangeBlocks}
             onRename={onRenamePlan}
             onChangeAgent={onChangeAgent}
-            onRun={() => void runWithPlan(activePlan)}
+            onRun={(overrides) => void runWithPlan(activePlan, overrides)}
             onDismissRunError={() => setRunError(null)}
             onDelete={() => {
               const summary = plans.find((p) => p.id === activePlan.frontmatter.id);
@@ -325,6 +363,7 @@ export function TestPlans(): ReactElement {
             ...(newPlan.modelOverride.trim()
               ? { modelOverride: newPlan.modelOverride.trim() }
               : {}),
+            ...(newPlan.focusOnChangedOrUncovered ? { focusOnChangedOrUncovered: true } : {}),
           })
         }
       />
@@ -421,6 +460,7 @@ function PlanEditor({
   plan,
   savedAt,
   runError,
+  runStarting,
   onChange,
   onRename,
   onChangeAgent,
@@ -431,10 +471,11 @@ function PlanEditor({
   plan: TestPlan;
   savedAt: string | null;
   runError: string | null;
+  runStarting: boolean;
   onChange: (blocks: TestPlanBlock[]) => void;
   onRename: (next: string) => void;
   onChangeAgent: (next: AgentName) => void;
-  onRun: () => void;
+  onRun: (overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string }) => void;
   onDismissRunError: () => void;
   onDelete: () => void;
 }): ReactElement {
@@ -528,22 +569,12 @@ function PlanEditor({
           >
             <Icon.Trash size={14} />
           </button>
-          <button
-            type="button"
-            className="btn primary plan-editor-run"
-            onClick={onRun}
-            data-testid="plan-run-button"
-            title={`Run ${labelForAgent(plan.frontmatter.agentName)} against this plan`}
-          >
-            <Icon.Play size={12} />
-            <span>
-              Run {labelForAgent(plan.frontmatter.agentName)}
-              <span className="plan-editor-run-count">
-                {' · '}
-                {plan.caseCount} case{plan.caseCount === 1 ? '' : 's'}
-              </span>
-            </span>
-          </button>
+          <RunButtonWithOptions
+            agentLabel={labelForAgent(plan.frontmatter.agentName)}
+            caseCount={plan.caseCount}
+            runStarting={runStarting}
+            onRun={onRun}
+          />
         </div>
       </header>
 
@@ -643,6 +674,127 @@ function PlanEditor({
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function RunButtonWithOptions({
+  agentLabel,
+  caseCount,
+  runStarting,
+  onRun,
+}: {
+  agentLabel: string;
+  caseCount: number;
+  runStarting: boolean;
+  onRun: (overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string }) => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [runner, setRunner] = useState<'' | 'claude' | 'codex'>('');
+  const [model, setModel] = useState<string>('');
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useClickOutside(open, wrapRef, () => setOpen(false));
+
+  function start(): void {
+    setOpen(false);
+    onRun({
+      ...(runner ? { runnerOverride: runner } : {}),
+      ...(model.trim() ? { modelOverride: model.trim() } : {}),
+    });
+  }
+
+  return (
+    <div ref={wrapRef} className="plan-editor-run-wrap">
+      <button
+        type="button"
+        className={`btn primary plan-editor-run${runStarting ? ' is-starting' : ''}`}
+        onClick={() => {
+          if (runStarting) return;
+          setOpen((v) => !v);
+        }}
+        disabled={runStarting}
+        aria-busy={runStarting}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        data-testid="plan-run-button"
+        title={
+          runStarting
+            ? `Starting ${agentLabel}…`
+            : `Choose a model and run ${agentLabel} against this plan`
+        }
+      >
+        {runStarting ? (
+          <>
+            <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
+            <span>Starting {agentLabel}…</span>
+          </>
+        ) : (
+          <>
+            <Icon.Play size={12} />
+            <span>
+              Run {agentLabel}
+              <span className="plan-editor-run-count">
+                {' · '}
+                {caseCount} case{caseCount === 1 ? '' : 's'}
+              </span>
+            </span>
+          </>
+        )}
+      </button>
+
+      {open && !runStarting ? (
+        <div className="plan-run-popover" role="dialog" aria-label="Run options">
+          <div className="plan-run-popover-title">Run {agentLabel}</div>
+          <div className="plan-run-popover-sub">
+            Pick the model for this run. Doesn&rsquo;t change the agent&rsquo;s default.
+          </div>
+          <div className="plan-run-popover-field">
+            <label className="new-plan-label" htmlFor="plan-run-runner">
+              Runner
+            </label>
+            <select
+              id="plan-run-runner"
+              className="file-issue-input"
+              value={runner}
+              onChange={(e) => {
+                const next = e.target.value as '' | 'claude' | 'codex';
+                setRunner(next);
+                // Model id namespace differs between Claude and Codex; reset
+                // when the runner flips so we don't pass a Claude id to Codex.
+                setModel('');
+              }}
+            >
+              <option value="">Use default</option>
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex</option>
+            </select>
+          </div>
+          <div className="plan-run-popover-field">
+            <label className="new-plan-label" htmlFor="plan-run-model">
+              Model
+            </label>
+            <ModelSelect
+              id="plan-run-model"
+              runner={runner}
+              value={model}
+              onChange={setModel}
+            />
+          </div>
+          <div className="plan-run-popover-actions">
+            <button type="button" className="btn ghost sm" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={start}
+              data-testid="plan-run-start"
+            >
+              <Icon.Play size={11} /> Start run
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -799,6 +951,21 @@ function CaseRow({
               value={block.repro ?? ''}
               placeholder="Steps the agent should follow"
               onCommit={(v) => onChange({ repro: v.trim() ? v : null })}
+            />
+          </label>
+          <label className="plan-case-meta-row">
+            <span className="plan-case-meta-key">Scope</span>
+            <EditableText
+              className="plan-case-meta-value"
+              value={(block.scope ?? []).join(', ')}
+              placeholder="Comma-separated labels (e.g. auth, checkout)"
+              onCommit={(v) => {
+                const next = v
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                onChange({ scope: next.length > 0 ? next : null });
+              }}
             />
           </label>
         </div>
@@ -997,19 +1164,34 @@ function NewPlanDialog({
               <label className="new-plan-label" htmlFor="plan-model-override">
                 Model
               </label>
-              <input
+              <ModelSelect
                 id="plan-model-override"
-                className="file-issue-input"
-                type="text"
+                runner={state.runnerOverride}
                 value={state.modelOverride}
-                onChange={(e) => onChange({ modelOverride: e.target.value })}
-                placeholder="blank = Settings / CLI default"
+                onChange={(next) => onChange({ modelOverride: next })}
                 disabled={state.busy}
-                title="Model name passed to the CLI; blank = Settings → CLI default"
-                spellCheck={false}
               />
             </div>
           </div>
+
+          <label className="new-plan-focus">
+            <input
+              type="checkbox"
+              checked={state.focusOnChangedOrUncovered}
+              onChange={(e) => onChange({ focusOnChangedOrUncovered: e.target.checked })}
+              disabled={state.busy}
+            />
+            <div>
+              <div className="new-plan-focus-label">
+                Focus on what changed or isn&rsquo;t covered yet
+              </div>
+              <div className="new-plan-focus-hint">
+                Bias the AI toward files the Coverage screen flags as uncovered, recently churned,
+                or carrying open findings. Falls through to the regular prompt when there&rsquo;s no
+                signal yet.
+              </div>
+            </div>
+          </label>
 
           {state.error ? (
             <div className="file-issue-error">
@@ -1059,5 +1241,6 @@ function makeCase(): TestPlanBlock {
     expected: null,
     repro: null,
     severity: null,
+    scope: null,
   };
 }

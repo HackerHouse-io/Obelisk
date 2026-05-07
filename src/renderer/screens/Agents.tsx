@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
 import type {
@@ -6,10 +6,11 @@ import type {
   AgentName,
   AgentPermissions,
   RunnerKind,
-  ScheduleConfig,
-  ScheduleMode,
 } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
+import { SchedulePresetCard } from './agents/SchedulePresetCard';
+import { scheduleSummary } from './agents/schedule-helpers';
+import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
 
 interface AgentMeta {
   name: AgentName;
@@ -92,15 +93,20 @@ export function AgentsScreen(): ReactElement {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSeed, setPickerSeed] = useState<AgentName | null>(null);
+  const [actionError, setActionError] = useState<{ message: string; hint?: string } | null>(null);
 
   const refresh = async (): Promise<void> => {
     if (!repo) return;
     const res = await window.obelisk.invoke('agents:list', { repoId: repo.id });
     if (res.ok) {
       setAgents(res.value);
-      // Auto-select the first agent on first load.
       if (res.value.length > 0 && !res.value.find((a) => a.id === selectedAgentId)) {
-        setSelectedAgentId(res.value[0]!.id);
+        // Pick the first agent in canonical AGENTS order (QA Hunter first),
+        // not whatever insertion order the DB returned. Falls back to
+        // res.value[0] if no canonical match (shouldn't happen with real
+        // handlers but keeps the fallback safe).
+        const ordered = AGENTS.flatMap((meta) => res.value.filter((a) => a.name === meta.name));
+        setSelectedAgentId((ordered[0] ?? res.value[0]!).id);
       }
     }
   };
@@ -135,14 +141,19 @@ export function AgentsScreen(): ReactElement {
     instances: agents.filter((a) => a.name === meta.name),
   }));
 
+  function reportError(error: { message: string; hint?: string }): void {
+    setActionError(error);
+  }
+
   async function createOf(name: AgentName, displayName?: string): Promise<void> {
+    setActionError(null);
     const res = await window.obelisk.invoke('agents:create', {
       repoId: repo!.id,
       name,
       ...(displayName ? { displayName } : {}),
     });
     if (!res.ok) {
-      alert(res.error.message + (res.error.hint ? `\n\n${res.error.hint}` : ''));
+      reportError(res.error);
       return;
     }
     setSelectedAgentId(res.value.id);
@@ -150,9 +161,10 @@ export function AgentsScreen(): ReactElement {
   }
 
   async function cloneInstance(agentId: string): Promise<void> {
+    setActionError(null);
     const res = await window.obelisk.invoke('agents:clone', { agentId });
     if (!res.ok) {
-      alert(res.error.message);
+      reportError(res.error);
       return;
     }
     setSelectedAgentId(res.value.id);
@@ -166,9 +178,10 @@ export function AgentsScreen(): ReactElement {
       )
     )
       return;
+    setActionError(null);
     const res = await window.obelisk.invoke('agents:delete', { agentId });
     if (!res.ok) {
-      alert(res.error.message);
+      reportError(res.error);
       return;
     }
     await refresh();
@@ -205,6 +218,25 @@ export function AgentsScreen(): ReactElement {
             <Icon.Plus size={11} /> Add agent
           </button>
         </div>
+        {actionError ? (
+          <div className="agents-list-banner" role="alert">
+            <Icon.AlertTri size={12} />
+            <div>
+              <div className="agents-list-banner-title">{actionError.message}</div>
+              {actionError.hint ? (
+                <div className="agents-list-banner-hint">{actionError.hint}</div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="btn ghost icon"
+              onClick={() => setActionError(null)}
+              aria-label="Dismiss"
+            >
+              <Icon.Close size={11} />
+            </button>
+          </div>
+        ) : null}
 
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {grouped.map(({ meta, instances }) => (
@@ -421,7 +453,7 @@ function SidebarRow({
             {agent.displayName}
           </div>
           <div className="agents-list-item-role">
-            {agent.runnerOverride ?? 'default'} · {scheduleSummary(agent, meta)}
+            {agent.runnerOverride ?? 'default'} · {scheduleSummary(agent)}
           </div>
         </div>
       </button>
@@ -699,10 +731,18 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
   const IconCmp = Icon[meta.icon];
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(agent.displayName);
+  const [runStarting, setRunStarting] = useState(false);
+  const [runError, setRunError] = useState<{ message: string; hint?: string } | null>(null);
 
   useEffect(() => {
     setRenameValue(agent.displayName);
   }, [agent.id, agent.displayName]);
+
+  // Reset transient run state when switching agents.
+  useEffect(() => {
+    setRunStarting(false);
+    setRunError(null);
+  }, [agent.id]);
 
   async function update(patch: Partial<Agent>): Promise<void> {
     const res = await window.obelisk.invoke('agents:update', {
@@ -713,12 +753,59 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       alert(res.error.message);
       return;
     }
+    // Surface a confirmation toast on the paused → enabled transition and
+    // redirect to the Command Center so the user sees the agent in context
+    // (with its "Previewing" pill, schedule, and live next-run time).
+    if (patch.enabled === true && agent.enabled === false) {
+      window.dispatchEvent(
+        new CustomEvent('obelisk:agent-enabled', {
+          detail: {
+            agentId: res.value.id,
+            agentName: res.value.name,
+            displayName: res.value.displayName,
+            nextFireAt: res.value.nextFireAt ?? null,
+            scheduleLabel: scheduleSummary(res.value),
+            hasSchedule: !!(res.value.scheduleCron ?? res.value.schedule),
+          },
+        }),
+      );
+      useStore.getState().setRoute('home');
+    }
     await onChanged();
   }
 
   async function runNow(): Promise<void> {
-    const res = await window.obelisk.invoke('agents:run', { agentId: agent.id });
-    if (!res.ok) alert(res.error.message);
+    if (runStarting) return;
+    setRunError(null);
+    setRunStarting(true);
+    try {
+      const res = await window.obelisk.invoke('agents:run', { agentId: agent.id });
+      if (!res.ok) {
+        setRunError({
+          message: res.error.message,
+          ...(res.error.hint ? { hint: res.error.hint } : {}),
+        });
+        setRunStarting(false);
+        return;
+      }
+      // Mirror the Test Plans run flow exactly: dispatch the same toast
+      // event (RunStartedToast picks it up at the shell), then route to
+      // Mission Control. The toast tolerates missing planName / caseCount.
+      window.dispatchEvent(
+        new CustomEvent('obelisk:run-started', {
+          detail: {
+            runId: res.value.runId,
+            agentName: agent.name,
+            displayName: agent.displayName,
+          },
+        }),
+      );
+      useStore.getState().setRoute('mission');
+      // Component unmounts on route change; no need to clear runStarting.
+    } catch (err) {
+      setRunError({ message: err instanceof Error ? err.message : 'Failed to start the run.' });
+      setRunStarting(false);
+    }
   }
 
   return (
@@ -786,8 +873,28 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
               </>
             )}
           </button>
-          <button type="button" className="btn primary" onClick={runNow}>
-            <Icon.Play size={11} /> Run now
+          <button
+            type="button"
+            className={`btn primary${runStarting ? ' is-starting' : ''}`}
+            onClick={runNow}
+            disabled={runStarting}
+            aria-busy={runStarting}
+            title={
+              runStarting
+                ? `Starting ${agent.displayName}…`
+                : `Run ${agent.displayName} now`
+            }
+          >
+            {runStarting ? (
+              <>
+                <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
+                Starting…
+              </>
+            ) : (
+              <>
+                <Icon.Play size={11} /> Run now
+              </>
+            )}
           </button>
           <button type="button" className="btn ghost" onClick={() => void onDelete()}>
             <Icon.Doc size={11} /> Delete
@@ -795,12 +902,35 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
         </div>
       </div>
 
+      {runError ? (
+        <div className="plan-editor-banner plan-editor-banner-error" role="alert">
+          <Icon.AlertTri size={12} />
+          <div>
+            <div className="plan-editor-banner-title">Could not start the run</div>
+            <div className="plan-editor-banner-body">{runError.message}</div>
+            {runError.hint ? (
+              <div className="plan-editor-banner-body" style={{ marginTop: 4, opacity: 0.85 }}>
+                {runError.hint}
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={() => setRunError(null)}
+            aria-label="Dismiss"
+          >
+            <Icon.Close size={11} />
+          </button>
+        </div>
+      ) : null}
+
       <StatsCard agent={agent} />
       <MissionCard agent={agent} />
       <SkillsCard agent={agent} />
+      <SchedulePresetCard agent={agent} onUpdate={update} />
       <PermissionsCard agent={agent} onUpdate={update} />
       <RunnerModelCard agent={agent} onUpdate={update} />
-      <ScheduleEditorCard agent={agent} onUpdate={update} />
       <HistoryGridCard agent={agent} />
     </div>
   );
@@ -1133,18 +1263,6 @@ function Toggle({
 
 const RUNNER_OPTIONS: RunnerKind[] = ['claude', 'codex'];
 
-const MODEL_OPTIONS: Record<RunnerKind, { id: string; label: string; tier: string }[]> = {
-  claude: [
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
-    { id: 'opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
-    { id: 'haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
-  ],
-  codex: [
-    { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', tier: 'flagship' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini', tier: 'fast' },
-  ],
-};
-
 function RunnerModelCard({
   agent,
   onUpdate,
@@ -1153,8 +1271,24 @@ function RunnerModelCard({
   onUpdate: (patch: Partial<Agent>) => Promise<void>;
 }): ReactElement {
   const runner = agent.runnerOverride ?? 'claude';
-  const models = MODEL_OPTIONS[runner];
-  const selectedModel = agent.modelOverride ?? models[0]!.id;
+  // Models are dynamic: read from the user's CLI config + Anthropic/OpenAI
+  // /v1/models when an API key is set. Curated MODEL_OPTIONS is the
+  // first-paint fallback and protects against a missing IPC handler.
+  const [models, setModels] = useState<ModelOption[]>(MODEL_OPTIONS[runner]);
+  const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void fetchModelsForRunner(runner).then((res) => {
+      if (!alive) return;
+      setModels(res.models);
+      setDefaultModelId(res.defaultModelId);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [runner, refreshTick]);
+  const selectedModel = agent.modelOverride ?? defaultModelId ?? models[0]!.id;
   return (
     <div className="settings-card">
       <div className="settings-card-title">Runner &amp; model</div>
@@ -1191,639 +1325,33 @@ function RunnerModelCard({
           <div className="label" style={{ marginBottom: 6 }}>
             Model
           </div>
-          <select
-            className="input"
-            value={selectedModel}
-            onChange={(e) => void onUpdate({ modelOverride: e.target.value })}
-            style={{ width: '100%' }}
-          >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label} · {m.tier}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────── Schedule editor ───────────────────────── */
-
-const SCHED_MODES: { id: ScheduleMode; label: string; sub: string; icon: IconName }[] = [
-  { id: 'event', label: 'Event-driven', sub: 'react to repo events', icon: 'Branch' },
-  { id: 'recurring', label: 'Recurring', sub: 'every N hours / days', icon: 'Clock' },
-  { id: 'cron', label: 'Cron', sub: 'cron expression', icon: 'Terminal' },
-  { id: 'manual', label: 'Manual only', sub: 'no schedule · run by hand', icon: 'Play' },
-];
-
-const CRON_PRESETS: { label: string; expr: string }[] = [
-  { label: 'Every 15 minutes', expr: '*/15 * * * *' },
-  { label: 'Every hour', expr: '0 * * * *' },
-  { label: 'Every 6 hours', expr: '0 */6 * * *' },
-  { label: 'Daily at 02:00', expr: '0 2 * * *' },
-  { label: 'Weekdays at 09:00', expr: '0 9 * * 1-5' },
-  { label: 'Sundays at 03:00', expr: '0 3 * * 0' },
-];
-
-function defaultScheduleConfig(agent: Agent): ScheduleConfig {
-  if (agent.schedule) return agent.schedule;
-  if (agent.scheduleCron) return { mode: 'cron', cron: agent.scheduleCron };
-  return {
-    mode: 'recurring',
-    every: 1,
-    unit: 'hour',
-    at: '02:00',
-    days: [1, 1, 1, 1, 1, 1, 1],
-    tz: 'America/Los_Angeles',
-  };
-}
-
-function ScheduleEditorCard({
-  agent,
-  onUpdate,
-}: {
-  agent: Agent;
-  onUpdate: (patch: Partial<Agent>) => Promise<void>;
-}): ReactElement {
-  const initial = useRef<ScheduleConfig>(defaultScheduleConfig(agent));
-  const [config, setConfig] = useState<ScheduleConfig>(initial.current);
-  useEffect(() => {
-    initial.current = defaultScheduleConfig(agent);
-    setConfig(initial.current);
-  }, [agent.id]);
-
-  const dirty = JSON.stringify(config) !== JSON.stringify(initial.current);
-  const summary = describeSchedule(config);
-  const next = computeNextRuns(config, 3);
-  const eventGated = config.mode === 'event';
-
-  function patch(p: Partial<ScheduleConfig>): void {
-    setConfig((prev) => ({ ...prev, ...p }));
-  }
-
-  async function save(): Promise<void> {
-    if (eventGated) {
-      alert(
-        'Event-driven scheduling lands with the GitHub webhook ingestor. For now, use Recurring or Cron.',
-      );
-      return;
-    }
-    await onUpdate({ schedule: config });
-    initial.current = config;
-  }
-
-  return (
-    <div className="settings-card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div
-        style={{
-          padding: '12px 14px',
-          borderBottom: '1px solid var(--line)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-        }}
-      >
-        <Icon.Clock size={13} color="var(--t-2)" />
-        <span
-          style={{
-            fontSize: 11,
-            color: 'var(--t-2)',
-            textTransform: 'uppercase',
-            letterSpacing: 0.04,
-            fontWeight: 600,
-          }}
-        >
-          Schedule
-        </span>
-        <span style={{ fontSize: 12, color: 'var(--t-1)' }}>·</span>
-        <span style={{ fontSize: 12.5, color: 'var(--t-0)', fontWeight: 500 }}>{summary}</span>
-        <div style={{ flex: 1 }} />
-        {dirty ? <span className="pill warn">unsaved</span> : null}
-        <button
-          type="button"
-          className="btn ghost sm"
-          disabled={!dirty}
-          onClick={() => setConfig(initial.current)}
-        >
-          Reset
-        </button>
-        <button
-          type="button"
-          className={`btn primary sm`}
-          disabled={!dirty}
-          onClick={() => void save()}
-        >
-          <Icon.Check size={10} /> Save
-        </button>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px' }}>
-        <div style={{ padding: 16, borderRight: '1px solid var(--line)' }}>
-          <div className="label" style={{ marginBottom: 8 }}>
-            Trigger mode
-          </div>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, 1fr)',
-              gap: 8,
-              marginBottom: 18,
-            }}
-          >
-            {SCHED_MODES.map((mode) => {
-              const I = Icon[mode.icon];
-              const active = config.mode === mode.id;
-              return (
-                <button
-                  key={mode.id}
-                  type="button"
-                  onClick={() => patch({ mode: mode.id })}
-                  style={{
-                    padding: '10px 8px',
-                    borderRadius: 7,
-                    cursor: 'pointer',
-                    border: `1px solid ${active ? 'var(--brand)' : 'var(--line-strong)'}`,
-                    background: active ? 'var(--brand-soft)' : 'var(--bg-1)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 6,
-                    textAlign: 'center',
-                  }}
-                >
-                  <I size={14} color={active ? 'var(--brand-text)' : 'var(--t-2)'} />
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: active ? 'var(--t-0)' : 'var(--t-1)',
-                    }}
-                  >
-                    {mode.label}
-                  </div>
-                  <div style={{ fontSize: 10.5, color: 'var(--t-3)' }}>{mode.sub}</div>
-                </button>
-              );
-            })}
-          </div>
-
-          {config.mode === 'recurring' ? (
-            <RecurringConfig config={config} onChange={patch} />
-          ) : null}
-          {config.mode === 'cron' ? <CronConfig config={config} onChange={patch} /> : null}
-          {config.mode === 'manual' ? <ManualConfig agent={agent} /> : null}
-          {config.mode === 'event' ? <EventConfig /> : null}
-        </div>
-
-        <div
-          style={{
-            background: 'var(--bg-0)',
-            padding: 16,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-          }}
-        >
-          <div>
-            <div className="label" style={{ marginBottom: 8 }}>
-              Next runs
-            </div>
-            {next.length === 0 ? (
-              <div
-                style={{
-                  padding: 10,
-                  borderRadius: 6,
-                  background: 'var(--bg-1)',
-                  border: '1px dashed var(--line)',
-                  fontSize: 11.5,
-                  color: 'var(--t-3)',
-                  textAlign: 'center',
-                }}
-              >
-                No upcoming runs scheduled
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {next.map((r, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 6,
-                      background: i === 0 ? 'var(--brand-soft)' : 'var(--bg-1)',
-                      border: `1px solid ${i === 0 ? 'var(--brand-line)' : 'var(--line)'}`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div className="mono" style={{ fontSize: 11.5, color: 'var(--t-0)' }}>
-                        {r.absolute}
-                      </div>
-                      <div style={{ fontSize: 10.5, color: 'var(--t-2)' }}>{r.relative}</div>
-                    </div>
-                    {i === 0 ? (
-                      <span className="pill brand" style={{ fontSize: 9.5 }}>
-                        next
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div>
-            <div className="label" style={{ marginBottom: 6 }}>
-              Equivalent
-            </div>
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 6,
-                background: 'var(--bg-1)',
-                border: '1px solid var(--line)',
-              }}
+          <div className="row gap-2" style={{ alignItems: 'stretch' }}>
+            <select
+              className="input"
+              value={selectedModel}
+              onChange={(e) => void onUpdate({ modelOverride: e.target.value })}
+              style={{ flex: 1 }}
             >
-              <div style={{ fontSize: 10, color: 'var(--t-3)', textTransform: 'uppercase' }}>
-                cron
-              </div>
-              <div
-                className="mono"
-                style={{ fontSize: 11.5, color: 'var(--t-1)', wordBreak: 'break-all' }}
-              >
-                {config.mode === 'cron'
-                  ? (config.cron ?? '—')
-                  : config.mode === 'recurring'
-                    ? (toCron(config) ?? '—')
-                    : '— no schedule —'}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RecurringConfig({
-  config,
-  onChange,
-}: {
-  config: ScheduleConfig;
-  onChange: (p: Partial<ScheduleConfig>) => void;
-}): ReactElement {
-  const days = config.days ?? [1, 1, 1, 1, 1, 1, 1];
-  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const toggleDay = (i: number): void => {
-    const next: [number, number, number, number, number, number, number] = [...days] as typeof days;
-    next[i] = next[i] ? 0 : 1;
-    onChange({ days: next });
-  };
-  return (
-    <div>
-      <div className="label" style={{ marginBottom: 8 }}>
-        Cadence
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: 'var(--t-1)' }}>Run every</span>
-        <input
-          type="number"
-          min={1}
-          max={59}
-          value={config.every ?? 1}
-          onChange={(e) =>
-            onChange({ every: Math.max(1, Math.min(59, Number(e.target.value) || 1)) })
-          }
-          style={{
-            width: 56,
-            height: 30,
-            padding: '0 8px',
-            fontSize: 13,
-            fontFamily: 'var(--mono)',
-            textAlign: 'center',
-            background: 'var(--bg-0)',
-            border: '1px solid var(--line-strong)',
-            borderRadius: 6,
-            color: 'var(--t-0)',
-          }}
-        />
-        <select
-          value={config.unit ?? 'hour'}
-          onChange={(e) => onChange({ unit: e.target.value as ScheduleConfig['unit'] })}
-          style={{
-            height: 30,
-            padding: '0 10px',
-            fontSize: 13,
-            background: 'var(--bg-0)',
-            border: '1px solid var(--line-strong)',
-            borderRadius: 6,
-            color: 'var(--t-0)',
-          }}
-        >
-          {(['minute', 'hour', 'day', 'week'] as const).map((u) => (
-            <option key={u} value={u}>
-              {(config.every ?? 1) === 1 ? u : `${u}s`}
-            </option>
-          ))}
-        </select>
-        {(config.unit === 'day' || config.unit === 'week') && (
-          <>
-            <span style={{ fontSize: 13, color: 'var(--t-1)' }}>at</span>
-            <input
-              type="time"
-              value={config.at ?? '02:00'}
-              onChange={(e) => onChange({ at: e.target.value })}
-              style={{
-                height: 30,
-                padding: '0 8px',
-                fontSize: 13,
-                fontFamily: 'var(--mono)',
-                background: 'var(--bg-0)',
-                border: '1px solid var(--line-strong)',
-                borderRadius: 6,
-                color: 'var(--t-0)',
-              }}
-            />
-          </>
-        )}
-      </div>
-      <div className="label" style={{ marginTop: 14, marginBottom: 8 }}>
-        Active days
-      </div>
-      <div style={{ display: 'flex', gap: 4 }}>
-        {dayLabels.map((d, i) => {
-          const on = !!days[i];
-          return (
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} · {tierLabel(m.tier)}
+                </option>
+              ))}
+            </select>
             <button
-              key={d}
               type="button"
-              onClick={() => toggleDay(i)}
-              style={{
-                flex: 1,
-                height: 36,
-                fontSize: 12,
-                fontWeight: 600,
-                border: `1px solid ${on ? 'var(--brand)' : 'var(--line-strong)'}`,
-                background: on ? 'var(--brand)' : 'var(--bg-0)',
-                color: on ? 'white' : 'var(--t-3)',
-                borderRadius: 6,
-                cursor: 'pointer',
-              }}
+              className="btn ghost sm"
+              onClick={() => setRefreshTick((t) => t + 1)}
+              title="Refresh model list (re-reads CLI config + live API)"
+              aria-label="Refresh model list"
             >
-              {d}
+              ↻
             </button>
-          );
-        })}
+          </div>
+        </div>
       </div>
     </div>
   );
-}
-
-function CronConfig({
-  config,
-  onChange,
-}: {
-  config: ScheduleConfig;
-  onChange: (p: Partial<ScheduleConfig>) => void;
-}): ReactElement {
-  const expr = config.cron ?? '0 */6 * * *';
-  return (
-    <div>
-      <div className="label" style={{ marginBottom: 8 }}>
-        Common schedules
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-        {CRON_PRESETS.map((p) => {
-          const active = expr === p.expr;
-          return (
-            <button
-              key={p.expr}
-              type="button"
-              className={`btn ${active ? 'primary' : 'ghost'} sm`}
-              onClick={() => onChange({ cron: p.expr })}
-            >
-              {p.label}
-            </button>
-          );
-        })}
-      </div>
-      <div className="label" style={{ marginBottom: 6 }}>
-        Custom expression
-      </div>
-      <input
-        type="text"
-        value={expr}
-        onChange={(e) => onChange({ cron: e.target.value })}
-        spellCheck={false}
-        style={{
-          width: '100%',
-          height: 32,
-          padding: '0 10px',
-          fontSize: 13,
-          fontFamily: 'var(--mono)',
-          background: 'var(--bg-0)',
-          color: 'var(--t-0)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 6,
-          outline: 'none',
-          boxSizing: 'border-box',
-        }}
-      />
-    </div>
-  );
-}
-
-function ManualConfig({ agent }: { agent: Agent }): ReactElement {
-  return (
-    <div
-      style={{
-        padding: 14,
-        borderRadius: 8,
-        background: 'var(--bg-1)',
-        border: '1px dashed var(--line-strong)',
-      }}
-    >
-      <div style={{ fontSize: 13, fontWeight: 600 }}>No automated schedule</div>
-      <div style={{ fontSize: 12, color: 'var(--t-2)', marginTop: 4, lineHeight: 1.5 }}>
-        <b style={{ color: 'var(--t-1)' }}>{agent.displayName}</b> only runs when you click{' '}
-        <span className="mono">Run now</span>.
-      </div>
-    </div>
-  );
-}
-
-function EventConfig(): ReactElement {
-  return (
-    <div
-      style={{
-        padding: 14,
-        borderRadius: 8,
-        background: 'var(--bg-1)',
-        border: '1px dashed var(--line-strong)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Event-driven</span>
-        <span className="pill" style={{ fontSize: 10 }}>
-          coming soon
-        </span>
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--t-2)', marginTop: 6, lineHeight: 1.5 }}>
-        Saves are gated until the GitHub webhook ingestor lands. Use Recurring or Cron in the
-        meantime — you can still trigger manually with <span className="mono">Run now</span>.
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────── Schedule helpers ───────────────────────── */
-
-function describeSchedule(s: ScheduleConfig): string {
-  if (s.mode === 'manual') return 'Manual only — no automated runs';
-  if (s.mode === 'event') return 'On configured repo events';
-  if (s.mode === 'cron') {
-    const preset = CRON_PRESETS.find((p) => p.expr === s.cron);
-    return preset ? preset.label : `Cron · ${s.cron ?? '—'}`;
-  }
-  const every = s.every ?? 1;
-  const unit = (s.unit ?? 'hour') + (every === 1 ? '' : 's');
-  const cadence = every === 1 ? `every ${s.unit ?? 'hour'}` : `every ${every} ${unit}`;
-  const days = s.days ?? [1, 1, 1, 1, 1, 1, 1];
-  const allDays = days.every((d) => d === 1);
-  if (s.unit === 'minute' || s.unit === 'hour') {
-    return allDays ? cadence : `${cadence}, ${dayList(days)}`;
-  }
-  return `${cadence} at ${s.at ?? '00:00'}${allDays ? '' : ', ' + dayList(days)}`;
-}
-
-function dayList(days: number[]): string {
-  const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  if (days.slice(0, 5).every((d) => d) && !days[5] && !days[6]) return 'weekdays';
-  if (!days.slice(0, 5).some((d) => d) && days[5] && days[6]) return 'weekends';
-  return days
-    .map((d, i) => (d ? labels[i] : null))
-    .filter(Boolean)
-    .join(', ');
-}
-
-function toCron(s: ScheduleConfig): string | null {
-  if (s.mode !== 'recurring') return null;
-  const every = s.every ?? 1;
-  const at = s.at ?? '00:00';
-  const [hStr, mStr] = at.split(':');
-  const h = Number(hStr);
-  const m = Number(mStr);
-  const days = s.days ?? [1, 1, 1, 1, 1, 1, 1];
-  const dows = days.every((d) => d === 1)
-    ? '*'
-    : days
-        .map((d, i) => (d ? (i + 1) % 7 : null))
-        .filter((v): v is number => v !== null)
-        .join(',');
-  if (s.unit === 'minute') return `*/${every} * * * ${dows}`;
-  if (s.unit === 'hour') return `0 */${every} * * ${dows}`;
-  if (s.unit === 'day') return `${m} ${h} */${every} * *`;
-  if (s.unit === 'week') return `${m} ${h} * * ${dows}`;
-  return null;
-}
-
-function computeNextRuns(
-  s: ScheduleConfig,
-  count: number,
-): { absolute: string; relative: string }[] {
-  if (s.mode === 'manual') return [];
-  if (s.mode === 'event') {
-    return [
-      {
-        absolute: 'On next matching event',
-        relative: `triggers: ${(s.events ?? []).length} configured`,
-      },
-    ];
-  }
-  const out: { absolute: string; relative: string }[] = [];
-  const now = new Date();
-  let cursor = now;
-  for (let i = 0; i < count; i++) {
-    let next: Date;
-    if (s.mode === 'cron') {
-      const inc =
-        s.cron && s.cron.startsWith('*/15')
-          ? 15
-          : s.cron === '0 * * * *'
-            ? 60
-            : s.cron === '0 */6 * * *'
-              ? 360
-              : s.cron === '0 2 * * *'
-                ? 1440
-                : 60;
-      next = new Date(cursor.getTime() + inc * 60 * 1000);
-    } else if (s.unit === 'minute') {
-      next = new Date(cursor.getTime() + (s.every ?? 1) * 60 * 1000);
-    } else if (s.unit === 'hour') {
-      next = new Date(cursor.getTime() + (s.every ?? 1) * 3600 * 1000);
-    } else if (s.unit === 'day') {
-      next = new Date(cursor.getTime() + (s.every ?? 1) * 86400 * 1000);
-      const [h, m] = (s.at ?? '02:00').split(':').map(Number);
-      next.setHours(h ?? 0, m ?? 0, 0, 0);
-    } else {
-      next = new Date(cursor.getTime() + (s.every ?? 1) * 7 * 86400 * 1000);
-    }
-    cursor = next;
-    out.push({ absolute: formatAbsolute(next), relative: formatRelative(next, now) });
-  }
-  return out;
-}
-
-function formatAbsolute(d: Date): string {
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  const today = new Date();
-  const sameDay = d.toDateString() === today.toDateString();
-  const tomorrow = new Date(today.getTime() + 86400000);
-  const isTomorrow = d.toDateString() === tomorrow.toDateString();
-  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  if (sameDay) return `Today · ${time}`;
-  if (isTomorrow) return `Tomorrow · ${time}`;
-  return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} · ${time}`;
-}
-
-function formatRelative(d: Date, now: Date): string {
-  const ms = d.getTime() - now.getTime();
-  if (ms < 0) return 'now';
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const dy = Math.floor(h / 24);
-  if (dy > 0) return `in ${dy}d ${h % 24}h`;
-  if (h > 0) return `in ${h}h ${m % 60}m`;
-  if (m > 0) return `in ${m}m`;
-  return `in ${s}s`;
-}
-
-function scheduleSummary(agent: Agent, _meta: AgentMeta): string {
-  if (!agent.enabled) return 'paused';
-  if (agent.schedule) return describeSchedule(agent.schedule);
-  if (agent.scheduleCron) {
-    const preset = CRON_PRESETS.find((p) => p.expr === agent.scheduleCron);
-    return preset ? preset.label.toLowerCase() : `cron · ${agent.scheduleCron}`;
-  }
-  return 'default schedule';
 }
 
 /* ───────────────────────── History grid ───────────────────────── */

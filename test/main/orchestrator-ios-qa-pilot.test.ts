@@ -166,12 +166,10 @@ END_IOS_QA_FINDINGS
     expect(target.status).toBe('failed');
     expect(target.findingCount).toBe(1);
 
-    // Observe mode → plan is recorded as a 'preview' audit row.
+    // Observe mode → plan is recorded in the previews table.
     const previews = getDb()
-      .prepare<[string], { kind: string; payload: string }>(
-        'SELECT kind, payload FROM audit_log WHERE run_id = ? AND kind = ?',
-      )
-      .all(result.runId, 'preview');
+      .prepare<[string], { payload: string }>('SELECT payload FROM previews WHERE run_id = ?')
+      .all(result.runId);
     expect(previews.length).toBeGreaterThanOrEqual(1);
     const payload = JSON.parse(previews[0]!.payload);
     expect(payload.kind === 'issue' || payload.kind === 'comment').toBe(true);

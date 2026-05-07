@@ -5,10 +5,11 @@ import { app } from 'electron';
 import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Repo } from '../../shared/types';
 import { getRepo } from '../db/repos';
-import { listAgentsForRepo, getAgent } from '../db/agents';
+import { listAgentsForRepo, getAgent, updateAgent } from '../db/agents';
 import { lockBacklogItem, unlockBacklogItem } from '../db/backlog';
 import { attachRunToPrReviewClaim, releasePrReviewClaim } from '../db/pr-review-claims';
 import { createRun, transitionRun, getRun } from '../db/runs';
+import { insertPreview } from '../db/previews';
 import { appendAudit } from '../logger/audit';
 import { getAgentHandler } from '../agents/registry';
 import { compile } from '../prompt-compiler';
@@ -16,6 +17,9 @@ import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
 import { effectiveDefaultRunner } from '../runners/effective-default';
 import { runnerFallback, classifyOutcome } from '../runners/fallback';
+import { isCancelled as runIsCancelled, registerRun, unregisterRun } from './active-runs';
+import { CaseProgressTracker } from './case-progress';
+import { broadcast } from '../ipc/bus';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
 import { createWorktree, destroyWorktree } from '../git/worktree';
 import { inferChangeKind } from '../evidence/infer-change-kind';
@@ -44,6 +48,18 @@ export interface RunAgentInput {
    */
   taskId?: string;
   /**
+   * One-shot runner override for this run only — does not persist on the
+   * agent row. Used by the Test Plans "Run" popover so the user can pick a
+   * runner for a single run without changing the agent's default.
+   */
+  runnerOverride?: 'claude' | 'codex';
+  /**
+   * One-shot model override for this run only. Empty string → "force CLI
+   * default (skip --model flag)". Undefined → fall through to agent row →
+   * Settings → CLI default.
+   */
+  modelOverride?: string;
+  /**
    * Inject a runner factory for tests (defaults to real Claude/Codex CLIs).
    */
   runnerFactory?: (kind: 'claude' | 'codex') => CodingAgentRunner;
@@ -51,7 +67,7 @@ export interface RunAgentInput {
 
 export interface RunAgentOutput {
   runId: string;
-  finalState: 'done' | 'failed' | 'paused';
+  finalState: 'done' | 'failed' | 'paused' | 'cancelled';
   /** When publish succeeded. */
   prNumber?: number;
   issueNumber?: number;
@@ -103,18 +119,47 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     return { runId: '', finalState: 'done', reason: 'nothing to do' };
   }
 
-  // 2) Pick a runner: per-task override → per-agent override → repo default.
-  const runnerKind = selected.runnerOverride ?? agentRow?.runnerOverride ?? repoDefaultRunner;
+  // 2) Pick a runner: per-call override (Test Plans popover) → per-task
+  //    override (selectTask) → per-agent override (DB row) → repo default.
+  const runnerKind =
+    input.runnerOverride ??
+    selected.runnerOverride ??
+    agentRow?.runnerOverride ??
+    repoDefaultRunner;
+
+  // 3a) Pick the model the same way: explicit per-call override wins, then
+  //     the persistent agent-row override, then Settings/CLI defaults via the
+  //     compile() layer. `undefined` here means "let downstream resolve from
+  //     Settings"; an explicit empty string means "force CLI default — skip
+  //     the --model flag" (required for ChatGPT-account Codex sign-ins).
+  const resolvedModelOverride: string | undefined =
+    input.modelOverride !== undefined
+      ? input.modelOverride
+      : (agentRow?.modelOverride ?? undefined);
 
   // 3) Create the run row + finalize any claims acquired during selectTask.
-  const run = createRun({
-    repoId: repo.id,
-    agentName: input.agentName,
-    agentId: agentRow?.id ?? null,
-    trigger: input.trigger,
-    taskRef: selected.task.ref,
-    runnerUsed: runnerKind,
-  });
+  // createRun enforces per-task-ref single-flight (one run per `taskRef` at
+  // a time per repo). If it throws, release any claims acquired above so we
+  // don't leak a stuck backlog item or PR-review claim.
+  let run;
+  try {
+    run = createRun({
+      repoId: repo.id,
+      agentName: input.agentName,
+      agentId: agentRow?.id ?? null,
+      trigger: input.trigger,
+      taskRef: selected.task.ref,
+      runnerUsed: runnerKind,
+    });
+  } catch (e) {
+    if (selected.backlogItem) {
+      unlockBacklogItem(selected.backlogItem.id);
+    }
+    if (selected.prReviewClaimId) {
+      releasePrReviewClaim(selected.prReviewClaimId, 'failed');
+    }
+    throw e;
+  }
   if (selected.backlogItem) {
     // Replaces the placeholder token used during atomic claim with the real
     // run id so the renderer can join backlog → runs.
@@ -130,6 +175,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     payload: { from: 'queued', to: 'running', task: selected.task.ref },
   });
   transitionRun(run.id, 'running');
+
+  // Register the run in the active-runs map so `agents:cancel` can abort
+  // the spawn. The AbortController flows through to the CLI runner via
+  // runWithFallback below.
+  const abortController = registerRun(run.id);
 
   let worktreeHandle: { worktreePath: string; branch: string } | null = null;
   try {
@@ -160,6 +210,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       const compiled = compile({
         agentName: input.agentName,
         runnerOverride: runner,
+        ...(resolvedModelOverride !== undefined ? { modelOverride: resolvedModelOverride } : {}),
         task: selected.task,
         repo: repoSummary,
         permissions,
@@ -182,7 +233,27 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     compileFor(runnerKind);
 
     // 6) Run with auto-fallback policy. The CLI authenticates itself —
-    //    Obelisk doesn't pass credentials.
+    //    Obelisk doesn't pass credentials. The shared abort signal lets
+    //    `agents:cancel` terminate the spawn from the IPC layer.
+    const caseTracker = new CaseProgressTracker((evt) => {
+      // Persist a per-case audit row + broadcast so the Plan Progress tab
+      // updates live. The renderer derives the per-case grid from these rows.
+      appendAudit({
+        runId: run.id,
+        kind: 'case_progress',
+        payload: {
+          caseId: evt.caseId,
+          status: evt.status,
+          ...(evt.detail ? { detail: evt.detail } : {}),
+        },
+      });
+      broadcast({
+        type: 'run.caseProgress',
+        runId: run.id,
+        caseId: evt.caseId,
+        status: evt.status,
+      });
+    });
     const runResult = await runWithFallback({
       runId: run.id,
       taskRef: selected.task.ref,
@@ -191,7 +262,28 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       worktreePath: worktreeHandle.worktreePath,
       compileFor,
       timeoutMs: agentRow?.timeoutMs ?? 30 * 60 * 1000,
+      abortSignal: abortController.signal,
+      caseTracker,
     });
+    caseTracker.flush();
+
+    // If the user clicked Stop while the runner was spawning, the runner's
+    // result will look like a crash/no_changes/non_zero_exit — but we want
+    // the run to land in `cancelled`, not `failed`. Detect that here before
+    // any other failure-classification branch runs.
+    if (runIsCancelled(run.id)) {
+      appendAudit({
+        runId: run.id,
+        kind: 'state',
+        payload: { from: 'running', to: 'cancelled', reason: 'user_cancelled' },
+      });
+      transitionRun(run.id, 'cancelled', {
+        outputSummary: 'Stopped by the user.',
+        runnerUsed: runResult.runnerUsed,
+        fallbackUsed: runResult.fallbackUsed,
+      });
+      return { runId: run.id, finalState: 'cancelled', reason: 'user_cancelled' };
+    }
 
     // Read-only agents (qa-hunter, manual-qa, pr-reviewer) report
     // `no_changes` as their normal success path; coerce that into an ok
@@ -218,6 +310,45 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         runnerUsed: runResult.runnerUsed,
         fallbackUsed: runResult.fallbackUsed,
       });
+      // Auth-required is terminal until the user signs in. Auto-pause the
+      // owning agent immediately (skip the 3-strike circuit breaker) so we
+      // don't burn cron tick after cron tick on a known-broken setup. Manual
+      // triggers don't pause — the user is actively debugging.
+      if (
+        result.reason === 'auth_required' &&
+        agentRow &&
+        agentRow.enabled &&
+        input.trigger !== 'manual'
+      ) {
+        try {
+          updateAgent(agentRow.id, { enabled: false });
+          appendAudit({
+            runId: run.id,
+            kind: 'agent_auto_paused',
+            payload: {
+              agentId: agentRow.id,
+              agentName: agentRow.name,
+              reason: 'login_required',
+              runnerUsed: runResult.runnerUsed,
+              detail: result.detail,
+            },
+          });
+          broadcast({
+            type: 'agent.autoPaused',
+            repoId: repo.id,
+            agentId: agentRow.id,
+            agentName: agentRow.name,
+            displayName: agentRow.displayName,
+            reason: 'consecutive_failures',
+            consecutiveFailures: 1,
+            lastErrorCode: errorCode,
+            lastErrorSummary: result.detail.slice(0, 200),
+          });
+        } catch {
+          // Best-effort — if the auto-pause itself fails, the scheduler's
+          // 3-strike breaker will catch us within a few minutes anyway.
+        }
+      }
       return { runId: run.id, finalState: 'failed', reason: result.reason };
     }
 
@@ -342,9 +473,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     // (the generic noop-summary below would otherwise win and confuse users).
     if (handler.skipsEvidenceGate && repo.mode === 'observe') {
       for (const plan of plans) {
-        appendAudit({
+        // Previews live in their own table now (previews + preview_markers,
+        // see migration 005) so they survive deletion of the originating
+        // run row. Schema has ON DELETE SET NULL on the run_id back-pointer.
+        insertPreview({
+          repoId: repo.id,
           runId: run.id,
-          kind: 'preview',
+          agentName: input.agentName,
           payload: plan,
         });
       }
@@ -429,6 +564,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    // If the user clicked Stop while this branch was running (e.g. inside
+    // worktree cleanup or publish), surface it as `cancelled`, not `failed`.
+    if (runIsCancelled(run.id)) {
+      appendAudit({
+        runId: run.id,
+        kind: 'state',
+        payload: { from: 'running', to: 'cancelled', reason: 'user_cancelled' },
+      });
+      transitionRun(run.id, 'cancelled', { outputSummary: 'Stopped by the user.' });
+      return { runId: run.id, finalState: 'cancelled', reason: 'user_cancelled' };
+    }
     appendAudit({
       runId: run.id,
       kind: 'state',
@@ -440,13 +586,21 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
     return { runId: run.id, finalState: 'failed', reason: message };
   } finally {
+    // Always release the active-runs entry — this run is no longer cancelable.
+    unregisterRun(run.id);
     if (selected?.backlogItem) {
       unlockBacklogItem(selected.backlogItem.id);
     }
     if (selected?.prReviewClaimId) {
       const finalState = getRun(run.id)?.state;
       const result: 'done' | 'failed' | 'paused' =
-        finalState === 'done' ? 'done' : finalState === 'paused' ? 'paused' : 'failed';
+        finalState === 'done'
+          ? 'done'
+          : finalState === 'paused'
+            ? 'paused'
+            : finalState === 'cancelled'
+              ? 'paused'
+              : 'failed';
       releasePrReviewClaim(selected.prReviewClaimId, result);
     }
     if (worktreeHandle) {
@@ -473,6 +627,10 @@ interface FallbackInput {
   worktreePath: string;
   compileFor: (runner: 'claude' | 'codex') => import('../prompt-compiler').CompiledPrompt;
   timeoutMs: number;
+  /** Shared with the active-runs registry so user cancels reach the spawn. */
+  abortSignal: AbortSignal;
+  /** Streaming parser fed every stdout line so CASE_* markers fire live updates. */
+  caseTracker: CaseProgressTracker;
 }
 
 interface FallbackOutput {
@@ -489,7 +647,6 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
   while (runner !== null) {
     const impl = input.factory(runner);
     const prompt = input.compileFor(runner);
-    const abortController = new AbortController();
     const result = await impl.run(
       {
         worktreePath: input.worktreePath,
@@ -501,9 +658,15 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
             kind: line.kind,
             payload: line.payload,
           });
+          // Tee stdout into the case-progress tracker so CASE_* markers
+          // surface as live audit rows + bus events for the Plan Progress
+          // tab in Mission Control.
+          if (line.kind === 'stdout' && typeof line.payload === 'string') {
+            input.caseTracker.feedLine(line.payload);
+          }
         },
       },
-      abortController.signal,
+      input.abortSignal,
     );
     lastResult = result;
 
@@ -619,7 +782,7 @@ function maybeRepoOverrideDirs(repoPath: string): {
 }
 
 function errorCodeForFailure(
-  reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes',
+  reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes' | 'auth_required',
   detail: string,
 ): string {
   switch (reason) {
@@ -627,6 +790,8 @@ function errorCodeForFailure(
       return 'TIMEOUT';
     case 'crash':
       return 'INTERNAL';
+    case 'auth_required':
+      return 'RUNNER_LOGIN_REQUIRED';
     case 'non_zero_exit':
       // The CLI runners format their detail strings with a "with no output"
       // suffix when neither stdout nor stderr was produced; that's almost

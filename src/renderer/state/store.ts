@@ -8,6 +8,7 @@ export type Route =
   | 'agents'
   | 'playbook'
   | 'test-plans'
+  | 'coverage'
   | 'qa'
   | 'connect'
   | 'settings';

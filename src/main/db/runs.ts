@@ -51,18 +51,50 @@ export interface CreateRunInput {
   runnerUsed: RunnerKind;
 }
 
+/**
+ * Per-task-ref single-flight: at most one run with the given (repoId, taskRef)
+ * can be in a non-terminal state at a time. This is the dedup boundary that
+ * lets multiple instances of the same agent type coexist (each can run a
+ * different test plan / backlog item / flow), while still preventing two
+ * agents from racing on the same task.
+ *
+ * The check + insert run inside one transaction so two simultaneous calls
+ * can't both pass the SELECT and then both INSERT. Throws RUN_ACTIVE when
+ * a live run already owns this task ref.
+ */
 export function createRun(input: CreateRunInput): Run {
   const id = ulid();
   const now = new Date().toISOString();
-  getDb()
-    .prepare(
+  const db = getDb();
+
+  const insert = db.transaction(() => {
+    if (input.taskRef !== null) {
+      const existing = db
+        .prepare<
+          [string, string],
+          { id: string; agent_name: AgentName }
+        >(
+          `SELECT id, agent_name FROM runs
+            WHERE repo_id = ? AND task_ref = ?
+              AND state IN ('queued','running','publishing','paused')
+            LIMIT 1`,
+        )
+        .get(input.repoId, input.taskRef);
+      if (existing) {
+        throw new ObeliskError(
+          'RUN_ACTIVE',
+          `Another run is already working on "${input.taskRef}".`,
+          'Wait for the current run to finish, or cancel it from Mission Control before starting another.',
+        );
+      }
+    }
+    db.prepare(
       `INSERT INTO runs
         (id, repo_id, agent_name, agent_id, state, started_at, last_heartbeat_at,
          trigger, task_ref, runner_used, fallback_used, output_summary,
          error_code, worktree_path)
        VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
-    )
-    .run(
+    ).run(
       id,
       input.repoId,
       input.agentName,
@@ -73,10 +105,31 @@ export function createRun(input: CreateRunInput): Run {
       input.taskRef,
       input.runnerUsed,
     );
+  });
+  insert();
+
   const run = getRun(id);
   if (!run) throw new Error('createRun: row vanished');
   broadcast({ type: 'run.created', run });
   return run;
+}
+
+/**
+ * Returns the live run currently holding `taskRef` for this repo, or null.
+ * Useful for the renderer when surfacing "this plan is already running" in
+ * UI without trying to start a duplicate run.
+ */
+export function getActiveRunForTaskRef(repoId: string, taskRef: string): Run | null {
+  const row = getDb()
+    .prepare<[string, string], RunRow>(
+      `SELECT * FROM runs
+        WHERE repo_id = ? AND task_ref = ?
+          AND state IN ('queued','running','publishing','paused')
+        ORDER BY started_at DESC NULLS LAST
+        LIMIT 1`,
+    )
+    .get(repoId, taskRef);
+  return row ? mapRow(row) : null;
 }
 
 export function getRun(id: string): Run | null {
@@ -123,6 +176,43 @@ export function getLastRunStartedAt(repoId: string, agentName: AgentName): Date 
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Most recent N finished scheduled runs for this agent instance, newest
+ * first. Powers the scheduler's circuit breaker — if the last several
+ * scheduled runs all failed within a short window, the scheduler auto-pauses
+ * the agent so it doesn't burn credits on a busted setup.
+ */
+export interface RecentRunSummary {
+  state: RunState;
+  finishedAt: string | null;
+  errorCode: string | null;
+  outputSummary: string | null;
+}
+export function getRecentScheduledRunsForAgent(
+  agentId: string,
+  limit: number,
+): RecentRunSummary[] {
+  return getDb()
+    .prepare<
+      [string, number],
+      { state: RunState; finished_at: string | null; error_code: string | null; output_summary: string | null }
+    >(
+      `SELECT state, finished_at, error_code, output_summary
+         FROM runs
+        WHERE agent_id = ? AND trigger = 'schedule'
+          AND state IN ('done','failed','cancelled')
+        ORDER BY finished_at DESC NULLS LAST
+        LIMIT ?`,
+    )
+    .all(agentId, limit)
+    .map((r) => ({
+      state: r.state,
+      finishedAt: r.finished_at,
+      errorCode: r.error_code,
+      outputSummary: r.output_summary,
+    }));
+}
+
 /** Per-instance variant — the scheduler needs this once instances diverge. */
 export function getLastRunStartedAtForAgent(agentId: string): Date | null {
   const row = getDb()
@@ -149,7 +239,7 @@ export function transitionRun(
   } = {},
 ): Run {
   const at = new Date().toISOString();
-  const finishedAt = state === 'done' || state === 'failed' ? at : null;
+  const finishedAt = state === 'done' || state === 'failed' || state === 'cancelled' ? at : null;
 
   const fields: string[] = ['state = ?', 'last_heartbeat_at = ?'];
   const values: (string | number | null)[] = [state, at];
@@ -198,7 +288,7 @@ export function heartbeat(id: string): void {
 }
 
 const ACTIVE_STATES: RunState[] = ['queued', 'running', 'publishing'];
-const DELETABLE_STATES: RunState[] = ['done', 'failed', 'paused'];
+const DELETABLE_STATES: RunState[] = ['done', 'failed', 'paused', 'cancelled'];
 
 /**
  * Delete a single run and all its dependent rows. Refuses to delete a run

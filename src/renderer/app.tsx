@@ -9,6 +9,7 @@ import { Backlog } from './screens/Backlog';
 import { AgentsScreen } from './screens/Agents';
 import { Playbook } from './screens/Playbook';
 import { TestPlans } from './screens/TestPlans';
+import { Coverage } from './screens/Coverage';
 import { Qa } from './screens/Qa';
 import { SettingsScreen } from './screens/Settings';
 
@@ -59,6 +60,8 @@ function renderScreen(route: Route): ReactElement {
       return <Playbook />;
     case 'test-plans':
       return <TestPlans />;
+    case 'coverage':
+      return <Coverage />;
     case 'qa':
       return <Qa />;
     case 'settings':

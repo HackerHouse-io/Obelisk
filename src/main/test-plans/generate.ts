@@ -12,6 +12,7 @@ import { buildSkeleton } from './heuristic';
 import { createPlan } from './store';
 import { advanceStage, finishDone, finishFailed, startJob } from './jobs';
 import type { TestPlan } from '../../shared/types';
+import { buildCoverageReport, pickFocusFiles, type FocusFile } from '../coverage/aggregate';
 
 /**
  * Plan generation flow:
@@ -42,6 +43,13 @@ export interface GenerateInput {
    * "fall through to Settings".
    */
   modelOverride?: string;
+  /**
+   * When true, the generator queries the coverage report and biases the
+   * prompt toward files that are uncovered, recently churned, or carrying
+   * open findings. No effect on the heuristic seed (which is just a
+   * scaffold the AI replaces anyway).
+   */
+  focusOnChangedOrUncovered?: boolean;
 }
 
 /**
@@ -99,7 +107,8 @@ async function runJob(jobId: string, input: GenerateInput): Promise<void> {
 
     const args =
       runnerKind === 'codex' ? codexArgs(input.modelOverride) : claudeArgs(input.modelOverride);
-    const stdin = generatorPrompt(input, seed);
+    const focusFiles = input.focusOnChangedOrUncovered ? await loadFocusFiles(input.repo.id) : [];
+    const stdin = generatorPrompt(input, seed, focusFiles);
     const abort = new AbortController();
     // Throttle "Drafting: …" toast updates: chatty models emit hundreds of
     // stdout chunks during reasoning, and we don't want a re-render per chunk.
@@ -224,7 +233,11 @@ const GEN_SYSTEM_PROMPT = [
   'JSON; do not write prose outside the markers.',
 ].join(' ');
 
-function generatorPrompt(input: GenerateInput, seed: TestPlanBlock[]): string {
+function generatorPrompt(
+  input: GenerateInput,
+  seed: TestPlanBlock[],
+  focusFiles: FocusFile[],
+): string {
   const scopeDesc =
     input.scope === 'feature' && input.featureName
       ? `Focus narrowly on the "${input.featureName}" feature. Read the codebase to find the files that implement it. Produce sections that cover its happy path, validation, edge cases, network/IO failures, and persistence.`
@@ -234,6 +247,20 @@ function generatorPrompt(input: GenerateInput, seed: TestPlanBlock[]): string {
     .map((b) => (b.kind === 'section' ? `## ${b.title}` : `- [ ] ${b.title}`))
     .join('\n');
 
+  const focusBlock = focusFiles.length
+    ? [
+        '',
+        '## Coverage focus (the user opted into "focus on what changed or isn\'t covered")',
+        '',
+        'Bias this plan toward the files below — they are either uncovered, recently churned',
+        'since the last passing QA sweep, or carry open findings. Skew section selection and case',
+        'titles to exercise the features these files implement. You may include a Smoke section,',
+        'but do not waste cases on areas that are already heavily covered and stable.',
+        '',
+        ...focusFiles.map((f) => `- \`${f.path}\` — ${describeReason(f)}`),
+      ].join('\n')
+    : '';
+
   return [
     `# Task: produce a comprehensive test plan for ${input.repo.githubFullName}`,
     '',
@@ -242,6 +269,7 @@ function generatorPrompt(input: GenerateInput, seed: TestPlanBlock[]): string {
     '',
     '## Scope',
     scopeDesc,
+    focusBlock,
     '',
     '## Hard requirements',
     `- Minimum ${input.scope === 'feature' ? 2 : 5} sections, target ${input.scope === 'feature' ? 3 : 8} sections.`,
@@ -250,6 +278,11 @@ function generatorPrompt(input: GenerateInput, seed: TestPlanBlock[]): string {
     '- Each case has a CONCRETE title (under 14 words), an Expected outcome, and a Repro hint.',
     '- "Login works" is not acceptable — name the route, the field IDs, the success state.',
     '- Severity is one of P0 (must work), P1 (should work), P2 (nice to have).',
+    '- Each case carries `scope` — an array of 1–3 lowercase labels naming the',
+    '  code areas the case exercises (e.g. ["auth"], ["checkout","billing"],',
+    '  ["onboarding"]). Use the section name as a fallback if no narrower label',
+    '  fits. Labels feed the Coverage screen so the user can see which files',
+    '  are tested vs. dark, so be precise.',
     '',
     '## Heuristic seed (we walked the repo for you — replace with real cases)',
     '```',
@@ -269,9 +302,9 @@ function generatorPrompt(input: GenerateInput, seed: TestPlanBlock[]): string {
     '{',
     '  "blocks": [',
     '    { "kind": "section", "title": "Smoke" },',
-    '    { "kind": "case", "title": "App boots without uncaught errors", "expected": "...", "repro": "...", "severity": "P0" },',
+    '    { "kind": "case", "title": "App boots without uncaught errors", "expected": "...", "repro": "...", "severity": "P0", "scope": ["smoke"] },',
     '    { "kind": "section", "title": "<Feature 1>" },',
-    '    { "kind": "case", "title": "...", "expected": "...", "repro": "...", "severity": "P0" }',
+    '    { "kind": "case", "title": "...", "expected": "...", "repro": "...", "severity": "P0", "scope": ["<feature-1>"] }',
     '  ]',
     '}',
     'END_TEST_PLAN',
@@ -327,6 +360,9 @@ function tryParseBlocks(raw: string): TestPlanBlock[] | null {
         typeof o.severity === 'string' && /^P[012]$/.test(o.severity)
           ? (o.severity as 'P0' | 'P1' | 'P2')
           : null;
+      const scope = Array.isArray(o.scope)
+        ? o.scope.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        : null;
       blocks.push({
         kind: 'case',
         id: ulid(),
@@ -334,6 +370,7 @@ function tryParseBlocks(raw: string): TestPlanBlock[] | null {
         expected: typeof o.expected === 'string' ? o.expected.trim() : null,
         repro: typeof o.repro === 'string' ? o.repro.trim() : null,
         severity: sev,
+        scope: scope && scope.length > 0 ? scope : null,
       });
     }
   }
@@ -362,6 +399,34 @@ function findLargestJsonObject(text: string): string | null {
     }
   }
   return best;
+}
+
+/**
+ * Build the focus list for the generator prompt. Best-effort: if the
+ * coverage report fails to compute (no git repo yet, etc.), we silently
+ * return [] — focus mode just becomes a no-op rather than blocking the
+ * generation.
+ */
+async function loadFocusFiles(repoId: string): Promise<FocusFile[]> {
+  try {
+    const report = await buildCoverageReport(repoId);
+    return pickFocusFiles(report, 30);
+  } catch {
+    return [];
+  }
+}
+
+function describeReason(f: FocusFile): string {
+  switch (f.reason) {
+    case 'open-findings':
+      return `${f.findingsCount} open finding${f.findingsCount === 1 ? '' : 's'}`;
+    case 'uncovered-with-churn':
+      return `uncovered, ${f.churnSinceLastPass} commit${f.churnSinceLastPass === 1 ? '' : 's'} since last pass`;
+    case 'churn-since-pass':
+      return `${f.churnSinceLastPass} commit${f.churnSinceLastPass === 1 ? '' : 's'} since last pass`;
+    case 'uncovered':
+      return `no test case targets this file yet`;
+  }
 }
 
 /**

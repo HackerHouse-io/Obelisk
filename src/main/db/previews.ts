@@ -8,11 +8,19 @@ import type {
 } from '../../shared/types';
 
 /**
- * audit_log rows we treat specially:
- *   kind='preview'            — agent's PublishPlan (the would-be issue)
- *   kind='preview_published'  — user manually filed it; payload links to source
- *   kind='preview_dismissed'  — user marked it false-positive
+ * Previews live in their own table now (`previews`) — see migration
+ * `005_previews_table.sql`. The previous design stored them as audit_log
+ * rows joined by run_id, which meant deleting a run cascaded the previews
+ * away (the run is scratch; the finding is the durable artifact and must
+ * outlive its source run).
+ *
+ * `preview_markers` carries the published / dismissed lifecycle events.
+ *
+ * The exported helpers here keep the same signatures so qa-hunter,
+ * manual-qa, the orchestrator, the IPC layer, and the coverage aggregator
+ * don't need to change.
  */
+
 const SUPPORTED_EVIDENCE_KINDS = new Set([
   'screenshot',
   'recording',
@@ -26,7 +34,7 @@ const SEVERITY_LABEL_PATTERN = /^severity:(P[012])$/;
 
 interface PreviewRow {
   id: number;
-  run_id: string;
+  run_id: string | null;
   agent_name: AgentName;
   repo_id: string;
   at: string;
@@ -87,28 +95,41 @@ function loadEvidenceMap(runIds: string[]): Map<string, PreviewEvidence[]> {
   return map;
 }
 
-function loadAuditMarkerMap<T>(
-  kind: string,
-  parse: (payload: string, at: string) => T | null,
-): Map<number, T> {
-  const map = new Map<number, T>();
-  const rows = getDb()
-    .prepare<[string], { src: number | null; payload: string; at: string }>(
-      `SELECT json_extract(payload,'$.sourcePreviewId') AS src, payload, at
-       FROM audit_log
-       WHERE kind = ?
-       ORDER BY id ASC`,
-    )
-    .all(kind);
-  for (const r of rows) {
-    if (typeof r.src !== 'number') continue;
-    const v = parse(r.payload, r.at);
-    if (v !== null) map.set(r.src, v);
-  }
-  return map;
+interface MarkerRow {
+  preview_id: number;
+  kind: 'published' | 'dismissed';
+  at: string;
+  payload: string | null;
 }
 
-function parsePublished(payload: string, at: string): PublishedMarker | null {
+function loadMarkers(): {
+  published: Map<number, PublishedMarker>;
+  dismissed: Set<number>;
+} {
+  const rows = getDb()
+    .prepare<[], MarkerRow>(
+      `SELECT preview_id, kind, at, payload
+         FROM preview_markers
+         ORDER BY id ASC`,
+    )
+    .all();
+  const published = new Map<number, PublishedMarker>();
+  const dismissed = new Set<number>();
+  for (const r of rows) {
+    if (r.kind === 'dismissed') {
+      dismissed.add(r.preview_id);
+      continue;
+    }
+    if (r.kind === 'published') {
+      const parsed = parsePublishedPayload(r.payload, r.at);
+      if (parsed) published.set(r.preview_id, parsed);
+    }
+  }
+  return { published, dismissed };
+}
+
+function parsePublishedPayload(payload: string | null, at: string): PublishedMarker | null {
+  if (!payload) return null;
   try {
     const p = JSON.parse(payload) as { issueNumber?: unknown; htmlUrl?: unknown };
     if (typeof p.issueNumber !== 'number' || typeof p.htmlUrl !== 'string') return null;
@@ -135,32 +156,46 @@ function rowToFinding(row: PreviewRow, enrich: RowEnrichment): PreviewedFinding 
   const labels = parsed.labels ?? [];
   return {
     id: row.id,
-    runId: row.run_id,
+    // Run id may be null if the originating run was deleted — the finding
+    // survives. Renderer treats null as "originating run was cleaned up".
+    runId: row.run_id ?? '',
     agentName: row.agent_name,
     at: row.at,
     title: parsed.title,
     body: parsed.body,
     labels,
     severity: severityFromLabels(labels),
-    evidence: enrich.evidenceByRun.get(row.run_id) ?? [],
+    evidence: row.run_id ? (enrich.evidenceByRun.get(row.run_id) ?? []) : [],
     published: enrich.publishedById.get(row.id) ?? null,
     dismissed: enrich.dismissedIds.has(row.id),
   };
 }
 
 /**
- * Pull recent Observe-mode previews for a repo, newest first. The join
- * filters audit rows down to the runs that belong to `repoId`.
+ * Titles of previews that are still "open" — neither published as a GitHub
+ * issue nor dismissed by the user. Agents call this on each run to suppress
+ * findings whose title fuzzy-matches an existing open preview, so a recurring
+ * sweep doesn't pile three copies of the same bug into the previews list.
+ */
+export function listOpenPreviewTitlesForRepo(repoId: string): string[] {
+  const previews = listPreviewsForRepo(repoId, 200);
+  return previews
+    .filter((p) => !p.dismissed && !p.published)
+    .map((p) => p.title)
+    .filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+}
+
+/**
+ * Pull recent Observe-mode previews for a repo, newest first.
  */
 export function listPreviewsForRepo(repoId: string, limit = 25): PreviewedFinding[] {
   const rows = getDb()
     .prepare<[string, number], PreviewRow>(
-      `SELECT a.id, a.run_id, r.agent_name, r.repo_id, a.at, a.payload
-       FROM audit_log a
-       JOIN runs r ON r.id = a.run_id
-       WHERE r.repo_id = ? AND a.kind = 'preview'
-       ORDER BY a.id DESC
-       LIMIT ?`,
+      `SELECT id, run_id, agent_name, repo_id, at, payload
+         FROM previews
+         WHERE repo_id = ?
+         ORDER BY id DESC
+         LIMIT ?`,
     )
     .all(repoId, limit);
 
@@ -174,12 +209,14 @@ export function listPreviewsForRepo(repoId: string, limit = 25): PreviewedFindin
 }
 
 function enrichmentFor(rows: PreviewRow[]): RowEnrichment {
-  const runIds = Array.from(new Set(rows.map((r) => r.run_id)));
-  const dismissedMap = loadAuditMarkerMap<true>('preview_dismissed', () => true);
+  const runIds = Array.from(
+    new Set(rows.map((r) => r.run_id).filter((id): id is string => !!id)),
+  );
+  const markers = loadMarkers();
   return {
     evidenceByRun: loadEvidenceMap(runIds),
-    publishedById: loadAuditMarkerMap('preview_published', parsePublished),
-    dismissedIds: new Set(dismissedMap.keys()),
+    publishedById: markers.published,
+    dismissedIds: markers.dismissed,
   };
 }
 
@@ -191,16 +228,36 @@ export interface PreviewLookup {
 export function getPreviewById(previewId: number): PreviewLookup | null {
   const row = getDb()
     .prepare<[number], PreviewRow>(
-      `SELECT a.id, a.run_id, r.agent_name, r.repo_id, a.at, a.payload
-       FROM audit_log a
-       JOIN runs r ON r.id = a.run_id
-       WHERE a.id = ? AND a.kind = 'preview'`,
+      `SELECT id, run_id, agent_name, repo_id, at, payload
+         FROM previews
+         WHERE id = ?`,
     )
     .get(previewId);
   if (!row) return null;
   const finding = rowToFinding(row, enrichmentFor([row]));
   if (!finding) return null;
   return { finding, repoId: row.repo_id };
+}
+
+/**
+ * Insert a new preview. Called by the orchestrator on Observe-mode runs
+ * when the agent emits a PublishPlan that would otherwise have been filed
+ * as a GitHub issue. Returns the new preview's id.
+ */
+export function insertPreview(opts: {
+  repoId: string;
+  runId: string;
+  agentName: AgentName;
+  payload: unknown;
+}): number {
+  const at = new Date().toISOString();
+  const result = getDb()
+    .prepare(
+      `INSERT INTO previews (repo_id, run_id, agent_name, at, payload)
+         VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(opts.repoId, opts.runId, opts.agentName, at, JSON.stringify(opts.payload));
+  return Number(result.lastInsertRowid);
 }
 
 export function markPreviewPublished(opts: {
@@ -211,29 +268,24 @@ export function markPreviewPublished(opts: {
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO audit_log (run_id, at, kind, payload)
-       VALUES (?, ?, 'preview_published', ?)`,
+      `INSERT INTO preview_markers (preview_id, kind, at, payload)
+         VALUES (?, 'published', ?, ?)
+         ON CONFLICT(preview_id, kind) DO UPDATE SET at = excluded.at, payload = excluded.payload`,
     )
     .run(
-      opts.runId,
+      opts.sourcePreviewId,
       new Date().toISOString(),
-      JSON.stringify({
-        sourcePreviewId: opts.sourcePreviewId,
-        issueNumber: opts.issueNumber,
-        htmlUrl: opts.htmlUrl,
-      }),
+      JSON.stringify({ issueNumber: opts.issueNumber, htmlUrl: opts.htmlUrl }),
     );
 }
 
 export function markPreviewDismissed(opts: { sourcePreviewId: number; runId: string }): void {
+  void opts.runId; // legacy parameter — markers are now keyed by preview, not run
   getDb()
     .prepare(
-      `INSERT INTO audit_log (run_id, at, kind, payload)
-       VALUES (?, ?, 'preview_dismissed', ?)`,
+      `INSERT INTO preview_markers (preview_id, kind, at)
+         VALUES (?, 'dismissed', ?)
+         ON CONFLICT(preview_id, kind) DO UPDATE SET at = excluded.at`,
     )
-    .run(
-      opts.runId,
-      new Date().toISOString(),
-      JSON.stringify({ sourcePreviewId: opts.sourcePreviewId }),
-    );
+    .run(opts.sourcePreviewId, new Date().toISOString());
 }

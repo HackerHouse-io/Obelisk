@@ -42,14 +42,22 @@ BEGIN_FINDINGS
   {
     "title": "Stale streak after reset",
     "severity": "P0",
-    "repro": "1. Complete a lesson; 2. Settings → Reset; 3. Streak survives.",
+    "description": "AppState.reset() clears progress counters but never zeroes the streak. The streak counter persists across a full reset, which contradicts the documented behavior of Settings → Reset and leaves a stale value visible on the home screen.",
+    "expected": "After Settings → Reset, the streak counter is 0.",
+    "actual": "After Settings → Reset, the streak counter retains its prior value.",
+    "repro": "1. Complete a lesson so streak >= 1.\\n2. Open Settings.\\n3. Tap Reset.\\n4. Return to home — streak is unchanged.",
+    "evidence": "WealthLab/AppState.swift:361 reset() body resets progress and credentials but does not assign streak = 0.",
     "suspected_files": ["WealthLab/AppState.swift:361"],
     "suggested_test": "Seed streak; reset; expect zero."
   },
   {
     "title": "Lesson-only courses never grant credentials",
     "severity": "P1",
-    "repro": "1. Mark every credit lesson done; 2. Open Dean's List; 3. No credential.",
+    "description": "Credential.award() filters by unit.kind == .quiz when totaling completion. Courses composed entirely of .lesson units never reach the award threshold even when 100% complete, so users finish a course and receive no credential.",
+    "expected": "Completing every unit in Dean's List awards the Dean's List credential.",
+    "actual": "Completing every unit in Dean's List leaves earnedCredentials empty.",
+    "repro": "1. Open Dean's List.\\n2. Mark every lesson complete.\\n3. Return to credentials screen — none are listed.",
+    "evidence": "WealthLab/Models/Credential.swift:45 award() filters units to .quiz before counting; Dean's List contains only .lesson units.",
     "suspected_files": ["WealthLab/Models/Credential.swift:45"],
     "suggested_test": "Complete every unit; expect earnedCredentials non-empty."
   }
@@ -120,12 +128,12 @@ describe('QA Hunter: stdout passthrough on no_changes', () => {
     expect(result.finalState).toBe('done');
     expect(result.reason).toBe('previewed');
 
-    // The findings should land in audit_log as 'preview' rows. Two of them.
+    // The findings should land in the previews table. Two of them.
     const previews = getDb()
-      .prepare<[string, string], { payload: string }>(
-        "SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?",
+      .prepare<[string], { payload: string }>(
+        'SELECT payload FROM previews WHERE run_id = ?',
       )
-      .all(result.runId, 'preview');
+      .all(result.runId);
     expect(previews.length).toBe(2);
 
     const titles = previews

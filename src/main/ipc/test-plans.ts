@@ -57,6 +57,7 @@ export async function handleTestPlansGenerate(
     ...(payload.featureName ? { featureName: payload.featureName } : {}),
     ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
     ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+    ...(payload.focusOnChangedOrUncovered ? { focusOnChangedOrUncovered: true } : {}),
   });
   return { jobId };
 }

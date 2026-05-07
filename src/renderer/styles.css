@@ -1190,10 +1190,11 @@ body {
 }
 
 .mc-card {
+  position: relative;
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-2);
-  padding: 10px;
+  padding: 10px 10px 10px 14px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -1204,6 +1205,55 @@ body {
   transition:
     border-color 140ms var(--ease),
     transform 120ms var(--ease);
+}
+
+/* Vertical accent bar tinted by the card's stage color, so each card carries
+   its state at a glance even when titles are similar. */
+.mc-card-accent {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  border-top-left-radius: var(--r-2);
+  border-bottom-left-radius: var(--r-2);
+  opacity: 0.85;
+}
+
+.mc-card-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mc-card-subtitle {
+  font-size: 10.5px;
+  color: var(--t-3);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.mc-card-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--t-3);
+  min-width: 0;
+}
+.mc-card-time {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mc-card-summary {
+  color: var(--t-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
 }
 .mc-card:hover {
   border-color: var(--brand-line);
@@ -1944,16 +1994,30 @@ body {
 
 /* ---------- File-issue modal ---------- */
 
-.file-issue-modal {
-  width: min(880px, calc(100vw - 60px));
+/* IMPORTANT: combined `.modal-panel.file-issue-modal` selector — `.modal-panel`
+   is defined further down in this file and has the same single-class
+   specificity, so the LATER rule wins. Without bumping specificity here, the
+   default `.modal-panel { width: min(440px, …) }` silently overrides every
+   width set on `.file-issue-modal` and the modal renders at 440px regardless
+   of what we put here. Caught after several "I made the modal bigger" claims
+   were not actually true on screen. */
+.modal-panel.file-issue-modal {
+  /* This modal is effectively a markdown editor — give it the room a
+     real editor needs so titles + multi-section bodies are readable. */
+  width: min(1120px, calc(100vw - 40px));
+  max-height: calc(100vh - 80px);
   padding: 0;
   gap: 0;
+  overflow: hidden;
 }
 
-.file-issue-modal form {
+.modal-panel.file-issue-modal form {
   display: flex;
   flex-direction: column;
   gap: 0;
+  /* Scroll inside the modal so the action footer stays pinned. */
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
 }
 
 .file-issue-header {
@@ -1972,13 +2036,13 @@ body {
 }
 
 .file-issue-title-text {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--t-0);
 }
 
 .file-issue-meta {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--t-2);
 }
 
@@ -1990,13 +2054,23 @@ body {
 
 .file-issue-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  /* Single-column by default — the aside only joins when there's actual
+     evidence to show (see .has-evidence). Saves ~280px of empty real
+     estate for QA Hunter findings, which usually have no screenshots. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   min-height: 360px;
 }
-@media (max-width: 760px) {
-  .file-issue-grid {
-    grid-template-columns: 1fr;
+.file-issue-grid.has-evidence {
+  grid-template-columns: minmax(0, 1fr) 280px;
+}
+@media (max-width: 920px) {
+  .file-issue-grid.has-evidence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .file-issue-grid.has-evidence .file-issue-fields {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 }
 
@@ -2005,6 +2079,9 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 16px 20px;
+  min-width: 0;
+}
+.file-issue-grid.has-evidence .file-issue-fields {
   border-right: 1px solid var(--line);
 }
 
@@ -2012,7 +2089,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--t-2);
 }
 .file-issue-label > span {
@@ -2021,12 +2098,17 @@ body {
 
 .file-issue-input {
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--t-0);
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: var(--r-2);
-  padding: 8px 10px;
+  padding: 10px 12px;
+  /* Without these the input collapses to the browser default (~150px)
+     instead of filling its grid column — the bug that hid most of the
+     title behind a "[bug] Less…" truncation. */
+  width: 100%;
+  box-sizing: border-box;
 }
 .file-issue-input:focus {
   outline: none;
@@ -2035,15 +2117,20 @@ body {
 
 .file-issue-textarea {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--t-0);
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: var(--r-2);
-  padding: 10px 12px;
+  padding: 12px 14px;
   resize: vertical;
-  min-height: 220px;
-  line-height: 1.55;
+  /* Body is the biggest input by use — give it room scaled to the viewport
+     so users editing multi-section markdown can see several sections at
+     once on most screens. */
+  min-height: clamp(320px, 55vh, 540px);
+  line-height: 1.6;
+  width: 100%;
+  box-sizing: border-box;
 }
 .file-issue-textarea:focus {
   outline: none;
@@ -2052,26 +2139,31 @@ body {
 
 .file-issue-preview {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--t-1);
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: var(--r-2);
-  padding: 10px 12px;
+  padding: 12px 14px;
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  min-height: 220px;
-  max-height: 360px;
+  min-height: clamp(320px, 55vh, 540px);
+  max-height: 70vh;
   overflow-y: auto;
+  line-height: 1.6;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .file-issue-tabs {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
   color: var(--t-2);
+  min-width: 0;
 }
 .file-issue-tab {
   background: transparent;
@@ -2173,6 +2265,12 @@ body {
 .file-issue-actions {
   padding: 12px 20px 14px;
   border-top: 1px solid var(--line);
+  /* Pin the footer so the Cancel / Send buttons remain reachable when the
+     form scrolls (long bodies push the action row off-screen otherwise). */
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-1);
+  z-index: 1;
 }
 
 /* ---------- Test Plans (redesigned, Notion-like) ---------- */
@@ -2420,6 +2518,33 @@ body {
   padding: 0 16px;
   font-size: 13px;
   font-weight: 600;
+  min-width: 200px;
+  justify-content: center;
+}
+
+/* Generalized "starting…" state shared by every primary CTA that fires an
+   agent run — Test Plans' Run button, Agents' Run now button, etc. The
+   animation is tied to the modifier (not the parent class) so it can be
+   added to any button without locking in size. */
+.btn.is-starting,
+.plan-editor-run.is-starting {
+  cursor: progress;
+  opacity: 0.95;
+  animation: planRunPulse 1.4s ease-in-out infinite;
+}
+.btn.is-starting:hover,
+.plan-editor-run.is-starting:hover {
+  transform: none;
+}
+
+@keyframes planRunPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 oklch(82% 0.1 286 / 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px oklch(82% 0.1 286 / 0);
+  }
 }
 
 /* Subdued ghost square button that visually matches the Run CTA's height. */
@@ -2445,6 +2570,53 @@ body {
   opacity: 0.7;
   font-weight: 400;
   font-size: 12px;
+}
+
+/* Run-options popover anchored under the Run button. */
+.plan-editor-run-wrap {
+  position: relative;
+}
+
+.plan-run-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-2);
+  padding: 14px;
+  z-index: 50;
+  animation: slideDown 140ms var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-run-popover-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-1);
+}
+
+.plan-run-popover-sub {
+  font-size: 11px;
+  color: var(--t-3);
+  margin-top: -8px;
+}
+
+.plan-run-popover-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-run-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* Banner (run error or heuristic notice) */
@@ -2747,6 +2919,60 @@ body {
 .new-plan-generator-row .new-plan-field {
   min-width: 0;
 }
+
+/* Refresh button next to the model dropdown — re-fetches via models:list IPC. */
+.model-select-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.model-select-row > select {
+  flex: 1;
+}
+.model-select-refresh {
+  flex-shrink: 0;
+  min-width: 32px;
+}
+
+/* Model-select dropdown + Custom-model text input that appears under it. */
+.model-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.model-select-custom {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* "Focus on what changed" checkbox row in the new-plan dialog. */
+.new-plan-focus {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.new-plan-focus input[type='checkbox'] {
+  margin-top: 3px;
+  cursor: pointer;
+}
+.new-plan-focus-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t-0);
+}
+.new-plan-focus-hint {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--t-2);
+  line-height: 1.5;
+}
 .new-plan-panel form {
   display: flex;
   flex-direction: column;
@@ -2821,6 +3047,198 @@ body {
   font-weight: 500;
 }
 
+/* ---------- Mission Control: Plan Progress tab ---------- */
+
+.mc-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0;
+}
+
+.mc-plan-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+}
+.mc-plan-summary-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.mc-plan-summary-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mc-plan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--t-1);
+}
+.mc-plan-pill-passed {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: oklch(70% 0.14 152 / 0.35);
+}
+.mc-plan-pill-failed {
+  background: var(--bad-soft);
+  color: var(--bad);
+  border-color: oklch(66% 0.18 18 / 0.35);
+}
+.mc-plan-pill-running {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  border-color: var(--brand-line);
+}
+.mc-plan-pill-inconclusive {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: oklch(76% 0.14 75 / 0.35);
+}
+.mc-plan-pill-queued {
+  background: var(--bg-3);
+  color: var(--t-2);
+}
+.mc-plan-pill-skipped {
+  background: var(--bg-3);
+  color: var(--t-3);
+}
+
+.mc-plan-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.mc-plan-progress-fill {
+  height: 100%;
+  background: var(--brand);
+  transition: width 240ms ease;
+}
+
+.mc-plan-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mc-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-plan-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.mc-plan-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.mc-plan-section-count {
+  font-size: 10.5px;
+  color: var(--t-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mc-plan-cases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mc-plan-case {
+  display: grid;
+  grid-template-columns: 18px 30px 1fr;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 6px;
+  border-radius: var(--r-2);
+  border: 1px solid transparent;
+}
+.mc-plan-case-running {
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+.mc-plan-case-failed {
+  background: var(--bad-soft);
+}
+.mc-plan-case:hover {
+  background: var(--bg-2);
+}
+
+.mc-plan-case-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  color: var(--t-3);
+}
+.mc-plan-case-icon-passed {
+  color: var(--ok);
+}
+.mc-plan-case-icon-failed {
+  color: var(--bad);
+}
+.mc-plan-case-icon-inconclusive {
+  color: var(--warn);
+}
+.mc-plan-case-icon-skipped {
+  color: var(--t-3);
+}
+.mc-plan-case-icon-queued {
+  color: var(--t-3);
+}
+
+.mc-plan-case-sev-spacer {
+  display: inline-block;
+  width: 30px;
+}
+
+.mc-plan-case-body {
+  min-width: 0;
+}
+.mc-plan-case-title {
+  font-size: 12.5px;
+  color: var(--t-0);
+  font-weight: 500;
+}
+.mc-plan-case-meta {
+  font-size: 11px;
+  color: var(--t-2);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+.mc-plan-case-meta-key {
+  color: var(--t-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  margin-right: 4px;
+}
+
 /* ---------- Test-plan generation toast ---------- */
 
 .tpg-toast-stack {
@@ -2833,6 +3251,93 @@ body {
   z-index: 250;
   pointer-events: none;
   width: min(380px, calc(100vw - 36px));
+}
+
+/* Run-started toast — confirms that a QA agent run was actually queued, with
+   a "View" action that jumps into Mission Control. Sits on the left so it
+   never collides with the test-plan generation stack on the right. */
+.run-started-toast-stack {
+  position: fixed;
+  bottom: 18px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 250;
+  pointer-events: none;
+  width: min(380px, calc(100vw - 36px));
+}
+.run-started-toast {
+  border-color: var(--brand-line);
+  background: linear-gradient(180deg, var(--brand-soft), var(--bg-1));
+}
+
+/* Agent-enabled toast lives top-right so it doesn't fight the
+   plan-generation stack (bottom-right) or the run-started stack
+   (bottom-left). All three can coexist without overlap. */
+.agent-enabled-toast-stack {
+  position: fixed;
+  top: 60px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 250;
+  pointer-events: none;
+  width: min(380px, calc(100vw - 36px));
+}
+.agent-enabled-toast {
+  border-color: oklch(70% 0.14 152 / 0.5);
+}
+
+/* Auto-paused alert is persistent (no auto-dismiss) and centered up top so
+   it can't be missed — the user needs to investigate before the schedule
+   resumes. Reuses tpg-toast-error styling. */
+.agent-autopause-toast-stack {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 260;
+  pointer-events: none;
+  width: min(440px, calc(100vw - 36px));
+}
+.agent-autopause-toast {
+  border-color: oklch(66% 0.18 18 / 0.5);
+  background: linear-gradient(180deg, oklch(66% 0.18 18 / 0.12), var(--bg-1));
+}
+
+/* Inline error banner shown in the Agents sidebar after a create/clone/delete
+   IPC fails. Replaces the old browser alert() with an in-app, dismissable
+   message. */
+.agents-list-banner {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bad-soft);
+  border: 1px solid oklch(66% 0.18 18 / 0.4);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--t-1);
+}
+.agents-list-banner svg {
+  color: var(--bad);
+  margin-top: 2px;
+}
+.agents-list-banner-title {
+  font-weight: 600;
+  color: var(--t-0);
+}
+.agents-list-banner-hint {
+  color: var(--t-2);
+  margin-top: 3px;
 }
 
 .tpg-toast {
@@ -3797,4 +4302,531 @@ body {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* ---------- Schedule preset card ---------- */
+
+.sched-card-titlerow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sched-next-pill {
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sched-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sched-paused-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--t-2);
+  background: var(--warn-soft, var(--bg-1));
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.sched-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sched-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t-1);
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    border-color 120ms var(--ease),
+    background 120ms var(--ease),
+    color 120ms var(--ease),
+    transform 100ms var(--ease);
+}
+.sched-chip:hover {
+  border-color: var(--brand-line);
+  color: var(--t-0);
+}
+.sched-chip:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.sched-chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: white;
+}
+.sched-chip.active:hover {
+  transform: translateY(-1px);
+}
+
+/* Custom disclosure body */
+
+.sched-custom {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  background: var(--bg-1);
+  overflow: hidden;
+  animation: schedCustomIn 160ms var(--ease);
+}
+
+@keyframes schedCustomIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sched-custom-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.sched-custom-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  min-height: 0;
+}
+@media (max-width: 920px) {
+  .sched-custom-grid {
+    grid-template-columns: 1fr;
+  }
+  .sched-custom-side {
+    border-left: 0 !important;
+    border-top: 1px solid var(--line);
+  }
+}
+
+.sched-custom-main {
+  padding: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.sched-custom-side {
+  background: var(--bg-0);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sched-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.sched-mode {
+  padding: 10px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.sched-mode.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+.sched-mode-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-1);
+}
+.sched-mode.active .sched-mode-label {
+  color: var(--t-0);
+}
+.sched-mode-sub {
+  font-size: 10.5px;
+  color: var(--t-3);
+}
+
+.sched-side-empty {
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px dashed var(--line);
+  font-size: 11.5px;
+  color: var(--t-3);
+  text-align: center;
+}
+
+.sched-side-run {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sched-side-run.first {
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+.sched-side-cron {
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+}
+
+.sched-callout {
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px dashed var(--line-strong);
+}
+
+/* ---------- Coverage screen ---------- */
+
+.coverage-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 24px 32px;
+  overflow-y: auto;
+}
+
+.coverage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.coverage-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.coverage-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--t-2);
+  line-height: 1.5;
+  max-width: 760px;
+}
+
+.coverage-banner {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.coverage-banner-error {
+  background: var(--bad-soft);
+  color: var(--t-1);
+  border: 1px solid oklch(66% 0.18 18 / 0.4);
+}
+.coverage-banner-error svg {
+  color: var(--bad);
+  margin-top: 2px;
+}
+
+.coverage-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.coverage-stat {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.coverage-stat-ok {
+  border-color: oklch(70% 0.14 152 / 0.4);
+}
+.coverage-stat-warn {
+  border-color: oklch(76% 0.14 75 / 0.4);
+}
+.coverage-stat-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--t-3);
+}
+.coverage-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.coverage-stat-value.text {
+  font-size: 14px;
+  font-weight: 500;
+}
+.coverage-stat-sub {
+  font-size: 11px;
+  color: var(--t-2);
+}
+
+.coverage-labels {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coverage-labels-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  color: var(--t-2);
+}
+.coverage-labels-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.coverage-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.coverage-filter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.coverage-filter-chip {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--t-1);
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    border-color 120ms var(--ease),
+    background 120ms var(--ease),
+    color 120ms var(--ease);
+}
+.coverage-filter-chip:hover {
+  border-color: var(--brand-line);
+  color: var(--t-0);
+}
+.coverage-filter-chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: white;
+}
+
+.coverage-search {
+  height: 30px;
+  width: min(280px, 50vw);
+  padding: 0 10px;
+  font-size: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--t-0);
+  outline: none;
+}
+.coverage-search:focus {
+  border-color: var(--brand);
+}
+
+.coverage-table {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  overflow: hidden;
+}
+.coverage-table-head,
+.coverage-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 90px 140px 110px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 12px;
+}
+.coverage-table-head {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--t-3);
+  font-weight: 600;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+}
+.coverage-row {
+  border-top: 1px solid var(--line);
+}
+.coverage-row:first-of-type {
+  border-top: 0;
+}
+.coverage-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--t-1);
+}
+.coverage-pass {
+  color: var(--t-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coverage-path {
+  font-size: 11.5px;
+  color: var(--t-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Row tone — left edge color hint mirroring the "where attention goes" sort. */
+.coverage-row-bad {
+  box-shadow: inset 3px 0 0 0 var(--bad);
+}
+.coverage-row-warn {
+  box-shadow: inset 3px 0 0 0 var(--warn);
+}
+.coverage-row-info {
+  box-shadow: inset 3px 0 0 0 var(--info);
+}
+.coverage-row-cool {
+  box-shadow: inset 3px 0 0 0 var(--t-3);
+}
+.coverage-row-ok {
+  box-shadow: inset 3px 0 0 0 var(--ok);
+}
+
+.coverage-empty {
+  padding: 18px;
+  font-size: 12px;
+  color: var(--t-2);
+  text-align: center;
+}
+
+/* ---------- Runner login action card + shell banner ---------- */
+
+.runner-login-card {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, oklch(76% 0.14 75 / 0.14), var(--bg-1));
+  border: 1px solid oklch(76% 0.14 75 / 0.45);
+  font-size: 12.5px;
+  color: var(--t-1);
+  line-height: 1.5;
+}
+.runner-login-card-icon {
+  color: var(--warn);
+  margin-top: 2px;
+}
+.runner-login-card-title {
+  font-weight: 600;
+  color: var(--t-0);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.runner-login-card-text {
+  color: var(--t-2);
+}
+.runner-login-card-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.runner-login-card-cmd code {
+  flex: 1;
+  color: var(--t-0);
+}
+.runner-login-card-followup {
+  color: var(--t-2);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+.runner-login-card-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+/* Compact (in the failed-run drawer) trims the gradient and lives flush
+   with the surrounding drawer summary block. */
+.runner-login-card-compact {
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+
+/* Banner variant (top of app) gets a sticky-ish strip with a dismiss button. */
+.runner-auth-banner-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 0;
+}
+.runner-auth-banner-wrapper {
+  position: relative;
+}
+.runner-auth-banner-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+}
+.runner-login-card-banner {
+  border-color: oklch(76% 0.14 75 / 0.55);
+  padding-right: 36px; /* leave room for the dismiss button */
 }

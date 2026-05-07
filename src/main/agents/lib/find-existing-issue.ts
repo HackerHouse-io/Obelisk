@@ -68,6 +68,27 @@ function stripPrefix(title: string, prefix: string): string {
 }
 
 /**
+ * Agent-agnostic title-conflict check used to dedup against open previews.
+ * Strips any leading bracket prefix (e.g. `[bug]`, `[smell]`, `[QA Bug]`,
+ * `[QA iOS]`) before comparing, so a finding from one agent dedups against
+ * a preview filed by another. Same substring-either-direction logic as
+ * `titleConflicts`.
+ */
+export function previewTitleConflicts(existing: string, candidate: string): boolean {
+  const a = stripAnyBracketPrefix(existing);
+  const b = stripAnyBracketPrefix(candidate);
+  if (!a || !b) return false;
+  return a.includes(b) || b.includes(a);
+}
+
+function stripAnyBracketPrefix(title: string): string {
+  return title
+    .replace(/^\s*\[[^\]]+\]\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * Convenience for callers that only need the title list (e.g. legacy
  * Manual QA dedup that compares against many candidate titles in one pass).
  */

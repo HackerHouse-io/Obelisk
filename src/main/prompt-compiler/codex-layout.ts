@@ -101,10 +101,15 @@ function renderRunnerArgs(input: CompileInput): string[] {
     input.agent.name === 'feature-builder' || input.agent.name === 'bug-fixer' ? 'high' : 'medium';
   // codex exec reads the prompt from stdin (we pipe userMessage in the runner).
   // Reasoning effort isn't a top-level flag — set it via -c config override.
-  // `--model` is only added when the user explicitly configured one in Settings.
+  // `--model` is only added when the user explicitly configured one in Settings
+  // OR the caller passed a per-run modelOverride (Test Plans popover).
   // Hardcoding model names breaks ChatGPT-account Codex sign-ins (which reject
   // `gpt-5` etc.) and rots fast as model versions ship.
-  return buildCodexExecArgs({ sandbox: 'workspace-write', reasoning });
+  return buildCodexExecArgs({
+    sandbox: 'workspace-write',
+    reasoning,
+    ...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
+  });
 }
 
 export function buildCodexExecArgs(opts: {

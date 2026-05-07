@@ -54,6 +54,7 @@ import {
   handleTestPlansDismissJob,
   handleTestPlansDelete,
 } from './test-plans';
+import { handleCoverageList } from './coverage';
 import {
   handleQaDoctor,
   handleQaDoctorSetup,
@@ -64,6 +65,7 @@ import {
   handleQaWarmPool,
 } from './qa';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
+import { handleModelsList } from './models';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -151,6 +153,9 @@ export function registerIpcHandlers(): void {
   register('testPlans:dismissJob', handleTestPlansDismissJob);
   register('testPlans:delete', handleTestPlansDelete);
 
+  // Coverage map (Phase 12 — file × case × finding × churn report)
+  register('coverage:list', handleCoverageList);
+
   // iOS QA Pilot
   register('qa:list', handleQaList);
   register('qa:plan', handleQaPlan);
@@ -163,6 +168,9 @@ export function registerIpcHandlers(): void {
   // Settings (Phase 9 — real)
   register('settings:get', handleSettingsGet);
   register('settings:update', handleSettingsUpdate);
+
+  // Models (dynamic discovery — CLI configs + live API + curated fallback)
+  register('models:list', handleModelsList);
 
   // Bind ipcMain.handle for every registered channel with a single envelope wrapper.
   for (const [channel, handler] of handlers) {

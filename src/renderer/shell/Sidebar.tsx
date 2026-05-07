@@ -15,6 +15,7 @@ const NAV: NavRow[] = [
   { id: 'backlog', label: 'Backlog', icon: 'Backlog' },
   { id: 'agents', label: 'Agents', icon: 'Agents' },
   { id: 'test-plans', label: 'Test Plans', icon: 'Playbook' },
+  { id: 'coverage', label: 'Coverage', icon: 'Sliders' },
   { id: 'qa', label: 'iOS QA Pilot', icon: 'Phone' },
   { id: 'connect', label: 'Connect Repo', icon: 'Connect' },
   { id: 'settings', label: 'Settings', icon: 'Settings' },

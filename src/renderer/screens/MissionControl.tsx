@@ -14,14 +14,18 @@ import { useClickOutside } from '../hooks/useClickOutside';
 import { EmptyState } from '../ui/EmptyState';
 import { FindingPreview } from '../components/FindingPreview';
 import { FileIssueModal } from '../components/FileIssueModal';
+import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
 import { labelForAgent } from '../format';
 import type {
   Agent,
   AuditLine,
+  CaseProgressState,
   EvidenceItem,
   Run,
   RunState,
   PreviewedFinding,
+  TestPlan,
+  TestPlanSummary,
 } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
 
@@ -30,7 +34,7 @@ import type { ErrorCode } from '../../shared/errors';
  * Reactive to bus events `run.transition` and `run.audit` via the Zustand store.
  */
 
-type StageId = 'queued' | 'running' | 'publishing' | 'paused' | 'failed' | 'done';
+type StageId = 'queued' | 'running' | 'publishing' | 'paused' | 'failed' | 'done' | 'cancelled';
 
 interface StageDef {
   id: StageId;
@@ -71,6 +75,13 @@ const STAGES: StageDef[] = [
   },
   { id: 'done', label: 'Done', sub: 'Shipped', matchState: ['done'], color: 'var(--ok)' },
   {
+    id: 'cancelled',
+    label: 'Cancelled',
+    sub: 'Stopped by user',
+    matchState: ['cancelled'],
+    color: 'var(--t-3)',
+  },
+  {
     id: 'failed',
     label: 'Failed',
     sub: 'Investigate logs',
@@ -90,6 +101,7 @@ export function MissionControl(): ReactElement {
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [planSummaries, setPlanSummaries] = useState<TestPlanSummary[]>([]);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem('mc.drawerOpen');
@@ -118,6 +130,48 @@ export function MissionControl(): ReactElement {
     void window.obelisk.invoke('agents:list', { repoId: repo.id }).then((res) => {
       if (res.ok) setAgents(res.value);
     });
+    void window.obelisk.invoke('testPlans:list', { repoId: repo.id }).then((res) => {
+      if (res.ok) setPlanSummaries(res.value);
+    });
+  }, [repo, upsertRun]);
+
+  // Keep plan-name lookups fresh so renaming a plan or deleting one is
+  // reflected on the cards without a manual refresh.
+  useEffect(() => {
+    if (!repo) return;
+    return window.obelisk.subscribe((evt) => {
+      if (evt.type === 'testPlans.changed' && evt.repoId === repo.id) {
+        void window.obelisk.invoke('testPlans:list', { repoId: repo.id }).then((res) => {
+          if (res.ok) setPlanSummaries(res.value);
+        });
+      }
+    });
+  }, [repo]);
+
+  // Surface a freshly-started run: select it and pop the inspector. Fired by
+  // the test-plan run button (and the run-started toast's "View" action).
+  useEffect(() => {
+    function onStarted(e: Event): void {
+      const detail = (e as CustomEvent<{ runId?: string }>).detail;
+      if (!detail?.runId) return;
+      setSelectedRunId(detail.runId);
+      setDrawerOpen(true);
+      // The new run row may not be in the store yet — refresh so the card
+      // shows up in the Investigating column right away.
+      if (repo) {
+        void window.obelisk.invoke('runs:list', { repoId: repo.id, limit: 100 }).then((res) => {
+          if (res.ok) {
+            for (const run of res.value) upsertRun(run);
+          }
+        });
+      }
+    }
+    window.addEventListener('obelisk:run-started', onStarted);
+    window.addEventListener('obelisk:focus-run', onStarted);
+    return () => {
+      window.removeEventListener('obelisk:run-started', onStarted);
+      window.removeEventListener('obelisk:focus-run', onStarted);
+    };
   }, [repo, upsertRun]);
 
   const agentLabels = useMemo(() => {
@@ -125,6 +179,12 @@ export function MissionControl(): ReactElement {
     for (const a of agents) m.set(a.id, a.displayName);
     return m;
   }, [agents]);
+
+  const planNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of planSummaries) m.set(p.id, p.name);
+    return m;
+  }, [planSummaries]);
 
   const repoRuns: Run[] = useMemo(() => {
     if (!repo) return [];
@@ -150,6 +210,14 @@ export function MissionControl(): ReactElement {
     } else {
       alert(`Couldn't delete run: ${res.error.message}`);
     }
+  };
+
+  const handleCancelRun = async (runId: string): Promise<void> => {
+    // The orchestrator's bus broadcast updates the store on transition; we
+    // don't need to optimistically mutate here. If the cancel IPC errors
+    // (run already terminal, etc.), surface it inline.
+    const res = await window.obelisk.invoke('agents:cancel', { runId });
+    if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
   };
 
   const handleClearCompleted = async (): Promise<void> => {
@@ -275,12 +343,15 @@ export function MissionControl(): ReactElement {
                         key={run.id}
                         run={run}
                         instanceName={run.agentId ? agentLabels.get(run.agentId) : undefined}
+                        planNames={planNames}
+                        stageColor={stage.color}
                         selected={run.id === selectedRunId}
                         onClick={() => {
                           setSelectedRunId(run.id);
                           setDrawerOpen(true);
                         }}
                         onDelete={() => void handleDeleteRun(run.id)}
+                        onCancel={() => void handleCancelRun(run.id)}
                       />
                     ))
                   )}
@@ -296,6 +367,7 @@ export function MissionControl(): ReactElement {
           onClose={() => setSelectedRunId(null)}
           onToggle={() => setDrawerOpen(false)}
           onDelete={(id) => void handleDeleteRun(id)}
+          onCancel={(id) => void handleCancelRun(id)}
         />
       ) : (
         <aside className="mc-drawer-rail">
@@ -317,15 +389,21 @@ export function MissionControl(): ReactElement {
 function RunCard({
   run,
   instanceName,
+  planNames,
+  stageColor,
   selected,
   onClick,
   onDelete,
+  onCancel,
 }: {
   run: Run;
   instanceName?: string;
+  planNames: Map<string, string>;
+  stageColor: string;
   selected: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onCancel: () => void;
 }): ReactElement {
   const typeLabel = labelForAgent(run.agentName);
   const showInstance = instanceName && instanceName !== typeLabel;
@@ -334,6 +412,13 @@ function RunCard({
   useClickOutside(menuOpen, menuRef, () => setMenuOpen(false));
 
   const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
+  const canCancel = run.state === 'queued' || run.state === 'running';
+
+  // A friendlier title than raw `plan:<id>` / `gh:<n>` task refs. Falls back
+  // to the literal taskRef so unknown shapes still render usefully.
+  const { title, subtitle } = describeTaskRef(run.taskRef, planNames);
+  const timeLine = describeRunTime(run);
+  const summaryLine = describeOutcome(run);
 
   return (
     <div
@@ -348,8 +433,14 @@ function RunCard({
         }
       }}
     >
+      <span className="mc-card-accent" style={{ background: stageColor }} aria-hidden="true" />
       <div className="mc-card-head">
-        <div className="mc-card-title">{run.taskRef ?? '(no task ref)'}</div>
+        <div className="mc-card-title-wrap">
+          <div className="mc-card-title" title={run.taskRef ?? undefined}>
+            {title}
+          </div>
+          {subtitle ? <div className="mc-card-subtitle">{subtitle}</div> : null}
+        </div>
         <div ref={menuRef} className="mc-card-menu">
           <button
             type="button"
@@ -366,12 +457,26 @@ function RunCard({
           </button>
           {menuOpen ? (
             <div role="menu" className="mc-card-menu-pop" onClick={(e) => e.stopPropagation()}>
+              {canCancel ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="mc-card-menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    onCancel();
+                  }}
+                >
+                  <Icon.Pause size={11} /> Stop
+                </button>
+              ) : null}
               <button
                 type="button"
                 role="menuitem"
                 className="mc-card-menu-item bad"
                 disabled={isActive}
-                title={isActive ? 'Cancel the run before deleting' : undefined}
+                title={isActive ? 'Stop the run before deleting' : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   setMenuOpen(false);
@@ -403,6 +508,11 @@ function RunCard({
         <span className="pill" title={runnerHelp(run.runnerUsed)}>
           {run.runnerUsed}
         </span>
+        {run.trigger !== 'manual' ? (
+          <span className="pill" title={triggerHelp(run.trigger)}>
+            {triggerLabel(run.trigger)}
+          </span>
+        ) : null}
         {run.fallbackUsed ? (
           <span className="pill warn" title={FALLBACK_HELP}>
             fallback
@@ -414,8 +524,123 @@ function RunCard({
           </span>
         ) : null}
       </div>
+      {timeLine || summaryLine ? (
+        <div className="mc-card-foot">
+          {timeLine ? <span className="mc-card-time">{timeLine}</span> : null}
+          {summaryLine ? (
+            <span className="mc-card-summary" title={summaryLine}>
+              {summaryLine}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function describeTaskRef(
+  taskRef: string | null,
+  planNames: Map<string, string>,
+): { title: string; subtitle: string | null } {
+  if (!taskRef) return { title: 'Ad-hoc run', subtitle: null };
+  if (taskRef.startsWith('plan:')) {
+    const planId = taskRef.slice('plan:'.length);
+    const name = planNames.get(planId);
+    if (name) return { title: name, subtitle: 'Test plan' };
+    return { title: planId || 'Test plan', subtitle: 'Test plan (deleted)' };
+  }
+  if (taskRef.startsWith('gh:')) {
+    const num = taskRef.slice('gh:'.length);
+    return { title: `Issue #${num}`, subtitle: 'GitHub' };
+  }
+  if (taskRef.startsWith('manual:')) {
+    return { title: taskRef.slice('manual:'.length) || 'Manual task', subtitle: 'Manual' };
+  }
+  return { title: taskRef, subtitle: null };
+}
+
+function describeRunTime(run: Run): string | null {
+  if (run.state === 'queued' || (!run.startedAt && !run.finishedAt)) {
+    return run.state === 'queued' ? 'Queued' : null;
+  }
+  if (run.finishedAt && run.startedAt) {
+    const duration = humanizeDuration(
+      new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime(),
+    );
+    return `Ran ${duration} · ${humanizeAgo(run.finishedAt)}`;
+  }
+  if (run.startedAt) {
+    return `Started ${humanizeAgo(run.startedAt)}`;
+  }
+  return null;
+}
+
+function describeOutcome(run: Run): string | null {
+  if (run.state === 'failed' && run.errorCode) {
+    return run.outputSummary ?? `Failed with ${run.errorCode}`;
+  }
+  if (run.state === 'cancelled') {
+    return run.outputSummary ?? 'Stopped by the user';
+  }
+  if (run.state === 'done' && run.outputSummary) return run.outputSummary;
+  return null;
+}
+
+function humanizeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return 'just now';
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 45) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
+
+function humanizeDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec ? `${min}m ${remSec}s` : `${min}m`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin ? `${hr}h ${remMin}m` : `${hr}h`;
+}
+
+function triggerHelp(trigger: Run['trigger']): string {
+  switch (trigger) {
+    case 'manual':
+      return 'You started this run from the app';
+    case 'schedule':
+      return 'The scheduler fired this run on its cron';
+    case 'webhook':
+      return 'A GitHub webhook fired this run';
+    case 'cloud':
+      return 'A cloud trigger fired this run';
+    default:
+      return `Trigger: ${trigger}`;
+  }
+}
+
+function triggerLabel(trigger: Run['trigger']): string {
+  switch (trigger) {
+    case 'schedule':
+      return 'scheduled';
+    case 'webhook':
+      return 'webhook';
+    case 'cloud':
+      return 'cloud';
+    case 'manual':
+      return 'you';
+    default:
+      return trigger;
+  }
 }
 
 const FALLBACK_HELP =
@@ -467,21 +692,25 @@ function runStateHelp(state: RunState): string {
       return 'Done — the run completed successfully.';
     case 'failed':
       return 'Failed — see the error code and audit log.';
+    case 'cancelled':
+      return 'Cancelled — you stopped this run.';
   }
 }
 
-type Tab = 'findings' | 'audit' | 'evidence' | 'reasoning' | 'files';
+type Tab = 'plan' | 'findings' | 'audit' | 'evidence' | 'reasoning' | 'files';
 
 function RunDrawer({
   run,
   onClose,
   onToggle,
   onDelete,
+  onCancel,
 }: {
   run: Run | null;
   onClose: () => void;
   onToggle: () => void;
   onDelete: (runId: string) => void;
+  onCancel: (runId: string) => void;
 }): ReactElement {
   const [tab, setTab] = useState<Tab>('audit');
   const [details, setDetails] = useState<{
@@ -490,6 +719,7 @@ function RunDrawer({
   } | null>(null);
   const [findings, setFindings] = useState<PreviewedFinding[]>([]);
   const [modalFinding, setModalFinding] = useState<PreviewedFinding | null>(null);
+  const [plan, setPlan] = useState<TestPlan | null>(null);
 
   const refreshFindings = useCallback(async (runId: string, repoId: string) => {
     const res = await window.obelisk.invoke('previews:list', { repoId });
@@ -497,37 +727,69 @@ function RunDrawer({
     setFindings(res.value.findings.filter((f) => f.runId === runId));
   }, []);
 
+  const refreshDetails = useCallback(async (runId: string) => {
+    const res = await window.obelisk.invoke('runs:get', { runId });
+    if (res.ok) setDetails({ auditLog: res.value.auditLog, evidence: res.value.evidence });
+  }, []);
+
   useEffect(() => {
     if (!run) {
       setDetails(null);
       setFindings([]);
+      setPlan(null);
       return;
     }
-    void window.obelisk.invoke('runs:get', { runId: run.id }).then((res) => {
-      if (res.ok) setDetails({ auditLog: res.value.auditLog, evidence: res.value.evidence });
-    });
+    void refreshDetails(run.id);
     void refreshFindings(run.id, run.repoId);
-  }, [run, refreshFindings]);
+    // If this run is plan-driven (taskRef = "plan:<id>"), load the plan so
+    // the Plan Progress tab can render the grid.
+    const planId = parsePlanIdFromTaskRef(run.taskRef);
+    if (planId) {
+      void window.obelisk
+        .invoke('testPlans:get', { planId, repoId: run.repoId })
+        .then((res) => setPlan(res.ok ? res.value : null));
+    } else {
+      setPlan(null);
+    }
+  }, [run, refreshFindings, refreshDetails]);
 
   useEffect(() => {
     if (!run) return;
     return window.obelisk.subscribe((evt) => {
       if (evt.type === 'previews.changed' && evt.repoId === run.repoId) {
         void refreshFindings(run.id, run.repoId);
+        return;
+      }
+      // Live audit + case-progress streaming — refetch on every event for
+      // this run so the Plan Progress tab updates as CASE_PASS/FAIL fire.
+      // Cheap (single SQLite read), and we only refetch when the event
+      // matches this run.
+      if (
+        (evt.type === 'run.audit' && evt.runId === run.id) ||
+        (evt.type === 'run.caseProgress' && evt.runId === run.id) ||
+        (evt.type === 'run.transition' && evt.runId === run.id)
+      ) {
+        void refreshDetails(run.id);
       }
     });
-  }, [run, refreshFindings]);
+  }, [run, refreshFindings, refreshDetails]);
 
   const hasFindings = findings.filter((f) => !f.dismissed).length > 0;
-  const isTerminal = run?.state === 'done' || run?.state === 'failed';
+  const isTerminal = run?.state === 'done' || run?.state === 'failed' || run?.state === 'cancelled';
   const tabSetForRun = useRef<string | null>(null);
   useEffect(() => {
     if (!run) return;
     if (tabSetForRun.current === run.id) return;
     tabSetForRun.current = run.id;
-    if (hasFindings && isTerminal) setTab('findings');
+    // Failed runs go straight to audit so the stderr/stdout of the broken
+    // CLI invocation is the first thing the user sees — no clicking around
+    // a "plan" tab to find the diagnostic. For other states, prefer:
+    //   Plan > Findings (if terminal) > Audit.
+    if (run.state === 'failed') setTab('audit');
+    else if (plan) setTab('plan');
+    else if (hasFindings && isTerminal) setTab('findings');
     else setTab('audit');
-  }, [run, hasFindings, isTerminal]);
+  }, [run, plan, hasFindings, isTerminal]);
 
   async function dismissFinding(f: PreviewedFinding): Promise<void> {
     const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
@@ -556,6 +818,7 @@ function RunDrawer({
   }
 
   const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
+  const canCancel = run.state === 'queued' || run.state === 'running';
 
   return (
     <aside className="mc-drawer">
@@ -565,10 +828,21 @@ function RunDrawer({
           className="btn ghost icon"
           onClick={() => onDelete(run.id)}
           disabled={isActive}
-          title={isActive ? 'Cancel the run before deleting' : 'Delete this run and its evidence'}
+          title={isActive ? 'Stop the run before deleting' : 'Delete this run and its evidence'}
         >
           <Icon.Trash size={11} />
         </button>
+        {canCancel ? (
+          <button
+            type="button"
+            className="btn ghost sm mc-drawer-stop"
+            onClick={() => onCancel(run.id)}
+            title="Stop this run"
+            data-testid="mc-drawer-stop"
+          >
+            <Icon.Pause size={11} /> Stop
+          </button>
+        ) : null}
         <div style={{ flex: 1 }} />
         <button type="button" className="btn ghost icon" onClick={onClose} title="Deselect">
           <Icon.Close size={11} />
@@ -599,23 +873,56 @@ function RunDrawer({
           ) : null}
         </div>
         {run.outputSummary ? <div className="mc-drawer-summary">{run.outputSummary}</div> : null}
+        {run.errorCode === 'RUNNER_LOGIN_REQUIRED' ? (
+          <RunnerLoginActionCard
+            runner={run.runnerUsed}
+            onRetry={
+              run.agentId
+                ? () => {
+                    const taskId = run.taskRef ?? undefined;
+                    void window.obelisk
+                      .invoke('agents:run', {
+                        agentId: run.agentId!,
+                        ...(taskId ? { taskId } : {}),
+                      })
+                      .then((res) => {
+                        if (!res.ok) alert(`Couldn't retry: ${res.error.message}`);
+                      });
+                  }
+                : undefined
+            }
+          />
+        ) : null}
       </div>
       <div className="mc-tabs">
-        {(hasFindings
-          ? (['findings', 'audit', 'evidence', 'reasoning', 'files'] as Tab[])
-          : (['audit', 'evidence', 'reasoning', 'files'] as Tab[])
-        ).map((t) => (
+        {[
+          ...(plan ? (['plan'] as Tab[]) : []),
+          ...(hasFindings ? (['findings'] as Tab[]) : []),
+          ...(['audit', 'evidence', 'reasoning', 'files'] as Tab[]),
+        ].map((t) => (
           <button
             key={t}
             type="button"
             className={`mc-tab${tab === t ? ' active' : ''}`}
             onClick={() => setTab(t)}
           >
-            {t === 'findings' ? `findings (${findings.filter((f) => !f.dismissed).length})` : t}
+            {t === 'findings'
+              ? `findings (${findings.filter((f) => !f.dismissed).length})`
+              : t === 'plan' && plan
+                ? `plan (${plan.caseCount})`
+                : t}
           </button>
         ))}
       </div>
       <div className="mc-tab-body">
+        {tab === 'plan' && plan && (
+          <PlanProgressTab
+            plan={plan}
+            auditLog={details?.auditLog ?? []}
+            findings={findings}
+            runState={run.state}
+          />
+        )}
         {tab === 'findings' && (
           <FindingsTab findings={findings} onOpen={setModalFinding} onDismiss={dismissFinding} />
         )}
@@ -634,6 +941,268 @@ function RunDrawer({
       />
     </aside>
   );
+}
+
+/**
+ * "Plan" tab — live test-suite view. For each case in the assigned plan,
+ * render a row with its current state derived from:
+ *   1. The latest `case_progress` audit row matching this case_id.
+ *   2. If terminal-state and a finding mentions this case_id → 'failed'.
+ *   3. If terminal-state and no marker / no finding → 'passed' (the agent
+ *      finished without flagging this case).
+ *   4. If the run was cancelled before reaching the case → 'skipped'.
+ *   5. Otherwise → 'queued'.
+ *
+ * Live: the parent subscribes to bus events and refreshes details, so this
+ * component repaints as markers stream in.
+ */
+function PlanProgressTab({
+  plan,
+  auditLog,
+  findings,
+  runState,
+}: {
+  plan: TestPlan;
+  auditLog: AuditLine[];
+  findings: PreviewedFinding[];
+  runState: RunState;
+}): ReactElement {
+  const stateByCase = derivePerCaseState({ plan, auditLog, findings, runState });
+
+  const counts = countByState(stateByCase);
+  const total = plan.caseCount;
+  const groups = groupBlocks(plan);
+
+  return (
+    <div className="mc-plan">
+      <header className="mc-plan-summary">
+        <div className="mc-plan-summary-title">{plan.frontmatter.name}</div>
+        <div className="mc-plan-summary-counts">
+          <CaseStatePill state="passed" count={counts.passed} />
+          <CaseStatePill state="failed" count={counts.failed} />
+          <CaseStatePill state="running" count={counts.running} />
+          <CaseStatePill state="inconclusive" count={counts.inconclusive} />
+          <CaseStatePill state="queued" count={counts.queued} />
+          <CaseStatePill state="skipped" count={counts.skipped} />
+        </div>
+        <div className="mc-plan-progress-bar">
+          <div
+            className="mc-plan-progress-fill"
+            style={{
+              width: `${total === 0 ? 0 : Math.round(((counts.passed + counts.failed + counts.inconclusive + counts.skipped) / total) * 100)}%`,
+            }}
+          />
+        </div>
+      </header>
+
+      <div className="mc-plan-body">
+        {groups.map((g) => (
+          <section className="mc-plan-section" key={g.section?.id ?? `unsec-${g.cases[0]?.id}`}>
+            {g.section ? (
+              <div className="mc-plan-section-head">
+                <div className="mc-plan-section-title">{g.section.title}</div>
+                <div className="mc-plan-section-count">
+                  {g.cases.length} case{g.cases.length === 1 ? '' : 's'}
+                </div>
+              </div>
+            ) : null}
+            <ol className="mc-plan-cases">
+              {g.cases.map((c) => {
+                const state = stateByCase.get(c.id) ?? 'queued';
+                return (
+                  <li key={c.id} className={`mc-plan-case mc-plan-case-${state}`}>
+                    <CaseStateIcon state={state} />
+                    {c.severity ? (
+                      <span className={`pill sev-${c.severity.toLowerCase()}`}>{c.severity}</span>
+                    ) : (
+                      <span className="mc-plan-case-sev-spacer" aria-hidden="true" />
+                    )}
+                    <div className="mc-plan-case-body">
+                      <div className="mc-plan-case-title">{c.title}</div>
+                      {c.expected ? (
+                        <div className="mc-plan-case-meta">
+                          <span className="mc-plan-case-meta-key">Expected:</span> {c.expected}
+                        </div>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const CASE_STATE_LABEL: Record<CaseProgressState, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  passed: 'Pass',
+  failed: 'Fail',
+  inconclusive: 'Inconclusive',
+  skipped: 'Skipped',
+};
+
+function CaseStatePill({
+  state,
+  count,
+}: {
+  state: CaseProgressState;
+  count: number;
+}): ReactElement | null {
+  if (count === 0) return null;
+  return (
+    <span className={`mc-plan-pill mc-plan-pill-${state}`}>
+      {count} {CASE_STATE_LABEL[state]}
+    </span>
+  );
+}
+
+function CaseStateIcon({ state }: { state: CaseProgressState }): ReactElement {
+  if (state === 'running') {
+    return (
+      <span className="mc-plan-case-icon" aria-label="Running">
+        <Icon.Spinner size={12} style={{ animation: 'spin 1s linear infinite' }} />
+      </span>
+    );
+  }
+  if (state === 'passed') {
+    return (
+      <span className="mc-plan-case-icon mc-plan-case-icon-passed" aria-label="Passed">
+        <Icon.Check size={12} />
+      </span>
+    );
+  }
+  if (state === 'failed') {
+    return (
+      <span className="mc-plan-case-icon mc-plan-case-icon-failed" aria-label="Failed">
+        <Icon.AlertTri size={12} />
+      </span>
+    );
+  }
+  if (state === 'inconclusive') {
+    return (
+      <span className="mc-plan-case-icon mc-plan-case-icon-inconclusive" aria-label="Inconclusive">
+        <Icon.Help size={12} />
+      </span>
+    );
+  }
+  if (state === 'skipped') {
+    return (
+      <span className="mc-plan-case-icon mc-plan-case-icon-skipped" aria-label="Skipped">
+        <Icon.Close size={12} />
+      </span>
+    );
+  }
+  return (
+    <span className="mc-plan-case-icon mc-plan-case-icon-queued" aria-label="Queued">
+      <Icon.Dot size={10} />
+    </span>
+  );
+}
+
+interface PlanGroup {
+  section: { id: string; title: string } | null;
+  cases: {
+    id: string;
+    title: string;
+    expected: string | null;
+    severity: 'P0' | 'P1' | 'P2' | null;
+  }[];
+}
+
+function groupBlocks(plan: TestPlan): PlanGroup[] {
+  const groups: PlanGroup[] = [];
+  let current: PlanGroup | null = null;
+  for (const b of plan.blocks) {
+    if (b.kind === 'section') {
+      current = { section: { id: b.id, title: b.title }, cases: [] };
+      groups.push(current);
+    } else {
+      if (!current) {
+        current = { section: null, cases: [] };
+        groups.push(current);
+      }
+      current.cases.push({
+        id: b.id,
+        title: b.title,
+        expected: b.expected,
+        severity: b.severity,
+      });
+    }
+  }
+  return groups;
+}
+
+function derivePerCaseState(opts: {
+  plan: TestPlan;
+  auditLog: AuditLine[];
+  findings: PreviewedFinding[];
+  runState: RunState;
+}): Map<string, CaseProgressState> {
+  const map = new Map<string, CaseProgressState>();
+  // Walk audit_log in order so the latest event for each case wins.
+  for (const line of opts.auditLog) {
+    if (line.kind !== 'case_progress') continue;
+    const payload = line.payload as { caseId?: unknown; status?: unknown };
+    if (typeof payload.caseId === 'string' && typeof payload.status === 'string') {
+      map.set(payload.caseId, payload.status as CaseProgressState);
+    }
+  }
+  // Findings tagged with a case_id flip that case to failed (regardless of
+  // whether the agent emitted a CASE_FAIL marker — this catches agents that
+  // file findings without the streaming markers).
+  const failedByFinding = new Set<string>();
+  for (const f of opts.findings) {
+    const m = /case[_-]?id\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/i.exec(f.body);
+    if (m) failedByFinding.add(m[1]!);
+  }
+  for (const block of opts.plan.blocks) {
+    if (block.kind !== 'case') continue;
+    if (failedByFinding.has(block.id)) {
+      map.set(block.id, 'failed');
+    }
+  }
+  // Default unknown cases based on terminal state.
+  const isCancelled = opts.runState === 'cancelled';
+  const isDone = opts.runState === 'done';
+  const isFailed = opts.runState === 'failed';
+  for (const block of opts.plan.blocks) {
+    if (block.kind !== 'case') continue;
+    if (map.has(block.id)) continue;
+    if (isCancelled) {
+      map.set(block.id, 'skipped');
+    } else if (isDone) {
+      // Run finished without an explicit marker — treat as passed (the
+      // agent finished without flagging this case).
+      map.set(block.id, 'passed');
+    } else if (isFailed) {
+      map.set(block.id, 'skipped');
+    } else {
+      map.set(block.id, 'queued');
+    }
+  }
+  return map;
+}
+
+function countByState(map: Map<string, CaseProgressState>): Record<CaseProgressState, number> {
+  const counts: Record<CaseProgressState, number> = {
+    queued: 0,
+    running: 0,
+    passed: 0,
+    failed: 0,
+    inconclusive: 0,
+    skipped: 0,
+  };
+  for (const s of map.values()) counts[s] += 1;
+  return counts;
+}
+
+function parsePlanIdFromTaskRef(taskRef: string | null): string | null {
+  if (!taskRef) return null;
+  return taskRef.startsWith('plan:') ? taskRef.slice('plan:'.length) : null;
 }
 
 function FindingsTab({

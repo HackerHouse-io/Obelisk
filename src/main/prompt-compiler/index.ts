@@ -40,6 +40,7 @@ export function compile(opts: CompileOptions): CompiledPrompt {
     repo: opts.repo,
     runnerKind,
     permissions: opts.permissions,
+    ...(opts.modelOverride !== undefined ? { modelOverride: opts.modelOverride } : {}),
   };
 
   const compiled = runnerKind === 'claude' ? compileClaude(input) : compileCodex(input);
@@ -60,6 +61,7 @@ export function compile(opts: CompileOptions): CompiledPrompt {
     },
     skills: skills.map((s) => ({ name: s.name, body: s.body })),
     runnerKind,
+    modelOverride: opts.modelOverride ?? null,
     task: opts.task,
     repo: opts.repo,
     permissions: opts.permissions,

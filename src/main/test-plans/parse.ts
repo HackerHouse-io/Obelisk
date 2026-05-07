@@ -23,9 +23,13 @@ import type {
  *   ---
  *
  *   ## <Section title>
- *   - [ ] <Case title>          ← severity:P0 optional inline tag at end
+ *   - [ ] <Case title>                ← optional `severity:P0` and `scope:auth,checkout`
  *     - **Expected:** <expected outcome>
  *     - **Repro:** <repro steps>
+ *
+ * Inline tags accept any order: `... severity:P1 scope:auth,billing` and
+ * `... scope:auth severity:P1` both round-trip identically. Whitespace
+ * inside the comma-separated scope list is stripped.
  *
  * The body parser is forgiving: missing sub-bullets, blank lines, and
  * differing indentation levels all round-trip safely. Anything outside
@@ -36,7 +40,8 @@ export interface ParsedPlan {
   blocks: TestPlanBlock[];
 }
 
-const SEVERITY_TAG = /\s+severity:(P[012])\s*$/;
+const SEVERITY_TAG = /\s+severity:(P[012])\b/;
+const SCOPE_TAG = /\s+scope:([A-Za-z0-9_\-./*,]+)/;
 
 export function parsePlanFile(raw: string): ParsedPlan {
   const file = matter(raw);
@@ -69,7 +74,9 @@ function renderBody(blocks: TestPlanBlock[]): string {
       continue;
     }
     const sevTag = b.severity ? ` severity:${b.severity}` : '';
-    lines.push(`- [ ] ${b.title.trim()}${sevTag}`);
+    const scopeTag =
+      b.scope && b.scope.length > 0 ? ` scope:${b.scope.map((s) => s.trim()).join(',')}` : '';
+    lines.push(`- [ ] ${b.title.trim()}${sevTag}${scopeTag}`);
     if (b.expected && b.expected.trim()) {
       lines.push(`  - **Expected:** ${b.expected.trim()}`);
     }
@@ -95,10 +102,20 @@ function parseBody(content: string): TestPlanBlock[] {
     if (caseMatch) {
       let title = caseMatch[1]!.trim();
       let severity: FindingSeverity | null = null;
-      const sev = SEVERITY_TAG.exec(title);
+      const sev = SEVERITY_TAG.exec(' ' + title);
       if (sev) {
         severity = sev[1] as FindingSeverity;
-        title = title.replace(SEVERITY_TAG, '').trim();
+        title = title.replace(/\s+severity:P[012]\b/, '').trim();
+      }
+      let scope: string[] | null = null;
+      const sc = SCOPE_TAG.exec(' ' + title);
+      if (sc) {
+        scope = sc[1]!
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (scope.length === 0) scope = null;
+        title = title.replace(/\s+scope:[A-Za-z0-9_\-./*,]+/, '').trim();
       }
       const c = {
         kind: 'case' as const,
@@ -107,6 +124,7 @@ function parseBody(content: string): TestPlanBlock[] {
         expected: null,
         repro: null,
         severity,
+        scope,
       };
       blocks.push(c);
       lastCase = c;

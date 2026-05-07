@@ -7,7 +7,14 @@
 
 export type SafetyMode = 'observe' | 'issues' | 'prs' | 'automerge';
 export type RunnerKind = 'claude' | 'codex';
-export type RunState = 'queued' | 'running' | 'publishing' | 'done' | 'failed' | 'paused';
+export type RunState =
+  | 'queued'
+  | 'running'
+  | 'publishing'
+  | 'done'
+  | 'failed'
+  | 'paused'
+  | 'cancelled';
 export type AgentName =
   | 'qa-hunter'
   | 'manual-qa'
@@ -179,6 +186,13 @@ export type TestPlanBlock =
       expected: string | null;
       repro: string | null;
       severity: FindingSeverity | null;
+      /**
+       * Coverage labels — what code area this case targets. The labels are
+       * resolved to file globs via `qa/coverage-map.md` in the repo. When
+       * absent, the case is "untargeted" and contributes to a residual
+       * coverage bucket on the Coverage screen.
+       */
+      scope: string[] | null;
     };
 
 export interface TestPlan {
@@ -252,6 +266,24 @@ export interface EvidenceItem {
 }
 
 export type FindingSeverity = 'P0' | 'P1' | 'P2';
+
+/**
+ * Per-case execution state for the live "Plan progress" tab in Mission Control.
+ *
+ *   queued        — the agent hasn't started this case yet
+ *   running       — agent emitted `CASE_START <id>` and hasn't finished it
+ *   passed        — agent emitted `CASE_PASS <id>` (or no finding referenced it after a done run)
+ *   failed        — agent emitted `CASE_FAIL <id>` or filed a finding against this case_id
+ *   inconclusive  — agent emitted `CASE_INCONCLUSIVE <id>` (couldn't determine)
+ *   skipped       — run terminated (cancelled/failed) before the agent reached this case
+ */
+export type CaseProgressState =
+  | 'queued'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'inconclusive'
+  | 'skipped';
 
 export interface PreviewEvidence {
   /** Stable artifact id from evidence_artifacts. Used to build obelisk:// URLs. */
@@ -358,7 +390,18 @@ export interface IpcMap {
   // Agents
   'agents:list': { req: { repoId: string }; res: Agent[] };
   'agents:run': {
-    req: { agentId: string; taskId?: string };
+    req: {
+      agentId: string;
+      taskId?: string;
+      /** One-shot override for this run only — does not persist on the agent row. */
+      runnerOverride?: RunnerKind;
+      /**
+       * One-shot model override for this run only.
+       * - non-empty string → that exact model id (e.g. "opus-4-7")
+       * - empty string / omitted → fall through to agent row override → Settings → CLI default
+       */
+      modelOverride?: string;
+    };
     res: { runId: string };
   };
   'agents:cancel': { req: { runId: string }; res: { ok: true } };
@@ -378,6 +421,20 @@ export interface IpcMap {
   'agents:readMd': {
     req: { repoId: string; agentName: AgentName };
     res: { source: 'builtin' | 'override'; markdown: string; skills: string[] };
+  };
+
+  // Models — dynamic discovery (CLI config + live API + curated fallback).
+  // Replaces the renderer's hardcoded MODEL_OPTIONS for non-stale dropdowns.
+  'models:list': {
+    req: { runner: RunnerKind };
+    res: {
+      runner: RunnerKind;
+      models: { id: string; label: string; tier: 'flagship' | 'balanced' | 'fast' | 'reasoning' }[];
+      /** What the CLI will use when no override is passed (read from CLI config). */
+      defaultModelId: string | null;
+      source: 'live-api' | 'curated';
+      fetchedAt: ISO;
+    };
   };
 
   // Stats / history (Phase 2 detail-pane)
@@ -474,6 +531,12 @@ export interface IpcMap {
       runnerOverride?: RunnerKind;
       /** Per-generation override; falls through to Settings when absent. Empty string clears. */
       modelOverride?: string;
+      /**
+       * Bias the AI toward files the Coverage screen flags as needing
+       * attention (uncovered / churned since last pass / open findings).
+       * No effect on the heuristic seed.
+       */
+      focusOnChangedOrUncovered?: boolean;
     };
     res: { jobId: string };
   };
@@ -483,6 +546,12 @@ export interface IpcMap {
   };
   'testPlans:dismissJob': { req: { jobId: string }; res: { ok: true } };
   'testPlans:delete': { req: { planId: string; repoId: string }; res: { ok: true } };
+
+  // Coverage map — file × case × finding × churn report for the repo.
+  'coverage:list': {
+    req: { repoId: string };
+    res: CoverageReport;
+  };
 
   // iOS QA Pilot
   'qa:list': { req: { repoId: string }; res: QaFlow[] };
@@ -512,12 +581,43 @@ export interface IpcMap {
 
 export type IpcChannel = keyof IpcMap;
 
+/* ---------- Coverage report ---------- */
+
+/**
+ * Per-file coverage stats. The `caseCount` is the strongest signal — files
+ * with `caseCount === 0` have never been touched by any plan and should be
+ * surfaced as "dark" on the Coverage screen.
+ */
+export interface CoverageEntry {
+  path: string;
+  caseCount: number;
+  findingsCount: number;
+  lastPassedAt: ISO | null;
+  churnSinceLastPass: number;
+}
+
+export interface CoverageReport {
+  repoId: string;
+  files: CoverageEntry[];
+  labels: { label: string; planCount: number; caseCount: number }[];
+  totalFiles: number;
+  coveredFiles: number;
+  uncoveredFiles: number;
+  lastDoneAt: ISO | null;
+}
+
 /* ---------- Bus events ---------- */
 
 export type BusEvent =
   | { type: 'run.created'; run: Run }
   | { type: 'run.transition'; runId: string; state: RunState; at: ISO }
   | { type: 'run.audit'; runId: string; line: AuditLine }
+  | {
+      type: 'run.caseProgress';
+      runId: string;
+      caseId: string;
+      status: CaseProgressState;
+    }
   | { type: 'run.deleted'; runId: string; repoId: string }
   | { type: 'backlog.changed'; repoId: string }
   | { type: 'auth.changed'; signedIn: boolean }
@@ -527,6 +627,17 @@ export type BusEvent =
   | { type: 'previews.changed'; repoId: string }
   | { type: 'testPlans.changed'; repoId: string }
   | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }
+  | {
+      type: 'agent.autoPaused';
+      repoId: string;
+      agentId: string;
+      agentName: AgentName;
+      displayName: string;
+      reason: 'consecutive_failures';
+      consecutiveFailures: number;
+      lastErrorCode: string | null;
+      lastErrorSummary: string | null;
+    }
   | { type: 'system.heartbeat'; at: ISO };
 
 /* ---------- Renderer-side bridge surface ---------- */

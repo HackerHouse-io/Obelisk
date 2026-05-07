@@ -42,7 +42,31 @@ export function Home(): ReactElement {
   const repo = repos.find((r) => r.id === selectedRepoId);
 
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [runs, setRuns] = useState<Run[]>([]);
+  // Runs live in the global store so they update in real time off the bus
+  // (run.created / run.transition / run.deleted) — the KPI card and Recent
+  // runs list re-render without needing a route change.
+  const allRuns = useStore((s) => s.runs);
+  const upsertRun = useStore((s) => s.upsertRun);
+  const runs = useMemo(() => {
+    if (!repo) return [] as Run[];
+    return Object.values(allRuns)
+      .filter((r) => r.repoId === repo.id)
+      .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
+  }, [allRuns, repo]);
+  // Map agentId → live run so the Run/Stop toggle on each agent row knows
+  // whether there's an in-flight run to stop, instead of letting the user
+  // press a Run button that would silently fail with RUN_ACTIVE.
+  const liveRunByAgentId = useMemo(() => {
+    const m = new Map<string, Run>();
+    for (const r of runs) {
+      if (LIVE_STATES.includes(r.state) && r.agentId) m.set(r.agentId, r);
+    }
+    return m;
+  }, [runs]);
+  const stopRun = useCallback(async (runId: string): Promise<void> => {
+    const res = await window.obelisk.invoke('agents:cancel', { runId });
+    if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+  }, []);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const [previews, setPreviews] = useState<PreviewsResponse>({
     findings: [],
@@ -70,17 +94,28 @@ export function Home(): ReactElement {
       window.obelisk.invoke('previews:list', { repoId: repo.id }),
     ]).then(([a, r, b, p]) => {
       if (a.ok) setAgents(a.value);
-      if (r.ok) setRuns(r.value);
+      if (r.ok) for (const run of r.value) upsertRun(run);
       if (b.ok) setBacklog(b.value);
       if (p.ok) setPreviews(p.value);
     });
-  }, [repo]);
+  }, [repo, upsertRun]);
 
+  // Real-time updates while the user stays on this screen:
+  //  · previews.changed → refresh the findings list
+  //  · backlog.changed  → refresh the "Up next" table
+  //  · run.* events flow through the global store via bus-subscriber, so
+  //    `runs` (selected from the store) re-renders on its own.
   useEffect(() => {
     if (!repo) return;
     return window.obelisk.subscribe((evt) => {
       if (evt.type === 'previews.changed' && evt.repoId === repo.id) {
         void refreshPreviews();
+        return;
+      }
+      if (evt.type === 'backlog.changed' && evt.repoId === repo.id) {
+        void window.obelisk.invoke('backlog:list', { repoId: repo.id }).then((b) => {
+          if (b.ok) setBacklog(b.value);
+        });
       }
     });
   }, [repo, refreshPreviews]);
@@ -298,21 +333,6 @@ export function Home(): ReactElement {
         <KpiCard label="Backlog" value={kpis.backlogTotal} sub="items waiting" />
       </div>
 
-      {repo.mode === 'observe' ? (
-        <ObservePreviews
-          findings={previews.findings}
-          repoMode={repo.mode}
-          installedAgents={agents}
-          runState={runState}
-          onUpgradeMode={() => setRoute('settings')}
-          onOpenTestPlans={() => setRoute('test-plans')}
-          onOpenFinding={setModalFinding}
-          onDismissFinding={dismissPreview}
-          onRunAgent={runAgent}
-          onDismissError={dismissRunError}
-        />
-      ) : null}
-
       <div className="home-section">
         <div className="home-section-title">
           Agents
@@ -362,12 +382,20 @@ export function Home(): ReactElement {
                     {status.label}
                   </span>
                   <div className="row gap-2" style={{ alignItems: 'center' }}>
-                    <RunButton
-                      agent={a}
-                      pending={runState.pending.has(a.id)}
-                      onRun={() => void runAgent(a)}
-                      variant="ghost"
-                    />
+                    {liveRunByAgentId.get(a.id) ? (
+                      <StopRunButton
+                        agent={a}
+                        runId={liveRunByAgentId.get(a.id)!.id}
+                        onStop={stopRun}
+                      />
+                    ) : (
+                      <RunButton
+                        agent={a}
+                        pending={runState.pending.has(a.id)}
+                        onRun={() => void runAgent(a)}
+                        variant="ghost"
+                      />
+                    )}
                     <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {a.timeoutMs / 1000 / 60}m timeout
                     </span>
@@ -378,6 +406,21 @@ export function Home(): ReactElement {
           </div>
         )}
       </div>
+
+      {repo.mode === 'observe' ? (
+        <ObservePreviews
+          findings={previews.findings}
+          repoMode={repo.mode}
+          installedAgents={agents}
+          runState={runState}
+          onUpgradeMode={() => setRoute('settings')}
+          onOpenTestPlans={() => setRoute('test-plans')}
+          onOpenFinding={setModalFinding}
+          onDismissFinding={dismissPreview}
+          onRunAgent={runAgent}
+          onDismissError={dismissRunError}
+        />
+      ) : null}
 
       <div className="home-section">
         <div className="home-section-title">
@@ -390,21 +433,37 @@ export function Home(): ReactElement {
           <div className="home-table-empty">No runs yet. Trigger one from Mission Control.</div>
         ) : (
           <div className="home-table">
-            {runs.slice(0, 8).map((r) => (
-              <div key={r.id} className="home-table-row">
-                <Icon.Pipeline size={14} color="var(--t-2)" />
-                <div>
-                  <div style={{ fontWeight: 600 }}>{r.taskRef ?? '(no task ref)'}</div>
-                  <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                    {labelForAgent(r.agentName)} · {r.runnerUsed} · {r.outputSummary ?? '—'}
+            {runs.slice(0, 8).map((r) => {
+              const canCancel = r.state === 'queued' || r.state === 'running';
+              return (
+                <div key={r.id} className="home-table-row">
+                  <Icon.Pipeline size={14} color="var(--t-2)" />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{r.taskRef ?? '(no task ref)'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                      {labelForAgent(r.agentName)} · {r.runnerUsed} · {r.outputSummary ?? '—'}
+                    </div>
                   </div>
+                  <span className={`pill ${stateTone(r.state)}`}>{r.state}</span>
+                  <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                    {r.startedAt ? short(r.startedAt) : ''}
+                  </span>
+                  {canCancel ? (
+                    <button
+                      type="button"
+                      className="btn ghost sm"
+                      title="Stop this run"
+                      onClick={async () => {
+                        const res = await window.obelisk.invoke('agents:cancel', { runId: r.id });
+                        if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+                      }}
+                    >
+                      <Icon.Pause size={11} /> Stop
+                    </button>
+                  ) : null}
                 </div>
-                <span className={`pill ${stateTone(r.state)}`}>{r.state}</span>
-                <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                  {r.startedAt ? short(r.startedAt) : ''}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -572,6 +631,42 @@ const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
 interface RunStateMap {
   pending: Set<string>;
   error: { agentId: string; message: string; hint?: string } | null;
+}
+
+function StopRunButton({
+  agent,
+  runId,
+  onStop,
+}: {
+  agent: Agent;
+  runId: string;
+  onStop: (runId: string) => Promise<void>;
+}): ReactElement {
+  const [stopping, setStopping] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn sm danger"
+      disabled={stopping}
+      title={`Cancel the in-flight ${agent.displayName} run`}
+      data-testid={`stop-${agent.name}`}
+      onClick={async () => {
+        setStopping(true);
+        try {
+          await onStop(runId);
+        } finally {
+          setStopping(false);
+        }
+      }}
+    >
+      {stopping ? (
+        <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+      ) : (
+        <Icon.Pause size={11} />
+      )}{' '}
+      {stopping ? 'Stopping…' : 'Stop'}
+    </button>
+  );
 }
 
 function RunButton({
@@ -838,6 +933,8 @@ function stateTone(s: RunState): string {
       return 'bad';
     case 'paused':
       return 'warn';
+    case 'cancelled':
+      return '';
     default:
       return 'info';
   }

@@ -25,7 +25,16 @@ export function startBusSubscriber(): () => void {
       case 'run.transition': {
         const existing = state.runs[event.runId];
         if (!existing) return;
-        state.upsertRun({ ...existing, state: event.state });
+        const isTerminal =
+          event.state === 'done' || event.state === 'failed' || event.state === 'cancelled';
+        state.upsertRun({
+          ...existing,
+          state: event.state,
+          // Stamp finishedAt off the event when the run reaches a terminal
+          // state — otherwise "Done today" / time-elapsed indicators stay
+          // stale until the user navigates away and back.
+          finishedAt: isTerminal ? (existing.finishedAt ?? event.at) : existing.finishedAt,
+        });
         return;
       }
 
@@ -40,6 +49,12 @@ export function startBusSubscriber(): () => void {
       case 'backlog.changed':
       case 'evidence.missing':
         // Phase 4-5 will refetch the affected slice.
+        return;
+
+      case 'agent.autoPaused':
+        // Re-broadcast as a window event so the AutoPauseToast (mounted at
+        // the shell) can render without subscribing to the IPC bus directly.
+        window.dispatchEvent(new CustomEvent('obelisk:agent-auto-paused', { detail: event }));
         return;
     }
   });

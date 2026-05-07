@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { obeliskArtifactUrl } from '../../protocol/obelisk-protocol';
-import { fetchOpenIssueTitles, titleConflicts } from '../lib/find-existing-issue';
+import {
+  fetchOpenIssueTitles,
+  previewTitleConflicts,
+  titleConflicts,
+} from '../lib/find-existing-issue';
+import { listOpenPreviewTitlesForRepo } from '../../db/previews';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { registerArtifactFromPath } from '../lib/register-artifact';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
@@ -16,12 +21,13 @@ import type {
 
 export const manualQaHandler: AgentHandler = {
   name: 'manual-qa',
-  // Singleton: today Manual QA runs every flow in qa/critical-flows.md per
-  // sweep. A 2nd instance would duplicate the entire sweep, which is wasteful.
-  // When per-flow scoping ships, flip to true and add a flow_claims integration.
-  multiInstance: false,
+  // Multi-instance: each instance runs an explicit test plan via Playwright,
+  // so multiple instances let you cover different feature paths on different
+  // schedules. Per-plan single-flight (enforced in createRun by task_ref)
+  // prevents two runs of the SAME plan from racing.
+  multiInstance: true,
   addAnotherExplainer:
-    'Manual QA runs every flow in qa/critical-flows.md per sweep — only one is useful today.',
+    'Adds another Manual QA instance — pair it with a different test plan and schedule.',
   skipsEvidenceGate: true,
   producesPatch: false,
 
@@ -50,6 +56,9 @@ export const manualQaHandler: AgentHandler = {
       repoFullName: input.repo.githubFullName,
       label: OBELISK_LABELS.qaBug,
     });
+    // Open previews for this repo — same dedup boundary as qa-hunter, so a
+    // recurring sweep doesn't pile copies of the same bug into Observe-mode.
+    const openPreviewTitles = listOpenPreviewTitlesForRepo(input.repo.id);
 
     const out: PublishPlan[] = [];
     for (const f of findings) {
@@ -58,6 +67,7 @@ export const manualQaHandler: AgentHandler = {
 
       const title = titleFor(f);
       if (existing.some((row) => titleConflicts(row.title, title, '[QA Bug]'))) continue;
+      if (openPreviewTitles.some((t) => previewTitleConflicts(t, title))) continue;
 
       const refs = registerPlaywrightArtifacts(f, input.repo.localPath, input.runId);
       out.push({
@@ -66,6 +76,8 @@ export const manualQaHandler: AgentHandler = {
         body: bodyFor(f, refs),
         labels: labelsFor(f),
       });
+      // Within-batch dedup — see qa-hunter for rationale.
+      openPreviewTitles.push(title);
     }
     return out;
   },

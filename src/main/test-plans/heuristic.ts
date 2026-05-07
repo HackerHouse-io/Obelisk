@@ -83,12 +83,14 @@ function buildFeatureSkeleton(featureName: string, agentName: AgentName): TestPl
 
 function smokeCases(agentName: AgentName): TestPlanBlock[] {
   const ui = agentName !== 'qa-hunter';
+  const scope = ['smoke'];
   return [
     caseBlock(
       'App boots without uncaught errors',
       'No uncaught exceptions in console; primary route renders.',
       ui ? 'Open the app, watch console, navigate to home.' : 'Run unit + integration suites.',
       'P0',
+      scope,
     ),
     caseBlock(
       'Primary navigation works',
@@ -99,6 +101,7 @@ function smokeCases(agentName: AgentName): TestPlanBlock[] {
         ? 'Click each item in the top-level navigation.'
         : 'Inspect router config and render targets.',
       'P1',
+      scope,
     ),
     caseBlock(
       'Loading + error states are reachable',
@@ -107,6 +110,7 @@ function smokeCases(agentName: AgentName): TestPlanBlock[] {
         ? 'Throttle the network or stub fetch to fail; visit the main views.'
         : 'Walk fetch / IO call sites and verify both states are wired.',
       'P1',
+      scope,
     ),
   ];
 }
@@ -114,6 +118,7 @@ function smokeCases(agentName: AgentName): TestPlanBlock[] {
 function templateCasesFor(feature: string, agentName: AgentName): TestPlanBlock[] {
   const isUi = agentName !== 'qa-hunter';
   const noun = prettyName(feature);
+  const scope = [feature.toLowerCase()];
   return [
     caseBlock(
       `${noun}: happy path`,
@@ -122,6 +127,7 @@ function templateCasesFor(feature: string, agentName: AgentName): TestPlanBlock[
         ? `Open ${noun}, perform the primary action with valid input, verify success.`
         : `Read the ${feature} module and trace the primary success path end-to-end.`,
       'P0',
+      scope,
     ),
     caseBlock(
       `${noun}: surfaces validation errors`,
@@ -130,6 +136,7 @@ function templateCasesFor(feature: string, agentName: AgentName): TestPlanBlock[
         ? `Trigger ${noun} with invalid input.`
         : `Find the validation in code and verify error wiring + UI surface.`,
       'P1',
+      scope,
     ),
     caseBlock(
       `${noun}: handles backend / IO failure`,
@@ -138,12 +145,14 @@ function templateCasesFor(feature: string, agentName: AgentName): TestPlanBlock[
         ? `Trigger ${noun} while offline or with the API stubbed to 5xx.`
         : `Check ${feature} module's failure / retry / fallback paths.`,
       'P1',
+      scope,
     ),
     caseBlock(
       `${noun}: state persists across reloads`,
       `${noun}'s output / state survives a page reload (or app restart).`,
       isUi ? `Trigger ${noun}, reload the page, verify state.` : `Inspect persistence layer.`,
       'P2',
+      scope,
     ),
   ];
 }
@@ -315,8 +324,9 @@ function caseBlock(
   expected: string,
   repro: string,
   severity: 'P0' | 'P1' | 'P2',
+  scope: string[] | null = null,
 ): TestPlanBlock {
-  return { kind: 'case', id: ulid(), title, expected, repro, severity };
+  return { kind: 'case', id: ulid(), title, expected, repro, severity, scope };
 }
 
 function countCases(blocks: TestPlanBlock[]): number {

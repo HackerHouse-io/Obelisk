@@ -28,8 +28,8 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe('agents:create singleton enforcement', () => {
-  it('multi-instance type allows N instances', async () => {
+describe('agents:create — multi-instance support', () => {
+  it('Bug Fixer allows N instances with auto-numbered names', async () => {
     const a = await handleAgentsCreate({ repoId, name: 'bug-fixer' });
     const b = await handleAgentsCreate({ repoId, name: 'bug-fixer' });
     expect(a.id).not.toBe(b.id);
@@ -38,25 +38,35 @@ describe('agents:create singleton enforcement', () => {
     expect(a.multiInstance).toBe(true);
   });
 
-  it('singleton type rejects a 2nd instance with AGENT_SINGLETON', async () => {
-    await handleAgentsCreate({ repoId, name: 'qa-hunter' });
-    await expect(handleAgentsCreate({ repoId, name: 'qa-hunter' })).rejects.toMatchObject({
-      code: 'AGENT_SINGLETON',
-    });
+  it('QA Hunter is now multi-instance — multiple plans can run on different schedules', async () => {
+    const a = await handleAgentsCreate({ repoId, name: 'qa-hunter' });
+    const b = await handleAgentsCreate({ repoId, name: 'qa-hunter' });
+    expect(a.id).not.toBe(b.id);
+    expect(a.multiInstance).toBe(true);
+    expect(b.displayName).toBe('QA Hunter 2');
   });
 
-  it('singleton clone is also rejected', async () => {
-    const first = await handleAgentsCreate({ repoId, name: 'qa-hunter' });
-    await expect(handleAgentsClone({ agentId: first.id })).rejects.toMatchObject({
-      code: 'AGENT_SINGLETON',
-    });
+  it('Manual QA is now multi-instance — different feature plans can run in parallel', async () => {
+    const a = await handleAgentsCreate({ repoId, name: 'manual-qa' });
+    const b = await handleAgentsCreate({ repoId, name: 'manual-qa' });
+    expect(a.id).not.toBe(b.id);
+    expect(a.multiInstance).toBe(true);
+    expect(b.displayName).toBe('Manual QA 2');
   });
 
-  it('clone of a multi-instance agent lands disabled', async () => {
+  it('cloning a multi-instance agent lands disabled', async () => {
     const first = await handleAgentsCreate({ repoId, name: 'bug-fixer' });
     const cloned = await handleAgentsClone({ agentId: first.id });
     expect(cloned.id).not.toBe(first.id);
     expect(cloned.enabled).toBe(false); // explicit user enable prevents 2× billing
     expect(cloned.displayName).toBe('Bug Fixer 2');
+  });
+
+  it('cloning QA Hunter is allowed and lands disabled', async () => {
+    const first = await handleAgentsCreate({ repoId, name: 'qa-hunter' });
+    const cloned = await handleAgentsClone({ agentId: first.id });
+    expect(cloned.id).not.toBe(first.id);
+    expect(cloned.enabled).toBe(false);
+    expect(cloned.displayName).toBe('QA Hunter 2');
   });
 });

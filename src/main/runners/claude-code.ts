@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
+import { looksLikeAuthRequired } from './detect-auth';
 import type { CodingAgentRunner, RunOpts, RunResult } from './types';
 
 export class ClaudeCodeRunner implements CodingAgentRunner {
@@ -52,6 +53,16 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
     if (result.exitCode !== 0) {
       const stderr = result.stderr.trim();
       const stdoutTail = result.stdout.trim().split('\n').slice(-3).join(' | ').slice(-300);
+      // Claude reports auth state on stdout (e.g. "Not logged in · Please run /login").
+      // Classify those as auth_required so the orchestrator can pause the
+      // agent and surface a sign-in CTA instead of a generic INTERNAL.
+      if (looksLikeAuthRequired(result.stdout, stderr)) {
+        return {
+          ok: false,
+          reason: 'auth_required',
+          detail: stdoutTail || stderr.slice(-300) || 'claude reports it is not signed in',
+        };
+      }
       const detail = stderr
         ? `claude exited ${result.exitCode ?? '?'}; stderr: ${stderr.slice(-500)}`
         : stdoutTail

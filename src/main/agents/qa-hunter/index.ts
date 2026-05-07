@@ -1,6 +1,8 @@
 import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { parseFencedJson } from '../lib/parse-fenced-json';
+import { previewTitleConflicts } from '../lib/find-existing-issue';
+import { listOpenPreviewTitlesForRepo } from '../../db/previews';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type {
   AgentHandler,
@@ -12,10 +14,14 @@ import type {
 
 export const qaHunterHandler: AgentHandler = {
   name: 'qa-hunter',
-  // Singleton: a 2nd QA Hunter would do a redundant whole-repo sweep.
-  multiInstance: false,
+  // Multi-instance: each instance pairs with a test plan, so multiple
+  // instances let you run different plans (full-app sweep, checkout flow,
+  // onboarding) on different schedules in parallel. Per-plan single-flight
+  // (enforced in createRun by task_ref) prevents two runs of the SAME plan
+  // from racing.
+  multiInstance: true,
   addAnotherExplainer:
-    'QA Hunter sweeps the whole repo on every run — only one instance is useful.',
+    'Adds another QA Hunter instance — pair it with a different test plan and schedule.',
   // QA Hunter doesn't write code; it files issues. The Evidence Pack gate
   // (which is about PR evidence) doesn't apply.
   skipsEvidenceGate: true,
@@ -41,17 +47,29 @@ export const qaHunterHandler: AgentHandler = {
     const findings = parseFindings(input.runResult.reasoning);
     if (findings.length === 0) return [];
 
+    // Two dedup passes:
+    //   1. Open previews for this repo (the recurring-sweep gotcha — without
+    //      this, a daily QA Hunter run would pile a fresh preview onto an
+    //      already-pending one).
+    //   2. Open GitHub issues with the obelisk:fix label (covers Issues mode
+    //      where findings get published, plus older runs whose previews were
+    //      filed manually).
+    const openPreviewTitles = listOpenPreviewTitlesForRepo(input.repo.id);
     const out: PublishPlan[] = [];
     for (const f of findings) {
       const title = titleFor(f);
+      if (openPreviewTitles.some((t) => previewTitleConflicts(t, title))) continue;
       const dup = await findDuplicateIssue(input.repo.githubFullName, title).catch(() => null);
-      if (dup !== null) continue; // already filed; skip silently (audit log records the count diff)
+      if (dup !== null) continue;
       out.push({
         kind: 'issue',
         title,
         body: bodyFor(f),
         labels: labelsFor(f),
       });
+      // Track this title as "filed" within the same run so two findings in
+      // ONE batch with similar titles also dedup against each other.
+      openPreviewTitles.push(title);
     }
     return out;
   },
@@ -62,7 +80,11 @@ export const qaHunterHandler: AgentHandler = {
 interface Finding {
   title: string;
   severity: 'P0' | 'P1' | 'P2';
+  description: string;
+  expected: string;
+  actual: string;
   repro: string;
+  evidence?: string;
   suspected_files: string[];
   suggested_test: string;
   suspected_kind?: 'bug' | 'coverage';
@@ -78,25 +100,44 @@ function isFinding(v: unknown): v is Finding {
   return (
     typeof obj['title'] === 'string' &&
     (obj['severity'] === 'P0' || obj['severity'] === 'P1' || obj['severity'] === 'P2') &&
+    typeof obj['description'] === 'string' &&
+    obj['description'].trim().length > 0 &&
+    typeof obj['expected'] === 'string' &&
+    obj['expected'].trim().length > 0 &&
+    typeof obj['actual'] === 'string' &&
+    obj['actual'].trim().length > 0 &&
     typeof obj['repro'] === 'string' &&
+    obj['repro'].trim().length > 0 &&
     Array.isArray(obj['suspected_files']) &&
     obj['suspected_files'].every((f) => typeof f === 'string') &&
-    typeof obj['suggested_test'] === 'string'
+    typeof obj['suggested_test'] === 'string' &&
+    (obj['evidence'] === undefined || typeof obj['evidence'] === 'string')
   );
 }
 
 function titleFor(f: Finding): string {
-  const prefix = f.severity === 'P0' ? '[bug]' : f.severity === 'P1' ? '[bug]' : '[smell]';
+  const prefix = f.severity === 'P2' ? '[smell]' : '[bug]';
   return `${prefix} ${f.title}`;
 }
 
 function bodyFor(f: Finding): string {
-  return [
-    `## Severity`,
-    f.severity,
+  const sections: string[] = [
+    `## Description`,
+    f.description.trim(),
     '',
-    `## Repro`,
-    f.repro || '_(QA Hunter did not produce repro steps)_',
+    `## Expected behavior`,
+    f.expected.trim(),
+    '',
+    `## Actual behavior`,
+    f.actual.trim(),
+    '',
+    `## Steps to reproduce`,
+    f.repro.trim(),
+    '',
+    `## Evidence`,
+    f.evidence && f.evidence.trim().length > 0
+      ? f.evidence.trim()
+      : '_(no evidence captured)_',
     '',
     `## Suspected files`,
     f.suspected_files.length === 0
@@ -106,8 +147,12 @@ function bodyFor(f: Finding): string {
     `## Suggested test`,
     `\`\`\`\n${f.suggested_test}\n\`\`\``,
     '',
+    `## Severity`,
+    f.severity,
+    '',
     `> Filed by Obelisk QA Hunter. Reply \`/obelisk fix\` to assign Bug Fixer to this issue.`,
-  ].join('\n');
+  ];
+  return sections.join('\n');
 }
 
 function labelsFor(f: Finding): string[] {

@@ -2,12 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setDbPathForTesting, closeDb, getDb } from '../../src/main/db';
+import { setDbPathForTesting, closeDb } from '../../src/main/db';
 import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
 import { createRun } from '../../src/main/db/runs';
 import {
   getPreviewById,
+  insertPreview,
   listPreviewsForRepo,
   markPreviewDismissed,
   markPreviewPublished,
@@ -39,6 +40,7 @@ vi.mock('../../src/main/github/client', () => ({
 
 let tmpRoot: string;
 
+let seedSeq = 0;
 function seedPreview(opts: {
   repoId: string;
   agentName: 'qa-hunter' | 'manual-qa' | 'ios-qa-pilot';
@@ -46,27 +48,24 @@ function seedPreview(opts: {
   body: string;
   labels: string[];
 }): { previewId: number; runId: string } {
+  // Each preview needs a fresh run row (per-task-ref single-flight requires
+  // distinct taskRefs across in-flight runs).
+  seedSeq += 1;
   const run = createRun({
     repoId: opts.repoId,
     agentName: opts.agentName,
     agentId: null,
     trigger: 'manual',
-    taskRef: 'qa-sweep',
+    taskRef: `qa-sweep-${seedSeq}`,
     runnerUsed: 'claude',
   });
-  const at = new Date().toISOString();
-  const payload = JSON.stringify({
-    kind: 'issue',
-    title: opts.title,
-    body: opts.body,
-    labels: opts.labels,
+  const previewId = insertPreview({
+    repoId: opts.repoId,
+    runId: run.id,
+    agentName: opts.agentName,
+    payload: { kind: 'issue', title: opts.title, body: opts.body, labels: opts.labels },
   });
-  const info = getDb()
-    .prepare(
-      `INSERT INTO audit_log (run_id, at, kind, payload) VALUES (?, ?, 'preview', ?)`,
-    )
-    .run(run.id, at, payload);
-  return { previewId: Number(info.lastInsertRowid), runId: run.id };
+  return { previewId, runId: run.id };
 }
 
 beforeEach(() => {
