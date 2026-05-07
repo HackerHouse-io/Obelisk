@@ -40,6 +40,13 @@ export type RunResult =
       ok: false;
       reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes';
       detail: string;
+      /**
+       * Captured stdout. Only meaningful for `no_changes` (read-only agents
+       * report this as their normal success path; their entire output is on
+       * stdout and we MUST not lose it — that's where BEGIN_FINDINGS lives).
+       * Other failure reasons may set this best-effort.
+       */
+      reasoning?: string;
     };
 
 export interface CodingAgentRunner {

@@ -56,7 +56,15 @@ async function collectPatch(opts: RunOpts, reasoning: string): Promise<RunResult
   await git.add('--all');
   const status = await git.status();
   if (status.files.length === 0) {
-    return { ok: false, reason: 'no_changes', detail: 'worktree had no staged changes after run' };
+    return {
+      ok: false,
+      reason: 'no_changes',
+      detail: 'worktree had no staged changes after run',
+      // Read-only agents (qa-hunter, manual-qa, pr-reviewer) emit findings on
+      // stdout. Carrying the reasoning through here keeps the orchestrator
+      // from dropping it when it coerces no_changes → ok for those agents.
+      reasoning,
+    };
   }
   const diff = await git.diff(['--cached']);
   const filesChanged = [...new Set(status.files.map((f) => f.path))].sort();

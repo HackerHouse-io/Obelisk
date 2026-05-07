@@ -223,7 +223,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
 
     const ok = result.ok
       ? result
-      : { ok: true as const, patch: { diff: '', filesChanged: [] }, testsRun: [], reasoning: '' };
+      : {
+          ok: true as const,
+          patch: { diff: '', filesChanged: [] },
+          testsRun: [],
+          // CRITICAL: read-only agents (QA Hunter, Manual QA) emit their
+          // findings on stdout, not as a patch. Without this passthrough the
+          // orchestrator parses an empty string and drops every finding —
+          // exactly the bug the user reported on HackerHouse-io/WealthLab,
+          // where codex returned two real bugs that landed nowhere.
+          reasoning: result.reasoning ?? '',
+        };
 
     // 8) Capture artifacts + (for PR-opening agents) check the Evidence Pack.
     transitionRun(run.id, 'publishing', {
