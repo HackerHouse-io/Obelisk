@@ -28,6 +28,9 @@
     "prepare": "husky",
     "postinstall": "electron-builder install-app-deps"
   },
+  "lint-staged": {
+    "src/**/*.{ts,tsx,css,html,json,md,yml,yaml}": "prettier --write"
+  },
   "dependencies": {
     "@octokit/auth-oauth-device": "^7.1.4",
     "@octokit/plugin-retry": "^7.1.4",
@@ -62,6 +65,7 @@
     "eslint-plugin-react-hooks": "^5.1.0",
     "globals": "^15.13.0",
     "husky": "^9.1.7",
+    "lint-staged": "^17.0.2",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",

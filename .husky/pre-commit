@@ -1,3 +1,4 @@
 #!/usr/bin/env sh
-# Phase 0: typecheck only. Phase 11 wires lint-staged + L1 unit tests on touched files.
+# Format staged files with Prettier (and re-stage them), then typecheck.
+pnpm exec lint-staged || exit 1
 pnpm typecheck || exit 1
