@@ -353,17 +353,13 @@ function ModelSelect({
           onChange={(e) => onCommit(e.target.value)}
           style={{ flex: 1 }}
         >
-          <option value="">
-            Use CLI default{defaultModelId ? ` (${defaultModelId})` : ''}
-          </option>
+          <option value="">Use CLI default{defaultModelId ? ` (${defaultModelId})` : ''}</option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label} · {tierLabel(m.tier)}
             </option>
           ))}
-          {stickyValue ? (
-            <option value={stickyValue}>{stickyValue} · custom</option>
-          ) : null}
+          {stickyValue ? <option value={stickyValue}>{stickyValue} · custom</option> : null}
         </select>
         <button
           type="button"

@@ -964,9 +964,7 @@ function IosPilotSetupBanner({ repoId }: { repoId: string }): ReactElement | nul
 
   const failing = report.checks.filter((c) => c.level !== 'green');
   const summary =
-    failing.length === 1
-      ? failing[0]!.label
-      : `${failing.length} checks need attention`;
+    failing.length === 1 ? failing[0]!.label : `${failing.length} checks need attention`;
 
   return (
     <div
