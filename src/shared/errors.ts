@@ -33,6 +33,9 @@ export const ERROR_CODES = [
   'RUNNER_NO_OUTPUT',
   'RUNNER_LOGIN_REQUIRED',
   'FINDINGS_NOT_PARSEABLE',
+  'IOS_QA_NOT_CONFIGURED',
+  'IOS_QA_SETUP_REQUIRED',
+  'IOS_QA_NO_FLOWS',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

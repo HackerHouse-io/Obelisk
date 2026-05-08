@@ -26,6 +26,7 @@ import { loadFlowsFromRepo, syncFlowsToRegistry } from './flows';
 import { buildPublishPlan, registerEvidenceArtifacts } from './issue';
 import { parseFlowMarkers, parseIosQaFindings } from './parser';
 import { parsePlanHint, resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
+import { ObeliskError } from '../../../shared/errors';
 
 /**
  * The optional task hint format. The orchestrator passes `taskId` from
@@ -50,8 +51,20 @@ export const iosQaPilotHandler: AgentHandler = {
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     const cfg = loadIosConfig(input.repo.localPath);
-    if (!isConfigured(cfg)) return null;
-    if (!getSetupAt(input.repo.id)) return null; // Doctor hasn't run yet
+    if (!isConfigured(cfg)) {
+      throw new ObeliskError(
+        'IOS_QA_NOT_CONFIGURED',
+        'iOS QA Pilot is missing its config. Add a `qa/ios.yml` with `app_path` and `bundle_id` set.',
+        'See the iOS QA Pilot setup screen for the expected config shape.',
+      );
+    }
+    if (!getSetupAt(input.repo.id)) {
+      throw new ObeliskError(
+        'IOS_QA_SETUP_REQUIRED',
+        'iOS QA Pilot setup has not run yet — Appium and the simulator pool need to be installed first.',
+        'Open the iOS QA Pilot screen and click "Run Setup". The button is idempotent and safe to re-click.',
+      );
+    }
 
     // Plan gate: iOS QA Pilot needs a plan for context, but the flow-registry
     // is still what picks WHICH flow to execute. parsePlanHint accepts the
@@ -66,7 +79,13 @@ export const iosQaPilotHandler: AgentHandler = {
 
     ensureRepoState(input.repo.id);
     const flowsParsed = loadFlowsFromRepo(input.repo.localPath, cfg.flowsDir);
-    if (flowsParsed.length === 0) return null;
+    if (flowsParsed.length === 0) {
+      throw new ObeliskError(
+        'IOS_QA_NO_FLOWS',
+        `No flow files found in \`${cfg.flowsDir}\`. Add at least one \`*.flow.md\` file describing what to test.`,
+        'Each flow file is a Markdown doc with a title and step-by-step instructions for the simulator.',
+      );
+    }
     syncFlowsToRegistry(input.repo.id, flowsParsed);
 
     const preferredFlowId = parseFlowHint(input.taskId);

@@ -96,15 +96,50 @@ afterEach(() => {
 });
 
 describe('orchestrator: ios-qa-pilot', () => {
-  it('selects no task when Doctor has not run', async () => {
+  it('throws IOS_QA_SETUP_REQUIRED when Doctor has not run, instead of silently returning "nothing to do"', async () => {
     setSetupAt(repoId, null);
-    const result = await runAgent({
-      repoId,
-      agentName: 'ios-qa-pilot',
-      trigger: 'manual',
-      runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+    await expect(
+      runAgent({
+        repoId,
+        agentName: 'ios-qa-pilot',
+        trigger: 'manual',
+        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'IOS_QA_SETUP_REQUIRED',
+      hint: expect.stringContaining('Run Setup'),
     });
-    expect(result.runId).toBe('');
+  });
+
+  it('throws IOS_QA_NOT_CONFIGURED when qa/ios.yml is missing required keys', async () => {
+    // Empty out the config file so app_path / bundle_id are blank.
+    writeFileSync(join(repoPath, 'qa', 'ios.yml'), '# nothing\n');
+    await expect(
+      runAgent({
+        repoId,
+        agentName: 'ios-qa-pilot',
+        trigger: 'manual',
+        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'IOS_QA_NOT_CONFIGURED',
+    });
+  });
+
+  it('throws IOS_QA_NO_FLOWS when the flows directory is empty', async () => {
+    rmSync(join(repoPath, 'qa', 'ios-flows', 'login.flow.md'));
+    rmSync(join(repoPath, 'qa', 'ios-flows', 'signup.flow.md'));
+    await expect(
+      runAgent({
+        repoId,
+        agentName: 'ios-qa-pilot',
+        trigger: 'manual',
+        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'IOS_QA_NO_FLOWS',
+      message: expect.stringContaining('qa/ios-flows'),
+    });
   });
 
   it('runs a flow → emits a finding → records the outcome as failed', async () => {
