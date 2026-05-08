@@ -1862,25 +1862,43 @@ body {
 .finding-row-title-text {
   font-weight: 600;
   font-size: 13px;
-  white-space: nowrap;
+  /* Wrap to two lines and ellipsis the third — better than the single-line
+     hard ellipsis ("[bug] Pro...") that used to chop titles in narrow
+     panels. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-word;
+  line-height: 1.35;
 }
 
 .finding-row-meta {
   font-size: 11px;
   color: var(--t-2);
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
+}
+
+.finding-row-meta-item {
+  /* Each meta unit ("QA Hunter", "May 8, 12:46 AM", "📷 2") stays on one
+     line; wrapping happens at the separator boundaries between them. */
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .finding-row-labels {
   display: flex;
   gap: 4px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   overflow: hidden;
   max-width: 240px;
+  justify-self: end;
 }
 
 .finding-row-actions {
@@ -1888,6 +1906,50 @@ body {
   gap: 6px;
   align-items: center;
   flex-shrink: 0;
+}
+
+/* Container query: when the findings list is rendered in a narrow panel
+   (Mission Control side drawer, modal, split-pane), switch to a stacked
+   card layout. The full-width desktop view keeps the dense single-row
+   form. Container queries beat media queries here because Mission
+   Control can be docked or undocked at runtime. */
+.mc-findings {
+  container-type: inline-size;
+}
+
+@container (max-width: 720px) {
+  .finding-row-head {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .finding-row-toggle {
+    grid-template-columns: 14px auto 1fr;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      'chev sev title'
+      '.    .   labels';
+    gap: 6px 10px;
+    padding: 6px 0;
+  }
+  .finding-row-toggle > :nth-child(1) {
+    grid-area: chev;
+  }
+  .finding-row-toggle > :nth-child(2) {
+    grid-area: sev;
+  }
+  .finding-row-toggle > .finding-row-title {
+    grid-area: title;
+  }
+  .finding-row-toggle > .finding-row-labels {
+    grid-area: labels;
+    max-width: none;
+    justify-self: start;
+  }
+  .finding-row-actions {
+    justify-content: flex-end;
+    padding: 0 0 8px;
+  }
 }
 
 .finding-row-published {

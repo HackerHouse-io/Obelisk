@@ -43,11 +43,15 @@ export function FindingPreview({
           <div className="finding-row-title">
             <div className="finding-row-title-text">{finding.title}</div>
             <div className="finding-row-meta">
-              {labelForAgent(finding.agentName)} · {shortDate(finding.at)}
+              <span className="finding-row-meta-item">{labelForAgent(finding.agentName)}</span>
+              <span aria-hidden="true">·</span>
+              <span className="finding-row-meta-item">{shortDate(finding.at)}</span>
               {finding.evidence.length > 0 ? (
                 <>
-                  {' · '}
-                  <Icon.Camera size={11} color="var(--t-2)" /> {finding.evidence.length}
+                  <span aria-hidden="true">·</span>
+                  <span className="finding-row-meta-item">
+                    <Icon.Camera size={11} color="var(--t-2)" /> {finding.evidence.length}
+                  </span>
                 </>
               ) : null}
             </div>
