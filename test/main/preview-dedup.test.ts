@@ -14,8 +14,13 @@ import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
 import { createAgent } from '../../src/main/db/agents';
 import { createRun } from '../../src/main/db/runs';
-import { insertPreview } from '../../src/main/db/previews';
-import { listOpenPreviewTitlesForRepo } from '../../src/main/db/previews';
+import {
+  insertPreview,
+  listAllPreviewTitlesForRepo,
+  listOpenPreviewTitlesForRepo,
+  listPreviewsForRepo,
+  markPreviewDismissed,
+} from '../../src/main/db/previews';
 import {
   previewTitleConflicts,
   titleConflicts,
@@ -115,6 +120,42 @@ describe('previewTitleConflicts', () => {
       ),
     ).toBe(true);
   });
+
+  it('matches near-duplicates that differ only by a stop word — the prod regression', () => {
+    // Production repro: QA Hunter filed both of these on consecutive runs
+    // because the substring check failed on "can never" vs "never".
+    expect(
+      previewTitleConflicts(
+        "[bug] Lesson-only courses never earn Dean's List credentials",
+        "[bug] Lesson-only courses can never earn Dean's List credentials",
+      ),
+    ).toBe(true);
+  });
+
+  it('matches near-duplicates with light stem differences (node/nodes, open/opens) — second prod regression', () => {
+    // Production repro #2. After stop-word filtering ("only", "of") and
+    // stem ("opens"→"open", "nodes"→"node"):
+    //   A: home, capstone, node, open, story, player, instead, workshop  (8)
+    //   B: home, capstone, path, node, open, read, story, instead, workshop  (9)
+    // Intersection = 7, Union = 10, Jaccard = 0.7 → meets threshold.
+    expect(
+      previewTitleConflicts(
+        '[bug] Home capstone path node opens read-only story instead of workshop',
+        '[bug] Home capstone nodes open the story player instead of the workshop',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not falsely match unrelated bugs that share generic vocabulary', () => {
+    // Both mention "Profile" + "progress" but describe different
+    // problems. The threshold should prevent collapsing them into one.
+    expect(
+      previewTitleConflicts(
+        '[bug] Profile overall progress mixes story completions into a lesson-only denominator',
+        '[bug] Profile Overall progress can render numerator over denominator after any story or case',
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('listOpenPreviewTitlesForRepo', () => {
@@ -209,8 +250,10 @@ END_FINDINGS`;
       description:
         'Switching the app locale to Spanish updates most screens, but the School hub component reads the cached locale on mount and never resubscribes, so it stays English until the app is restarted.',
       expected: 'School hub renders Spanish strings after the user switches locale to Spanish.',
-      actual: 'School hub renders English strings after switching to Spanish until the app is restarted.',
-      repro: '1. Switch language to Spanish. 2. Tab away. 3. Come back to school hub — strings are still English.',
+      actual:
+        'School hub renders English strings after switching to Spanish until the app is restarted.',
+      repro:
+        '1. Switch language to Spanish. 2. Tab away. 3. Come back to school hub — strings are still English.',
       suspected_files: ['src/i18n.ts'],
       suggested_test: 'expect locale to propagate to school hub',
     });
@@ -230,6 +273,59 @@ ${JSON.stringify([a, b])}
 END_FINDINGS`;
     const out = await qaHunterHandler.interpretResult(fakeInput(stdout));
     expect(out).toHaveLength(1);
+  });
+
+  it('skips a finding that fuzzy-matches an existing preview only by a stop word', async () => {
+    // The exact production repro: stored title differs only by "can".
+    writePreview("[bug] Lesson-only courses never earn Dean's List credentials");
+    const finding = findingFixture({
+      title: "Lesson-only courses can never earn Dean's List credentials",
+      severity: 'P1',
+      description:
+        "Course completion logic awards Dean's List only when stories are completed; lesson-only courses have zero stories so the credential is unreachable.",
+      expected: "Completing all lessons in a lesson-only course awards Dean's List.",
+      actual: 'Completing all lessons leaves the credential locked.',
+      repro:
+        "1. Finish every lesson in a lesson-only course. 2. Open Profile → Credentials. Dean's List is missing.",
+    });
+    const stdout = `BEGIN_FINDINGS
+${JSON.stringify([finding])}
+END_FINDINGS`;
+    const out = await qaHunterHandler.interpretResult(fakeInput(stdout));
+    expect(out).toHaveLength(0);
+  });
+
+  it('skips a finding that matches a DISMISSED preview (user already said "not a bug")', async () => {
+    insertPreview({
+      repoId,
+      runId,
+      agentName: 'qa-hunter',
+      payload: {
+        kind: 'issue',
+        title: '[bug] Reset progress leaves streak state behind',
+        body: 'body',
+        labels: ['obelisk:fix', 'P1'],
+      },
+    });
+    // Dismiss the preview we just inserted. listAllPreviewTitlesForRepo
+    // should still surface its title for dedup.
+    const dismissedRowId = listPreviewsForRepo(repoId, 200)[0]!.id;
+    markPreviewDismissed({ sourcePreviewId: dismissedRowId, runId });
+
+    // Sanity: this dismissed-preview title is NOT in the open list…
+    expect(listOpenPreviewTitlesForRepo(repoId)).not.toContain(
+      '[bug] Reset progress leaves streak state behind',
+    );
+    // …but IS in the all-titles dedup list.
+    expect(listAllPreviewTitlesForRepo(repoId)).toContain(
+      '[bug] Reset progress leaves streak state behind',
+    );
+
+    const stdout = `BEGIN_FINDINGS
+${JSON.stringify([findingFixture({})])}
+END_FINDINGS`;
+    const out = await qaHunterHandler.interpretResult(fakeInput(stdout));
+    expect(out).toHaveLength(0);
   });
 
   it('renders a rich body with Description / Expected / Actual / Steps / Evidence sections', async () => {
@@ -253,3 +349,4 @@ END_FINDINGS`;
     expect(body).toContain('AppState.reset()');
   });
 });
+

@@ -178,9 +178,25 @@ function rowToFinding(row: PreviewRow, enrich: RowEnrichment): PreviewedFinding 
  * sweep doesn't pile three copies of the same bug into the previews list.
  */
 export function listOpenPreviewTitlesForRepo(repoId: string): string[] {
+  return listPreviewTitlesForRepo(repoId, { scope: 'open' });
+}
+
+/**
+ * Titles of every recent preview — open, dismissed, AND published. Used
+ * for dedup: a finding whose title fuzzy-matches a dismissed preview ("not
+ * a bug") shouldn't get re-filed as a fresh preview the next sweep, and a
+ * published preview is already a real GitHub issue we don't want a clone
+ * of. Returns at most 200 titles, newest first.
+ */
+export function listAllPreviewTitlesForRepo(repoId: string): string[] {
+  return listPreviewTitlesForRepo(repoId, { scope: 'all' });
+}
+
+function listPreviewTitlesForRepo(repoId: string, opts: { scope: 'open' | 'all' }): string[] {
   const previews = listPreviewsForRepo(repoId, 200);
-  return previews
-    .filter((p) => !p.dismissed && !p.published)
+  const filtered =
+    opts.scope === 'open' ? previews.filter((p) => !p.dismissed && !p.published) : previews;
+  return filtered
     .map((p) => p.title)
     .filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
 }

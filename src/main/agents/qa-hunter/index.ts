@@ -1,8 +1,11 @@
-import { getGithub } from '../../github/client';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { parseFencedJson } from '../lib/parse-fenced-json';
-import { previewTitleConflicts } from '../lib/find-existing-issue';
-import { listOpenPreviewTitlesForRepo } from '../../db/previews';
+import {
+  fetchKnownIssueTitles,
+  normalizeTitle,
+  previewTitleConflicts,
+} from '../lib/find-existing-issue';
+import { listAllPreviewTitlesForRepo } from '../../db/previews';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type {
   AgentHandler,
@@ -33,11 +36,33 @@ export const qaHunterHandler: AgentHandler = {
     const plan = resolvePlanForAgentRun(input.repo, 'qa-hunter', input.taskId);
     const assigned = toAssignedPlan(plan);
     const ts = new Date().toISOString();
+
+    // Inject the list of already-known findings into the prompt so the
+    // agent self-dedups upstream — much more reliable than post-hoc title
+    // similarity for cases where the same bug gets reworded run to run
+    // (e.g. "Home capstone nodes open the story player" vs "Home capstone
+    // path node opens read-only story"). Cap at 80 titles so we don't
+    // bloat the prompt on mature repos.
+    const knownTitles = await collectKnownTitles(input.repo.id, input.repo.githubFullName);
+    const knownBlock =
+      knownTitles.length === 0
+        ? ''
+        : [
+            '',
+            '## Already-known findings — DO NOT refile',
+            '',
+            'The titles below are already tracked in this repo, either as open / closed GitHub issues or as local previews (open, dismissed, or published). If your finding describes the same problem (even with different wording), DO NOT include it in BEGIN_FINDINGS. Only emit findings that are genuinely new.',
+            '',
+            ...knownTitles.slice(0, 80).map((t) => `- ${t}`),
+          ].join('\n');
+
     return {
       task: {
         ref: `plan:${plan.frontmatter.id}`,
         kind: 'sweep',
-        context: `Run ${plan.frontmatter.name} against ${input.repo.githubFullName}. Execute every test case in the assigned plan and emit findings as JSON.\n\nGenerated at ${ts}.`,
+        context:
+          `Run ${plan.frontmatter.name} against ${input.repo.githubFullName}. Execute every test case in the assigned plan and emit findings as JSON.\n\nGenerated at ${ts}.` +
+          knownBlock,
         assignedPlan: assigned,
       },
     };
@@ -47,33 +72,47 @@ export const qaHunterHandler: AgentHandler = {
     const findings = parseFindings(input.runResult.reasoning);
     if (findings.length === 0) return [];
 
-    // Two dedup passes:
-    //   1. Open previews for this repo (the recurring-sweep gotcha — without
-    //      this, a daily QA Hunter run would pile a fresh preview onto an
-    //      already-pending one).
-    //   2. Open GitHub issues with the obelisk:fix label (covers Issues mode
-    //      where findings get published, plus older runs whose previews were
-    //      filed manually).
-    const openPreviewTitles = listOpenPreviewTitlesForRepo(input.repo.id);
+    // Dedup pool unifies three sources, key-deduped via collectKnownTitles:
+    //   (a) recent previews for this repo (open + dismissed + published) —
+    //       catches the recurring-sweep gotcha and respects "not a bug"
+    //       dismissals.
+    //   (b) obelisk:fix-labeled GitHub issues, both open and recently-
+    //       closed — a closed issue is a settled topic.
+    //   (c) titles we accept inside this batch, appended as we go.
+    const dedupTitles = await collectKnownTitles(input.repo.id, input.repo.githubFullName);
+
     const out: PublishPlan[] = [];
     for (const f of findings) {
       const title = titleFor(f);
-      if (openPreviewTitles.some((t) => previewTitleConflicts(t, title))) continue;
-      const dup = await findDuplicateIssue(input.repo.githubFullName, title).catch(() => null);
-      if (dup !== null) continue;
+      if (dedupTitles.some((t) => previewTitleConflicts(t, title))) continue;
       out.push({
         kind: 'issue',
         title,
         body: bodyFor(f),
         labels: labelsFor(f),
       });
-      // Track this title as "filed" within the same run so two findings in
-      // ONE batch with similar titles also dedup against each other.
-      openPreviewTitles.push(title);
+      dedupTitles.push(title);
     }
     return out;
   },
 };
+
+async function collectKnownTitles(repoId: string, repoFullName: string): Promise<string[]> {
+  const previewTitles = listAllPreviewTitlesForRepo(repoId);
+  const issues = await fetchKnownIssueTitles({
+    repoFullName,
+    label: OBELISK_LABELS.fix,
+  }).catch(() => []);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of [...previewTitles, ...issues.map((i) => i.title)]) {
+    const key = normalizeTitle(t);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
 
 /* ---------- output parsing ---------- */
 
@@ -155,42 +194,4 @@ function bodyFor(f: Finding): string {
 
 function labelsFor(f: Finding): string[] {
   return [OBELISK_LABELS.fix, f.severity];
-}
-
-/**
- * Dedup helper: returns true if a fuzzy-matching obelisk-filed issue already
- * exists. Caller should drop the finding before publishing.
- *
- * Phase 5 uses simple substring matching on the title; Phase 11+ adds
- * fuzzy similarity (Levenshtein ≥ 0.85) per AGENT_ARCHITECTURE.md §4.1.
- */
-export async function findDuplicateIssue(
-  repoFullName: string,
-  candidateTitle: string,
-): Promise<number | null> {
-  const gh = await getGithub();
-  if (!gh) return null;
-  const [owner, name] = repoFullName.split('/');
-  if (!owner || !name) return null;
-  const { data } = await gh.issues.listForRepo({
-    owner,
-    repo: name,
-    labels: OBELISK_LABELS.fix,
-    state: 'open',
-    per_page: 100,
-  });
-  const norm = candidateTitle
-    .replace(/^\[(bug|smell)\]\s*/i, '')
-    .trim()
-    .toLowerCase();
-  for (const issue of data) {
-    const existing = issue.title
-      .replace(/^\[(bug|smell)\]\s*/i, '')
-      .trim()
-      .toLowerCase();
-    if (existing && norm && (existing.includes(norm) || norm.includes(existing))) {
-      return issue.number;
-    }
-  }
-  return null;
 }
