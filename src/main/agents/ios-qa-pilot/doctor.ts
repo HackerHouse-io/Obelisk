@@ -99,7 +99,14 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
     emit('install-appium', 'started');
     const r = await runStep(run, 'npm', ['install', '-g', 'appium']);
     if (!r.ok) {
-      errors.push({ step: 'install Appium', error: r.error });
+      errors.push({
+        step: 'install Appium',
+        error: formatInstallFailure(
+          '`npm install -g appium` failed',
+          r.error ?? 'unknown error',
+          r.output,
+        ),
+      });
       emit('install-appium', 'failed');
     } else {
       emit('install-appium', 'completed');
@@ -107,15 +114,21 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
   }
 
   // 2. xcuitest driver — only install if not already present (the CLI errors
-  // if you ask it to install a driver that's already installed).
+  // if you ask it to install a driver that's already installed). After the
+  // install reports success we re-probe `driver list --installed` because
+  // we've seen cases where the install command exits 0 but the driver still
+  // doesn't show up (partial install state from a prior aborted run, mixed
+  // appium versions on PATH, etc.). In that case we try one recovery pass
+  // (`uninstall` then `install`) before surfacing a real failure with the
+  // full command output so the user can see what went wrong.
   if ((await checkXcuitestDriver(run)).level !== 'green') {
     emit('install-xcuitest', 'started');
-    const r = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
-    if (!r.ok) {
-      errors.push({ step: 'install xcuitest driver', error: r.error });
-      emit('install-xcuitest', 'failed');
-    } else {
+    const installed = await tryInstallXcuitest(run);
+    if (installed.ok) {
       emit('install-xcuitest', 'completed');
+    } else {
+      errors.push({ step: 'install xcuitest driver', error: installed.error });
+      emit('install-xcuitest', 'failed');
     }
   }
 
@@ -149,9 +162,9 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
       id: 'setup_errors',
       label: 'Setup errors',
       level: 'red',
-      detail: errors.map((e) => `${e.step}: ${truncate(e.error, 240)}`).join(' · '),
+      detail: errors.map((e) => `${e.step}: ${truncate(e.error, 800)}`).join(' · '),
       remediation:
-        'Open the Terminal and run the failed command manually, then click Re-check. If the install needs sudo, run it from a shell with the right permissions.',
+        'Open a terminal and run the failed command manually so you can see the full output. Common fixes: `appium driver uninstall xcuitest && appium driver install xcuitest`, or check that `which appium` matches the binary used by Obelisk.',
     });
   }
   return report;
@@ -330,17 +343,81 @@ function checkSetupTimestamp(repoId: string): DoctorCheck {
   };
 }
 
-async function runStep(
-  run: typeof exec,
-  cmd: string,
-  args: string[],
-): Promise<{ ok: true } | { ok: false; error: string }> {
+interface StepResult {
+  ok: boolean;
+  /** stdout + stderr concatenated, captured in both success and failure paths. */
+  output: string;
+  /** Set when `ok === false`. */
+  error?: string;
+}
+
+async function runStep(run: typeof exec, cmd: string, args: string[]): Promise<StepResult> {
   try {
-    await run(cmd, args, { maxBuffer: SETUP_MAX_BUFFER });
-    return { ok: true };
+    const r = await run(cmd, args, { maxBuffer: SETUP_MAX_BUFFER });
+    return { ok: true, output: combineOutput(r.stdout, r.stderr) };
   } catch (e) {
-    return { ok: false, error: errorMessage(e) };
+    const withStreams = e as { stdout?: string; stderr?: string };
+    return {
+      ok: false,
+      error: errorMessage(e),
+      output: combineOutput(withStreams.stdout ?? '', withStreams.stderr ?? ''),
+    };
   }
+}
+
+/**
+ * Install the xcuitest driver and verify it actually showed up. If the
+ * install command exits 0 but the driver is still missing (we've seen this
+ * with partial-install state), uninstall and re-install once before giving
+ * up. Returns the full install output on failure so the user can see why.
+ */
+async function tryInstallXcuitest(
+  run: typeof exec,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const first = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
+  if (first.ok && (await checkXcuitestDriver(run)).level === 'green') return { ok: true };
+
+  if (!first.ok) {
+    return {
+      ok: false,
+      error: formatInstallFailure(
+        '`appium driver install xcuitest` failed',
+        first.error ?? 'unknown error',
+        first.output,
+      ),
+    };
+  }
+
+  // Install reported success but the driver still isn't visible. Try a
+  // clean reinstall: `uninstall` then `install`. We ignore uninstall errors
+  // because the driver may simply not be there in any registry appium can
+  // see.
+  await runStep(run, 'appium', ['driver', 'uninstall', 'xcuitest']);
+  const second = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
+  if (second.ok && (await checkXcuitestDriver(run)).level === 'green') return { ok: true };
+
+  return {
+    ok: false,
+    error: formatInstallFailure(
+      second.ok
+        ? '`appium driver install xcuitest` exited 0 but xcuitest is still missing from `appium driver list --installed`'
+        : '`appium driver install xcuitest` failed on retry',
+      second.error ?? 'install reported success but driver not registered',
+      second.output || first.output,
+    ),
+  };
+}
+
+function combineOutput(stdout: string, stderr: string): string {
+  return [stdout, stderr]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+function formatInstallFailure(headline: string, error: string, output: string): string {
+  const tail = output ? ` — output: ${truncate(output, 400)}` : '';
+  return `${headline}: ${error}${tail}`;
 }
 
 function errorMessage(e: unknown): string {

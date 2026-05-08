@@ -4781,6 +4781,35 @@ body {
   background: var(--bg-1);
   border-bottom: 1px solid var(--line);
 }
+.coverage-th {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.coverage-th:hover {
+  color: var(--t-1);
+}
+.coverage-th.active {
+  color: var(--t-0);
+}
+.coverage-th-caret {
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.coverage-num .coverage-th {
+  justify-content: flex-end;
+  width: 100%;
+}
 .coverage-row {
   border-top: 1px solid var(--line);
 }

@@ -5,6 +5,8 @@ import { EmptyState } from '../ui/EmptyState';
 import type { CoverageEntry, CoverageReport } from '../../shared/types';
 
 type Filter = 'all' | 'uncovered' | 'recent-churn' | 'has-findings';
+type SortKey = 'path' | 'cases' | 'findings' | 'lastPass' | 'churn';
+type SortDir = 'asc' | 'desc';
 
 const FILTERS: { id: Filter; label: string; help: string }[] = [
   { id: 'all', label: 'All', help: 'Every tracked file' },
@@ -31,6 +33,22 @@ export function Coverage(): ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const onSort = (key: SortKey): void => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir('desc');
+      return;
+    }
+    if (sortDir === 'desc') {
+      setSortDir('asc');
+      return;
+    }
+    setSortKey(null);
+    setSortDir('desc');
+  };
 
   const load = useCallback(async (): Promise<void> => {
     if (!repo) return;
@@ -52,7 +70,7 @@ export function Coverage(): ReactElement {
   const filteredFiles = useMemo(() => {
     if (!report) return [] as CoverageEntry[];
     const q = search.trim().toLowerCase();
-    return report.files.filter((f) => {
+    const filtered = report.files.filter((f) => {
       if (q && !f.path.toLowerCase().includes(q)) return false;
       switch (filter) {
         case 'uncovered':
@@ -65,7 +83,30 @@ export function Coverage(): ReactElement {
           return true;
       }
     });
-  }, [report, filter, search]);
+    if (sortKey === null) return filtered;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const cmp = (a: CoverageEntry, b: CoverageEntry): number => {
+      switch (sortKey) {
+        case 'path':
+          return a.path.localeCompare(b.path) * dir;
+        case 'cases':
+          return (a.caseCount - b.caseCount) * dir;
+        case 'findings':
+          return (a.findingsCount - b.findingsCount) * dir;
+        case 'churn':
+          return (a.churnSinceLastPass - b.churnSinceLastPass) * dir;
+        case 'lastPass': {
+          // Null lastPassedAt always sorts last regardless of direction —
+          // "never" rows shouldn't dominate either end.
+          if (a.lastPassedAt === null && b.lastPassedAt === null) return 0;
+          if (a.lastPassedAt === null) return 1;
+          if (b.lastPassedAt === null) return -1;
+          return a.lastPassedAt.localeCompare(b.lastPassedAt) * dir;
+        }
+      }
+    };
+    return [...filtered].sort(cmp);
+  }, [report, filter, search, sortKey, sortDir]);
 
   if (!repo) {
     return (
@@ -175,11 +216,44 @@ export function Coverage(): ReactElement {
 
           <div className="coverage-table">
             <div className="coverage-table-head">
-              <div>File</div>
-              <div className="coverage-num">Cases</div>
-              <div className="coverage-num">Findings</div>
-              <div>Last pass</div>
-              <div className="coverage-num">Churn since</div>
+              <SortHeader
+                label="File"
+                sortKey="path"
+                current={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortHeader
+                label="Cases"
+                sortKey="cases"
+                current={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+                numeric
+              />
+              <SortHeader
+                label="Findings"
+                sortKey="findings"
+                current={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+                numeric
+              />
+              <SortHeader
+                label="Last pass"
+                sortKey="lastPass"
+                current={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortHeader
+                label="Churn since"
+                sortKey="churn"
+                current={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+                numeric
+              />
             </div>
             {filteredFiles.length === 0 ? (
               <div className="coverage-empty">No files match this filter.</div>
@@ -223,6 +297,41 @@ function CoverageRow({ entry }: { entry: CoverageEntry }): ReactElement {
         {entry.lastPassedAt ? short(entry.lastPassedAt) : 'never'}
       </div>
       <div className="coverage-num">{entry.churnSinceLastPass}</div>
+    </div>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  current,
+  dir,
+  onSort,
+  numeric,
+}: {
+  label: string;
+  sortKey: SortKey;
+  current: SortKey | null;
+  dir: SortDir;
+  onSort: (k: SortKey) => void;
+  numeric?: boolean;
+}): ReactElement {
+  const active = current === sortKey;
+  return (
+    <div className={numeric ? 'coverage-num' : undefined}>
+      <button
+        type="button"
+        className={`coverage-th${active ? ' active' : ''}`}
+        onClick={() => onSort(sortKey)}
+        aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        {label}
+        {active ? (
+          <span className="coverage-th-caret" aria-hidden="true">
+            {dir === 'asc' ? '▲' : '▼'}
+          </span>
+        ) : null}
+      </button>
     </div>
   );
 }
