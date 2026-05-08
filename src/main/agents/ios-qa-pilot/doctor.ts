@@ -26,6 +26,14 @@ export interface DoctorReport {
   checkedAt: string;
 }
 
+export type SetupStep = 'install-appium' | 'install-xcuitest' | 'bootstrap-pool';
+
+export interface SetupProgress {
+  step: SetupStep;
+  label: string;
+  status: 'started' | 'completed' | 'failed';
+}
+
 export interface DoctorOpts {
   repoId: string;
   poolSize: number;
@@ -35,7 +43,15 @@ export interface DoctorOpts {
   os?: string;
   /** Test injection: override execFile so doctor.test.ts can stub responses. */
   exec?: typeof exec;
+  /** Optional: receive per-step progress while runSetup is working. */
+  onProgress?: (p: SetupProgress) => void;
 }
+
+const STEP_LABELS: Record<SetupStep, string> = {
+  'install-appium': 'Installing Appium',
+  'install-xcuitest': 'Installing Appium xcuitest driver',
+  'bootstrap-pool': 'Bootstrapping simulator pool',
+};
 
 export async function runDoctor(opts: DoctorOpts): Promise<DoctorReport> {
   const run = opts.exec ?? exec;
@@ -74,21 +90,37 @@ export async function runDoctor(opts: DoctorOpts): Promise<DoctorReport> {
 export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
   const run = opts.exec ?? exec;
   const errors: { step: string; error: string }[] = [];
+  const emit = (step: SetupStep, status: SetupProgress['status']): void => {
+    opts.onProgress?.({ step, label: STEP_LABELS[step], status });
+  };
 
   // 1. Appium itself.
   if ((await checkAppium(run)).level !== 'green') {
+    emit('install-appium', 'started');
     const r = await runStep(run, 'npm', ['install', '-g', 'appium']);
-    if (!r.ok) errors.push({ step: 'install Appium', error: r.error });
+    if (!r.ok) {
+      errors.push({ step: 'install Appium', error: r.error });
+      emit('install-appium', 'failed');
+    } else {
+      emit('install-appium', 'completed');
+    }
   }
 
   // 2. xcuitest driver — only install if not already present (the CLI errors
   // if you ask it to install a driver that's already installed).
   if ((await checkXcuitestDriver(run)).level !== 'green') {
+    emit('install-xcuitest', 'started');
     const r = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
-    if (!r.ok) errors.push({ step: 'install xcuitest driver', error: r.error });
+    if (!r.ok) {
+      errors.push({ step: 'install xcuitest driver', error: r.error });
+      emit('install-xcuitest', 'failed');
+    } else {
+      emit('install-xcuitest', 'completed');
+    }
   }
 
   // 3. Bootstrap pool slots (clones simulators if missing).
+  emit('bootstrap-pool', 'started');
   try {
     const bootstrap: BootstrapOpts = {
       size: opts.poolSize,
@@ -99,8 +131,10 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
     };
     await bootstrapPool(bootstrap);
     await keepBooted();
+    emit('bootstrap-pool', 'completed');
   } catch (e) {
     errors.push({ step: 'bootstrap simulator pool', error: errorMessage(e) });
+    emit('bootstrap-pool', 'failed');
   }
 
   // 4. Only stamp setup_at when every required step landed.

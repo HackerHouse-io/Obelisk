@@ -13,6 +13,7 @@ export function Qa(): ReactElement {
   const [flows, setFlows] = useState<QaFlow[]>([]);
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [setupStep, setSetupStep] = useState<string | null>(null);
   const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +49,9 @@ export function Qa(): ReactElement {
     const unsubscribe = window.obelisk.subscribe((evt) => {
       if (evt.type === 'qa.flowChanged' && evt.repoId === repo?.id) void refreshFlows();
       if (evt.type === 'qa.doctorChanged' && evt.repoId === repo?.id) void refreshDoctor();
+      if (evt.type === 'qa.doctorProgress' && evt.repoId === repo?.id) {
+        setSetupStep(evt.status === 'started' ? evt.label : null);
+      }
       if (evt.type === 'run.transition') void refreshFlows();
     });
     return unsubscribe;
@@ -77,9 +81,11 @@ export function Qa(): ReactElement {
   async function runSetup(): Promise<void> {
     if (!repo) return;
     setBusy(true);
+    setSetupStep(null);
     setError(null);
     const res = await window.obelisk.invoke('qa:doctorSetup', { repoId: repo.id });
     setBusy(false);
+    setSetupStep(null);
     if (res.ok) setDoctor(res.value);
     else setError(res.error.message);
   }
@@ -164,7 +170,13 @@ export function Qa(): ReactElement {
         </div>
       </div>
 
-      <DoctorPanel report={doctor} onCheck={refreshDoctor} onSetup={runSetup} busy={busy} />
+      <DoctorPanel
+        report={doctor}
+        onCheck={refreshDoctor}
+        onSetup={runSetup}
+        busy={busy}
+        setupStep={setupStep}
+      />
 
       {error ? (
         <div

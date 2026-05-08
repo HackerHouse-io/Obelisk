@@ -123,6 +123,15 @@ export async function handleQaDoctorSetup(
     wdaPortBase: cfg.wdaPortBase,
     device: cfg.simulatorDevice,
     os: cfg.simulatorOs || undefined,
+    onProgress: (p) => {
+      broadcast({
+        type: 'qa.doctorProgress',
+        repoId: payload.repoId,
+        step: p.step,
+        label: p.label,
+        status: p.status,
+      });
+    },
   });
   broadcast({ type: 'qa.doctorChanged', repoId: payload.repoId });
   return { ...report, setupAt: getSetupAt(payload.repoId) };

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
-import type { Agent, AgentName, AgentPermissions, RunnerKind } from '../../shared/types';
+import type {
+  Agent,
+  AgentName,
+  AgentPermissions,
+  DoctorReport,
+  RunnerKind,
+} from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 import { SchedulePresetCard } from './agents/SchedulePresetCard';
 import { scheduleSummary } from './agents/schedule-helpers';
@@ -916,6 +922,8 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
         </div>
       ) : null}
 
+      {agent.name === 'ios-qa-pilot' ? <IosPilotSetupBanner repoId={agent.repoId} /> : null}
+
       <StatsCard agent={agent} />
       <MissionCard agent={agent} />
       <SkillsCard agent={agent} />
@@ -923,6 +931,73 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       <PermissionsCard agent={agent} onUpdate={update} />
       <RunnerModelCard agent={agent} onUpdate={update} />
       <HistoryGridCard agent={agent} />
+    </div>
+  );
+}
+
+/* ───────────────────────── iOS Pilot setup banner ───────────────────────── */
+
+function IosPilotSetupBanner({ repoId }: { repoId: string }): ReactElement | null {
+  const [report, setReport] = useState<DoctorReport | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async (): Promise<void> => {
+      const res = await window.obelisk.invoke('qa:doctor', { repoId });
+      if (!cancelled && res.ok) setReport(res.value);
+    };
+    void refresh();
+    const unsubscribe = window.obelisk.subscribe((evt) => {
+      if (evt.type === 'qa.doctorChanged' && evt.repoId === repoId) void refresh();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [repoId]);
+
+  // While the first doctor probe is in flight, render nothing — flashing a
+  // setup-required banner only to retract it a moment later is worse than
+  // a brief blank slot.
+  if (!report) return null;
+  if (report.overall === 'green') return null;
+
+  const failing = report.checks.filter((c) => c.level !== 'green');
+  const summary =
+    failing.length === 1
+      ? failing[0]!.label
+      : `${failing.length} checks need attention`;
+
+  return (
+    <div
+      className="card"
+      role="alert"
+      style={{
+        padding: 14,
+        borderColor: 'var(--warn)',
+        background: 'var(--warn-soft, var(--bg-1))',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 12,
+      }}
+    >
+      <Icon.AlertTri size={16} color="var(--warn)" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Setup required before this agent can run
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--t-2)', lineHeight: 1.5 }}>
+          iOS QA Pilot needs Appium, the xcuitest driver, and a simulator pool before it can pick
+          flows. {summary}.
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn primary sm"
+        onClick={() => useStore.getState().setRoute('qa')}
+      >
+        Open iOS Pilot setup <Icon.ArrowRight size={11} />
+      </button>
     </div>
   );
 }

@@ -349,6 +349,8 @@ export interface DoctorReport {
   setupAt: ISO | null;
 }
 
+export type DoctorSetupStep = 'install-appium' | 'install-xcuitest' | 'bootstrap-pool';
+
 /* ---------- IPC channel map ---------- */
 
 export interface IpcMap {
@@ -636,6 +638,13 @@ export type BusEvent =
   | { type: 'evidence.missing'; runId: string; missing: string[] }
   | { type: 'qa.flowChanged'; repoId: string; flowId: string }
   | { type: 'qa.doctorChanged'; repoId: string }
+  | {
+      type: 'qa.doctorProgress';
+      repoId: string;
+      step: DoctorSetupStep;
+      label: string;
+      status: 'started' | 'completed' | 'failed';
+    }
   | { type: 'previews.changed'; repoId: string }
   | { type: 'testPlans.changed'; repoId: string }
   | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }

@@ -6,9 +6,11 @@ interface Props {
   onCheck: () => Promise<void>;
   onSetup: () => Promise<void>;
   busy: boolean;
+  /** Live label of the currently-running setup step (e.g. "Installing xcuitest driver"). */
+  setupStep?: string | null;
 }
 
-export function DoctorPanel({ report, onCheck, onSetup, busy }: Props): ReactElement {
+export function DoctorPanel({ report, onCheck, onSetup, busy, setupStep }: Props): ReactElement {
   const [collapsed, setCollapsed] = useState(false);
   const overall = report?.overall ?? 'red';
   const isGreen = overall === 'green';
@@ -51,7 +53,7 @@ export function DoctorPanel({ report, onCheck, onSetup, busy }: Props): ReactEle
           </button>
           {!isGreen ? (
             <button type="button" className="btn primary sm" onClick={onSetup} disabled={busy}>
-              {busy ? 'Running setup…' : 'Run setup'}
+              {busy ? (setupStep ? `${setupStep}…` : 'Running setup…') : 'Run setup'}
             </button>
           ) : null}
           {isGreen ? (
