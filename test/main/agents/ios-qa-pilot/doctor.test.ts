@@ -48,10 +48,13 @@ function makeFakeExec(
 }
 
 const RUNTIMES_OK = JSON.stringify({
-  runtimes: [
-    { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-17-4', isAvailable: true },
-  ],
+  runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-17-4', isAvailable: true }],
 });
+
+const DRIVERS_WITH_XCUITEST = JSON.stringify({
+  xcuitest: { version: '5.0.0', automationName: 'XCUITest' },
+});
+const DRIVERS_EMPTY = '{}';
 
 describe('runDoctor', () => {
   it('returns red when prerequisites are missing', async () => {
@@ -60,7 +63,7 @@ describe('runDoctor', () => {
       'xcrun simctl list runtimes -j': new Error('no xcrun'),
       'node --version': new Error('no node'),
       'appium --version': new Error('no appium'),
-      'appium driver list --installed': new Error('no driver'),
+      'appium driver list --installed --json': new Error('no driver'),
     });
     const report = await runDoctor({
       repoId,
@@ -84,7 +87,7 @@ describe('runDoctor', () => {
       'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
       'node --version': { stdout: 'v20.0.0', stderr: '' },
       'appium --version': { stdout: '2.0.0', stderr: '' },
-      'appium driver list --installed': { stdout: 'xcuitest@5', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
     });
     const report = await runDoctor({
       repoId,
@@ -108,7 +111,7 @@ describe('runDoctor', () => {
       'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
       'node --version': { stdout: 'v20.0.0', stderr: '' },
       'appium --version': { stdout: '2.0.0', stderr: '' },
-      'appium driver list --installed': { stdout: 'xcuitest@5', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
     });
     const report = await runDoctor({
       repoId,
@@ -125,23 +128,29 @@ describe('runDoctor', () => {
   it('surfaces install failures from runSetup instead of marking setup_at', async () => {
     upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
     upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
-    // checkXcuitestDriver runs twice: once during runSetup's "is it missing?"
-    // probe, then again when runSetup re-invokes runDoctor at the end. Both
-    // returns must show xcuitest absent so the red bubbles up.
+    // listInstalledDrivers is called multiple times during runSetup
+    // (pre-install probe, post-install verify, and finally the doctor
+    // re-run). All returns must show xcuitest absent so the red bubbles up.
     const calls: string[] = [];
     const installFailure = Object.assign(new Error('exit 1'), {
       stderr: 'EACCES: permission denied while writing to /usr/local/lib',
     });
-    const fakeExec = async (cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> => {
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
       const key = `${cmd} ${args.join(' ')}`;
       calls.push(key);
       if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
       if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
       if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
       if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
-      if (key === 'appium driver list --installed') return { stdout: '(no drivers)', stderr: '' };
+      if (key === 'appium driver list --installed --json')
+        return { stdout: DRIVERS_EMPTY, stderr: '' };
       if (key === 'appium driver install xcuitest') throw installFailure;
+      if (key === 'appium driver uninstall xcuitest') return { stdout: '', stderr: '' };
       if (key === 'npm install -g appium') return { stdout: '', stderr: '' };
+      if (key === 'which appium') return { stdout: '/usr/local/bin/appium', stderr: '' };
       throw new Error(`unmocked: ${key}`);
     };
 
@@ -168,14 +177,18 @@ describe('runDoctor', () => {
     upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
     upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
     const calls: string[] = [];
-    const fakeExec = async (cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> => {
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
       const key = `${cmd} ${args.join(' ')}`;
       calls.push(key);
       if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
       if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
       if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
       if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
-      if (key === 'appium driver list --installed') return { stdout: 'xcuitest@5', stderr: '' };
+      if (key === 'appium driver list --installed --json')
+        return { stdout: DRIVERS_WITH_XCUITEST, stderr: '' };
       throw new Error(`unmocked: ${key}`);
     };
 
@@ -204,7 +217,7 @@ describe('runDoctor', () => {
       'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
       'node --version': { stdout: 'v20.0.0', stderr: '' },
       'appium --version': { stdout: '2.0.0', stderr: '' },
-      'appium driver list --installed': { stdout: '(no drivers)', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_EMPTY, stderr: '' },
     });
     const report = await runDoctor({
       repoId,
@@ -218,5 +231,184 @@ describe('runDoctor', () => {
     const driver = report.checks.find((c) => c.id === 'xcuitest')!;
     expect(driver.level).toBe('red');
     expect(driver.remediation).toContain('appium driver install xcuitest');
+  });
+
+  it('survives "already installed" error when post-check shows the driver — the actual bug', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+
+    // Simulates the production bug: `driver list --installed --json` returns
+    // `{}` initially (mirroring older Appium routing the list to stderr after
+    // a partial-state run), so the pre-check thinks xcuitest is missing.
+    // `appium driver install xcuitest` errors out with "already installed".
+    // After the install attempt the next list call now reflects truth and
+    // returns xcuitest. Setup must succeed because the post-check is the
+    // source of truth, not the install command's exit code.
+    let installAttempted = false;
+    const installError = Object.assign(new Error('exit 1'), {
+      stderr: 'A driver named "xcuitest" is already installed. Did you mean to update?',
+    });
+    const calls: string[] = [];
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      calls.push(key);
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
+      if (key === 'appium driver list --installed --json') {
+        return {
+          stdout: installAttempted ? DRIVERS_WITH_XCUITEST : DRIVERS_EMPTY,
+          stderr: '',
+        };
+      }
+      if (key === 'appium driver install xcuitest') {
+        installAttempted = true;
+        throw installError;
+      }
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('green');
+    expect(getSetupAt(repoId)).not.toBeNull();
+    expect(report.checks.find((c) => c.id === 'setup_errors')).toBeUndefined();
+    // We did try install, but did NOT escalate to uninstall+reinstall.
+    expect(calls).toContain('appium driver install xcuitest');
+    expect(calls).not.toContain('appium driver uninstall xcuitest');
+  });
+
+  it('falls back to combined-stream regex when --json output is unparseable', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const calls: string[] = [];
+    // Some Appium builds ignore --json and dump human output. The regex
+    // fallback strips ANSI codes and reads `xcuitest@5.0.0` from stderr.
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      calls.push(key);
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
+      if (key === 'appium driver list --installed --json') {
+        return {
+          stdout: '',
+          stderr: '[32m✔[39m Listing installed drivers\n- xcuitest@5.0.0 [installed (npm)]',
+        };
+      }
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('green');
+    expect(report.checks.find((c) => c.id === 'xcuitest')!.level).toBe('green');
+    // Regex picked up xcuitest from the human-readable stderr — no install needed.
+    expect(calls).not.toContain('appium driver install xcuitest');
+  });
+
+  it('runs the install when registry is genuinely empty', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    let installAttempted = false;
+    const calls: string[] = [];
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      calls.push(key);
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.0.0', stderr: '' };
+      if (key === 'appium driver list --installed --json') {
+        return {
+          stdout: installAttempted ? DRIVERS_WITH_XCUITEST : DRIVERS_EMPTY,
+          stderr: '',
+        };
+      }
+      if (key === 'appium driver install xcuitest') {
+        installAttempted = true;
+        return { stdout: 'installed xcuitest@5.0.0', stderr: '' };
+      }
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('green');
+    expect(getSetupAt(repoId)).not.toBeNull();
+    expect(calls).toContain('appium driver install xcuitest');
+  });
+
+  it('attaches Appium diagnostics to real failures', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const installError = Object.assign(new Error('exit 1'), {
+      stderr: 'EACCES: permission denied while writing to /usr/local/lib',
+    });
+    const fakeExec = async (
+      cmd: string,
+      args: string[],
+    ): Promise<{ stdout: string; stderr: string }> => {
+      const key = `${cmd} ${args.join(' ')}`;
+      if (key === 'xcode-select -p') return { stdout: '/Applications/Xcode.app', stderr: '' };
+      if (key === 'xcrun simctl list runtimes -j') return { stdout: RUNTIMES_OK, stderr: '' };
+      if (key === 'node --version') return { stdout: 'v20.0.0', stderr: '' };
+      if (key === 'appium --version') return { stdout: '2.5.0', stderr: '' };
+      if (key === 'appium driver list --installed --json')
+        return { stdout: DRIVERS_EMPTY, stderr: '' };
+      if (key === 'appium driver install xcuitest') throw installError;
+      if (key === 'which appium') return { stdout: '/opt/homebrew/bin/appium', stderr: '' };
+      throw new Error(`unmocked: ${key}`);
+    };
+
+    const report = await runSetup({
+      repoId,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    expect(report.overall).toBe('red');
+    expect(getSetupAt(repoId)).toBeNull();
+    const errs = report.checks.find((c) => c.id === 'setup_errors')!;
+    expect(errs).toBeTruthy();
+    expect(errs.detail).toContain('EACCES'); // root error preserved
+    expect(errs.detail).toContain('which appium: /opt/homebrew/bin/appium');
+    expect(errs.detail).toContain('appium --version: 2.5.0');
+    expect(errs.detail).toContain('APPIUM_HOME:');
   });
 });

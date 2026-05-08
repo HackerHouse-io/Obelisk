@@ -113,14 +113,9 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
     }
   }
 
-  // 2. xcuitest driver — only install if not already present (the CLI errors
-  // if you ask it to install a driver that's already installed). After the
-  // install reports success we re-probe `driver list --installed` because
-  // we've seen cases where the install command exits 0 but the driver still
-  // doesn't show up (partial install state from a prior aborted run, mixed
-  // appium versions on PATH, etc.). In that case we try one recovery pass
-  // (`uninstall` then `install`) before surfacing a real failure with the
-  // full command output so the user can see what went wrong.
+  // 2. xcuitest driver. tryInstallXcuitest does its own pre-check and treats
+  // post-install verification (not exit code) as the source of truth, so an
+  // "already installed" error from a stale doctor report doesn't fail setup.
   if ((await checkXcuitestDriver(run)).level !== 'green') {
     emit('install-xcuitest', 'started');
     const installed = await tryInstallXcuitest(run);
@@ -269,8 +264,8 @@ async function checkAppium(run: typeof exec): Promise<DoctorCheck> {
 
 async function checkXcuitestDriver(run: typeof exec): Promise<DoctorCheck> {
   try {
-    const { stdout } = await run('appium', ['driver', 'list', '--installed']);
-    if (!/xcuitest/i.test(stdout)) {
+    const drivers = await listInstalledDrivers(run);
+    if (!drivers.has('xcuitest')) {
       return {
         id: 'xcuitest',
         label: 'Appium xcuitest driver',
@@ -294,6 +289,41 @@ async function checkXcuitestDriver(run: typeof exec): Promise<DoctorCheck> {
       remediation: 'Install Appium first, then `appium driver install xcuitest`.',
     };
   }
+}
+
+// `appium driver list --installed` writes its human-readable list through
+// npmlog to stderr (and the routing has drifted across 2.x point releases),
+// so parsing stdout alone is fragile. `--json` emits a structured object
+// keyed by driver name to stdout — that's our authoritative answer. The
+// regex fallback is for older or non-conforming Appium builds: combine
+// stdout + stderr, strip ANSI CSI codes, match `name@version` lines.
+async function listInstalledDrivers(run: typeof exec): Promise<Set<string>> {
+  const { stdout, stderr } = await run('appium', ['driver', 'list', '--installed', '--json']);
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return new Set(Object.keys(parsed));
+    }
+  } catch {
+    // fall through to regex fallback
+  }
+  const cleaned = stripAnsi(`${stdout}\n${stderr}`);
+  const names = new Set<string>();
+  // Match `name@version` anywhere with a word boundary in front so we catch
+  // both `xcuitest@5.0.0` (line-leading) and `- xcuitest@5.0.0` (Appium's
+  // bullet-list format).
+  for (const m of cleaned.matchAll(/\b([a-z][a-z0-9_-]*)@\d/gi)) {
+    if (m[1]) names.add(m[1]);
+  }
+  return names;
+}
+
+function stripAnsi(s: string): string {
+  // CSI sequences only — covers npmlog/chalk output from Appium 2.x. The
+  // \x1b control character is the whole point of the regex, so silence
+  // the lint rule for this one expression.
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 }
 
 function checkPoolSlots(expected: number): DoctorCheck {
@@ -366,36 +396,54 @@ async function runStep(run: typeof exec, cmd: string, args: string[]): Promise<S
 }
 
 /**
- * Install the xcuitest driver and verify it actually showed up. If the
- * install command exits 0 but the driver is still missing (we've seen this
- * with partial-install state), uninstall and re-install once before giving
- * up. Returns the full install output on failure so the user can see why.
+ * Install the xcuitest driver, but treat post-install verification as the
+ * source of truth — not the install command's exit code. This collapses
+ * three real-world scenarios into one happy path:
+ *
+ *   1. Driver was actually already installed but the doctor's pre-check
+ *      misfired (e.g. older Appium routing list output to stderr). Install
+ *      errors with "already installed", post-check shows it → success.
+ *   2. Install exits 0 but the driver isn't registered yet (partial-install
+ *      state, mixed appium versions on PATH). One clean uninstall +
+ *      reinstall pass usually resolves this.
+ *   3. Install exits 0 and driver is registered. Trivial.
+ *
+ * Only when post-check still shows the driver missing do we surface an
+ * error — and we attach `which appium` / `--version` / `APPIUM_HOME` so the
+ * user can diagnose the most common cause (the doctor and the install path
+ * looking at different driver registries).
  */
 async function tryInstallXcuitest(
   run: typeof exec,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Pre-check: driver may already be present even when an earlier doctor
+  // report claimed otherwise (stale report, JSON-vs-stdout drift, etc.).
+  if (await isXcuitestPresent(run)) return { ok: true };
+
   const first = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
-  if (first.ok && (await checkXcuitestDriver(run)).level === 'green') return { ok: true };
+  if (await isXcuitestPresent(run)) return { ok: true };
 
   if (!first.ok) {
+    const diagnostics = await formatAppiumDiagnostics(run);
     return {
       ok: false,
       error: formatInstallFailure(
         '`appium driver install xcuitest` failed',
         first.error ?? 'unknown error',
         first.output,
+        diagnostics,
       ),
     };
   }
 
-  // Install reported success but the driver still isn't visible. Try a
-  // clean reinstall: `uninstall` then `install`. We ignore uninstall errors
-  // because the driver may simply not be there in any registry appium can
-  // see.
+  // Install exited 0 but the driver still isn't visible. Try a clean
+  // reinstall. We ignore uninstall errors because the driver may simply
+  // not be in any registry appium can see.
   await runStep(run, 'appium', ['driver', 'uninstall', 'xcuitest']);
   const second = await runStep(run, 'appium', ['driver', 'install', 'xcuitest']);
-  if (second.ok && (await checkXcuitestDriver(run)).level === 'green') return { ok: true };
+  if (await isXcuitestPresent(run)) return { ok: true };
 
+  const diagnostics = await formatAppiumDiagnostics(run);
   return {
     ok: false,
     error: formatInstallFailure(
@@ -404,8 +452,39 @@ async function tryInstallXcuitest(
         : '`appium driver install xcuitest` failed on retry',
       second.error ?? 'install reported success but driver not registered',
       second.output || first.output,
+      diagnostics,
     ),
   };
+}
+
+async function isXcuitestPresent(run: typeof exec): Promise<boolean> {
+  try {
+    return (await listInstalledDrivers(run)).has('xcuitest');
+  } catch {
+    return false;
+  }
+}
+
+async function formatAppiumDiagnostics(run: typeof exec): Promise<string> {
+  const [whichAppium, appiumVersion] = await Promise.all([
+    captureOutput(run, 'which', ['appium']),
+    captureOutput(run, 'appium', ['--version']),
+  ]);
+  const home = process.env.APPIUM_HOME ?? '<unset>';
+  return [
+    `which appium: ${whichAppium || '<not found>'}`,
+    `appium --version: ${appiumVersion || '<unknown>'}`,
+    `APPIUM_HOME: ${home}`,
+  ].join(' | ');
+}
+
+async function captureOutput(run: typeof exec, cmd: string, args: string[]): Promise<string> {
+  try {
+    const { stdout } = await run(cmd, args);
+    return stdout.trim();
+  } catch {
+    return '';
+  }
 }
 
 function combineOutput(stdout: string, stderr: string): string {
@@ -415,9 +494,15 @@ function combineOutput(stdout: string, stderr: string): string {
     .join('\n');
 }
 
-function formatInstallFailure(headline: string, error: string, output: string): string {
+function formatInstallFailure(
+  headline: string,
+  error: string,
+  output: string,
+  diagnostics?: string,
+): string {
   const tail = output ? ` — output: ${truncate(output, 400)}` : '';
-  return `${headline}: ${error}${tail}`;
+  const diag = diagnostics ? ` — diagnostics: ${diagnostics}` : '';
+  return `${headline}: ${error}${tail}${diag}`;
 }
 
 function errorMessage(e: unknown): string {
