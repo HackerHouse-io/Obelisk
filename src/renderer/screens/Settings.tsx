@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
 import { useStore } from '../state/store';
+import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
 import type {
   AttributionMode,
   RunnerKind,
@@ -285,19 +286,21 @@ function RunnerCard({
 
       <div className="settings-runner-models">
         <div className="settings-card-sub" style={{ marginTop: 12 }}>
-          Default model per runner. Leave blank to let the CLI use its account default — the safe
-          choice if you sign in with a ChatGPT account or aren&rsquo;t sure which models you have
-          access to. Model names rotate often; we never hardcode one for you.
+          Default model per runner. Leave on <span className="mono">Use CLI default</span> to let
+          the CLI fall back to its account default — the safe choice if you sign in with a ChatGPT
+          account or aren&rsquo;t sure which models you have access to. The list is read from your
+          CLI config and the live <span className="mono">/v1/models</span> endpoint, so it stays in
+          sync as model names rotate.
         </div>
-        <ModelInput
+        <ModelSelect
           label="Claude model"
-          placeholder="e.g. claude-sonnet-4-6 (blank = CLI default)"
+          runner="claude"
           value={claudeModel}
           onCommit={onChangeClaudeModel}
         />
-        <ModelInput
+        <ModelSelect
           label="Codex model"
-          placeholder="e.g. gpt-5-codex (blank = CLI default)"
+          runner="codex"
           value={codexModel}
           onCommit={onChangeCodexModel}
         />
@@ -306,37 +309,72 @@ function RunnerCard({
   );
 }
 
-function ModelInput({
+function ModelSelect({
   label,
-  placeholder,
+  runner,
   value,
   onCommit,
 }: {
   label: string;
-  placeholder: string;
+  runner: RunnerKind;
   value: string;
   onCommit: (next: string) => void;
 }): ReactElement {
-  const [draft, setDraft] = useState(value);
+  // Mirrors the Agents → Runner & model dropdown: `MODEL_OPTIONS` is the
+  // first-paint fallback, replaced once `models:list` resolves with the live
+  // CLI-config + Anthropic/OpenAI /v1/models list.
+  const [models, setModels] = useState<ModelOption[]>(MODEL_OPTIONS[runner]);
+  const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+
   useEffect(() => {
-    setDraft(value);
-  }, [value]);
+    let alive = true;
+    void fetchModelsForRunner(runner).then((res) => {
+      if (!alive) return;
+      setModels(res.models);
+      setDefaultModelId(res.defaultModelId);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [runner, refreshTick]);
+
+  // If the user previously typed a model id that's no longer in the list,
+  // surface it as a sticky option so we don't silently drop their setting.
+  const stickyValue = value && !models.some((m) => m.id === value) ? value : null;
+
   return (
     <label className="settings-model-input">
       <span className="settings-model-label">{label}</span>
-      <input
-        type="text"
-        className="file-issue-input"
-        value={draft}
-        placeholder={placeholder}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          if (draft.trim() !== value.trim()) onCommit(draft.trim());
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        }}
-      />
+      <div className="row gap-2" style={{ alignItems: 'stretch', flex: 1 }}>
+        <select
+          className="input"
+          value={value}
+          onChange={(e) => onCommit(e.target.value)}
+          style={{ flex: 1 }}
+        >
+          <option value="">
+            Use CLI default{defaultModelId ? ` (${defaultModelId})` : ''}
+          </option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label} · {tierLabel(m.tier)}
+            </option>
+          ))}
+          {stickyValue ? (
+            <option value={stickyValue}>{stickyValue} · custom</option>
+          ) : null}
+        </select>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => setRefreshTick((t) => t + 1)}
+          title="Refresh model list (re-reads CLI config + live API)"
+          aria-label="Refresh model list"
+        >
+          ↻
+        </button>
+      </div>
     </label>
   );
 }
