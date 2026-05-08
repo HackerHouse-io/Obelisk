@@ -28,6 +28,7 @@ import type {
   TestPlanSummary,
 } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
+import { countByState, derivePerCaseState } from './mission-control-helpers';
 
 /**
  * Mission Control: 7-stage pipeline + 460px right drawer with 4 tabs.
@@ -1125,70 +1126,6 @@ function groupBlocks(plan: TestPlan): PlanGroup[] {
     }
   }
   return groups;
-}
-
-function derivePerCaseState(opts: {
-  plan: TestPlan;
-  auditLog: AuditLine[];
-  findings: PreviewedFinding[];
-  runState: RunState;
-}): Map<string, CaseProgressState> {
-  const map = new Map<string, CaseProgressState>();
-  // Walk audit_log in order so the latest event for each case wins.
-  for (const line of opts.auditLog) {
-    if (line.kind !== 'case_progress') continue;
-    const payload = line.payload as { caseId?: unknown; status?: unknown };
-    if (typeof payload.caseId === 'string' && typeof payload.status === 'string') {
-      map.set(payload.caseId, payload.status as CaseProgressState);
-    }
-  }
-  // Findings tagged with a case_id flip that case to failed (regardless of
-  // whether the agent emitted a CASE_FAIL marker — this catches agents that
-  // file findings without the streaming markers).
-  const failedByFinding = new Set<string>();
-  for (const f of opts.findings) {
-    const m = /case[_-]?id\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/i.exec(f.body);
-    if (m) failedByFinding.add(m[1]!);
-  }
-  for (const block of opts.plan.blocks) {
-    if (block.kind !== 'case') continue;
-    if (failedByFinding.has(block.id)) {
-      map.set(block.id, 'failed');
-    }
-  }
-  // Default unknown cases based on terminal state.
-  const isCancelled = opts.runState === 'cancelled';
-  const isDone = opts.runState === 'done';
-  const isFailed = opts.runState === 'failed';
-  for (const block of opts.plan.blocks) {
-    if (block.kind !== 'case') continue;
-    if (map.has(block.id)) continue;
-    if (isCancelled) {
-      map.set(block.id, 'skipped');
-    } else if (isDone) {
-      // Run finished without an explicit marker — treat as passed (the
-      // agent finished without flagging this case).
-      map.set(block.id, 'passed');
-    } else if (isFailed) {
-      map.set(block.id, 'skipped');
-    } else {
-      map.set(block.id, 'queued');
-    }
-  }
-  return map;
-}
-
-function countByState(map: Map<string, CaseProgressState>): Record<CaseProgressState, number> {
-  const counts: Record<CaseProgressState, number> = {
-    queued: 0,
-    running: 0,
-    passed: 0,
-    failed: 0,
-    inconclusive: 0,
-    skipped: 0,
-  };
-  for (const s of map.values()) counts[s] += 1;
-  return counts;
 }
 
 function parsePlanIdFromTaskRef(taskRef: string | null): string | null {
