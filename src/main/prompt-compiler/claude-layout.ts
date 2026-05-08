@@ -126,5 +126,26 @@ function renderClaudeSettings(input: CompileInput): string {
 }
 
 function renderRunnerArgs(_input: CompileInput): string[] {
-  return ['-p', '--system-prompt-file', '.claude/SYSTEM.md', '--settings', '.claude/settings.json'];
+  // `-p` runs claude non-interactively; the user message is piped on stdin.
+  //
+  // `--output-format stream-json --include-partial-messages` gives us live
+  // text deltas instead of the default text-mode behaviour, which buffers
+  // the entire assistant turn before printing. Without this, CASE_* markers
+  // never reach Mission Control's Plan tab until the whole run completes —
+  // the user reported "all 45 cases stuck in Queued" because of that.
+  // The runner (`src/main/runners/claude-code.ts`) parses the JSONL events
+  // back into plain text before handing them to CaseProgressTracker and
+  // BEGIN_FINDINGS parsing. `--verbose` is required by the CLI when
+  // stream-json output is used with `-p`.
+  return [
+    '-p',
+    '--system-prompt-file',
+    '.claude/SYSTEM.md',
+    '--settings',
+    '.claude/settings.json',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--include-partial-messages',
+  ];
 }

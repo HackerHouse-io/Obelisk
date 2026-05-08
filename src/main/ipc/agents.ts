@@ -55,19 +55,52 @@ export async function handleAgentsRun(
     throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
   }
   await ensureRunnerAvailable();
-  const result = await runAgent({
-    repoId: agent.repoId,
-    agentName: agent.name,
-    agentId: agent.id,
-    trigger: 'manual',
-    taskId: payload.taskId,
-    ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
-    ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+
+  // runAgent drives the entire run synchronously — selectTask, createRun,
+  // CLI spawn, publish — and that takes anywhere from seconds to minutes.
+  // The IPC must NOT wait for that whole journey, or the renderer's "Run
+  // now" / "Run QA Hunter" spinners stay spinning until the run completes.
+  // Resolve as soon as the run row exists (orchestrator fires `onStarted`
+  // right after createRun) and let the rest happen in the background.
+  return new Promise<IpcMap['agents:run']['res']>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    runAgent({
+      repoId: agent.repoId,
+      agentName: agent.name,
+      agentId: agent.id,
+      trigger: 'manual',
+      taskId: payload.taskId,
+      ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
+      ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+      onStarted: (runId) => settle(() => resolve({ runId })),
+    }).then(
+      (result) => {
+        // selectTask returned null (or some other path that completed
+        // without ever firing onStarted, e.g. a same-agent-already-running
+        // error). Surface as NOT_FOUND so the renderer can show a useful
+        // message instead of a stuck spinner.
+        settle(() =>
+          result.runId
+            ? resolve({ runId: result.runId })
+            : reject(
+                new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.'),
+              ),
+        );
+      },
+      (err) => {
+        // Pre-onStarted failure (e.g. createRun threw on a duplicate
+        // task_ref). Reject so the renderer surfaces an error banner.
+        // Errors after onStarted are logged by the orchestrator's own
+        // failure-classification path and do not affect this promise.
+        settle(() => reject(err));
+      },
+    );
   });
-  if (!result.runId) {
-    throw new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.');
-  }
-  return { runId: result.runId };
 }
 
 async function ensureRunnerAvailable(): Promise<RunnerKind> {

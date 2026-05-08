@@ -102,22 +102,13 @@ export function MissionControl(): ReactElement {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [planSummaries, setPlanSummaries] = useState<TestPlanSummary[]>([]);
-  const [drawerOpen, setDrawerOpen] = useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem('mc.drawerOpen');
-      return v === '1';
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('mc.drawerOpen', drawerOpen ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [drawerOpen]);
+  // Drawer always starts closed when the user navigates into Mission Control.
+  // The previous build persisted this in localStorage and the drawer would
+  // re-open on every screen entry once it had been opened — annoying when
+  // the user just wants to scan the columns. The drawer still opens
+  // automatically when a run is freshly started (obelisk:run-started) or
+  // explicitly focused (obelisk:focus-run); see the effect below.
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
 
   // Initial fetch.
   useEffect(() => {
@@ -926,7 +917,7 @@ function RunDrawer({
         {tab === 'findings' && (
           <FindingsTab findings={findings} onOpen={setModalFinding} onDismiss={dismissFinding} />
         )}
-        {tab === 'audit' && <AuditTab lines={details?.auditLog ?? []} />}
+        {tab === 'audit' && <AuditTab lines={details?.auditLog ?? []} runState={run.state} />}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
         {tab === 'reasoning' && <ReasoningTab lines={details?.auditLog ?? []} />}
         {tab === 'files' && <FilesTab evidence={details?.evidence ?? []} />}
@@ -1225,18 +1216,50 @@ function FindingsTab({
   );
 }
 
-function AuditTab({ lines }: { lines: AuditLine[] }): ReactElement {
-  if (lines.length === 0) return <Empty>No audit entries yet.</Empty>;
+function AuditTab({ lines, runState }: { lines: AuditLine[]; runState: RunState }): ReactElement {
+  const isLive = runState === 'queued' || runState === 'running' || runState === 'publishing';
+  // Newest-first ordering. New events land at row 1 — no scrolling needed
+  // to see "what just happened", which is the question users open this tab
+  // to answer. Chronological order pushed the latest line off-screen as a
+  // run streamed and required auto-scroll to compensate; reverse-chrono is
+  // also the right default for terminal runs because the result/error/
+  // final state is the most-relevant line and lands on top.
+  const ordered = useMemo(() => [...lines].reverse(), [lines]);
+
   return (
-    <div className="col gap-1">
-      {lines.map((l) => (
-        <div key={l.id} className="mc-audit-row">
-          <span className="mc-audit-time">{shortTime(l.at)}</span>
-          <span className="mc-audit-kind">{l.kind}</span>
-          <div className="mc-audit-msg">{describePayload(l.payload)}</div>
+    <div className="mc-audit-wrap">
+      <div className="mc-audit-header">
+        {isLive ? <LivePill /> : <span className="mc-audit-status-idle">Settled</span>}
+        <span className="mc-audit-count">
+          {lines.length} {lines.length === 1 ? 'entry' : 'entries'}
+        </span>
+        <span className="mc-audit-order" title="Most recent at the top">
+          newest first
+        </span>
+      </div>
+      {lines.length === 0 ? (
+        <Empty>{isLive ? 'Waiting for the runner’s first output…' : 'No audit entries yet.'}</Empty>
+      ) : (
+        <div className="col gap-1">
+          {ordered.map((l) => (
+            <div key={l.id} className="mc-audit-row">
+              <span className="mc-audit-time">{shortTime(l.at)}</span>
+              <span className="mc-audit-kind">{l.kind}</span>
+              <div className="mc-audit-msg">{describePayload(l.payload)}</div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
+  );
+}
+
+function LivePill(): ReactElement {
+  return (
+    <span className="mc-audit-live" title="Streaming — new entries appear as they arrive">
+      <span className="mc-audit-live-dot" aria-hidden="true" />
+      Live
+    </span>
   );
 }
 

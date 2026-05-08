@@ -63,6 +63,14 @@ export interface RunAgentInput {
    * Inject a runner factory for tests (defaults to real Claude/Codex CLIs).
    */
   runnerFactory?: (kind: 'claude' | 'codex') => CodingAgentRunner;
+  /**
+   * Fires once, immediately after the run row is created and the orchestrator
+   * has committed to executing this run. Used by the `agents:run` IPC handler
+   * to resolve as soon as we have a runId — without waiting for the (possibly
+   * minutes-long) CLI invocation. Skipped when selectTask returns null (no
+   * run row is created in that case).
+   */
+  onStarted?: (runId: string) => void;
 }
 
 export interface RunAgentOutput {
@@ -175,6 +183,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     payload: { from: 'queued', to: 'running', task: selected.task.ref },
   });
   transitionRun(run.id, 'running');
+
+  // Tell callers (the `agents:run` IPC handler) that the run is committed.
+  // This unblocks the renderer's "Run now" button without making it wait
+  // for the entire CLI invocation to complete (which can take minutes).
+  // Errors thrown by the listener are swallowed — they're not allowed to
+  // sabotage a run that's already past createRun.
+  if (input.onStarted) {
+    try {
+      input.onStarted(run.id);
+    } catch {
+      // ignore
+    }
+  }
 
   // Register the run in the active-runs map so `agents:cancel` can abort
   // the spawn. The AbortController flows through to the CLI runner via

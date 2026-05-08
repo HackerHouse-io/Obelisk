@@ -423,6 +423,18 @@ export interface IpcMap {
     res: { source: 'builtin' | 'override'; markdown: string; skills: string[] };
   };
 
+  // Runner — non-interactive sign-in probe driving the auth banner's
+  // "Verify sign-in" button. Lets the user clear a stale signed-out state
+  // without triggering a real agent run.
+  'runner:probeAuth': {
+    req: { runner: RunnerKind };
+    res: {
+      runner: RunnerKind;
+      status: 'signed_in' | 'signed_out' | 'cli_missing' | 'unknown';
+      detail: string;
+    };
+  };
+
   // Models — dynamic discovery (CLI config + live API + curated fallback).
   // Replaces the renderer's hardcoded MODEL_OPTIONS for non-stale dropdowns.
   'models:list': {

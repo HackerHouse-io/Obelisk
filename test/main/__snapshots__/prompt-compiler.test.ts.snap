@@ -103,6 +103,10 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
   ],
   "systemPrompt": "You are bug-fixer.
 
@@ -588,6 +592,10 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
   ],
   "systemPrompt": "You are feature-builder.
 
@@ -1067,6 +1075,10 @@ Find the root cause, not a symptom that quiets the alarm.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
   ],
   "systemPrompt": "You are manual-qa.
 
@@ -1385,6 +1397,10 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
   ],
   "systemPrompt": "You are pr-reviewer.
 
@@ -1743,6 +1759,10 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
   ],
   "systemPrompt": "You are qa-hunter.
 

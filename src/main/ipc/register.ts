@@ -66,6 +66,7 @@ import {
 } from './qa';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
 import { handleModelsList } from './models';
+import { handleRunnerProbeAuth } from './runner';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -171,6 +172,9 @@ export function registerIpcHandlers(): void {
 
   // Models (dynamic discovery — CLI configs + live API + curated fallback)
   register('models:list', handleModelsList);
+
+  // Runner sign-in probe (drives the auth banner's "Verify sign-in" button)
+  register('runner:probeAuth', handleRunnerProbeAuth);
 
   // Bind ipcMain.handle for every registered channel with a single envelope wrapper.
   for (const [channel, handler] of handlers) {

@@ -4,7 +4,8 @@ import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
 import { looksLikeAuthRequired } from './detect-auth';
-import type { CodingAgentRunner, RunOpts, RunResult } from './types';
+import { ClaudeStreamParser } from './claude-stream-json';
+import type { CodingAgentRunner, RunOpts, RunResult, AuditLine } from './types';
 
 export class ClaudeCodeRunner implements CodingAgentRunner {
   readonly kind = 'claude' as const;
@@ -31,6 +32,28 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
       payload: { stage: 'spawning', runner: 'claude' },
     });
 
+    // Claude is invoked with `--output-format stream-json`, so each stdout
+    // line is a JSON event, not raw text. Wrap onAudit so the rest of the
+    // orchestrator (CaseProgressTracker, audit log, BEGIN_FINDINGS parser)
+    // receives the natural assistant text instead of a wall of JSONL.
+    const parser = new ClaudeStreamParser({
+      onText: (line) => {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: line });
+      },
+      onMeta: (summary) => {
+        // Single-line audit row so users can see the run is alive even
+        // before the model has produced its first text delta.
+        opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: summary });
+      },
+    });
+    const wrappedOnAudit = (line: AuditLine): void => {
+      if (line.kind !== 'stdout' || typeof line.payload !== 'string') {
+        opts.onAudit(line);
+        return;
+      }
+      parser.feedLine(line.payload);
+    };
+
     let result;
     try {
       result = await spawnAgentCli({
@@ -40,12 +63,13 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
         env: runnerEnv(),
         stdin: opts.prompt.userMessage,
         timeoutMs: opts.timeoutMs,
-        onAudit: opts.onAudit,
+        onAudit: wrappedOnAudit,
         abort,
       });
     } catch (e) {
       return { ok: false, reason: 'crash', detail: (e as Error).message };
     }
+    parser.flush();
 
     if (result.timedOut) {
       return { ok: false, reason: 'timeout', detail: `> ${opts.timeoutMs}ms` };
@@ -53,9 +77,9 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
     if (result.exitCode !== 0) {
       const stderr = result.stderr.trim();
       const stdoutTail = result.stdout.trim().split('\n').slice(-3).join(' | ').slice(-300);
-      // Claude reports auth state on stdout (e.g. "Not logged in · Please run /login").
-      // Classify those as auth_required so the orchestrator can pause the
-      // agent and surface a sign-in CTA instead of a generic INTERNAL.
+      // Auth failures fire BEFORE any model interaction, so the message
+      // lands on stdout/stderr as plain text — not wrapped in JSON. Detection
+      // still works against the raw spawn result.
       if (looksLikeAuthRequired(result.stdout, stderr)) {
         return {
           ok: false,
@@ -71,7 +95,10 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
       return { ok: false, reason: 'non_zero_exit', detail };
     }
 
-    return collectPatch(opts, result.stdout);
+    // Success path: hand the parsed assistant text to collectPatch as
+    // reasoning. BEGIN_FINDINGS / suggested_test / etc. live in this text;
+    // raw JSONL would defeat the parser.
+    return collectPatch(opts, parser.reasoning());
   }
 }
 

@@ -50,15 +50,26 @@ export function RunnerAuthBanner(): ReactElement | null {
   const visibleRunners = signedOutRunners.filter((r) => !dismissed.has(r));
   if (visibleRunners.length === 0) return null;
 
+  function dismiss(runner: RunnerKind): void {
+    setDismissed((prev) => {
+      if (prev.has(runner)) return prev;
+      return new Set([...prev, runner]);
+    });
+  }
+
   return (
     <div className="runner-auth-banner-stack">
       {visibleRunners.map((runner) => (
         <div key={runner} className="runner-auth-banner-wrapper">
-          <RunnerLoginActionCard runner={runner} variant="banner" />
+          <RunnerLoginActionCard
+            runner={runner}
+            variant="banner"
+            onSignedIn={() => dismiss(runner)}
+          />
           <button
             type="button"
             className="btn ghost icon runner-auth-banner-dismiss"
-            onClick={() => setDismissed((prev) => new Set([...prev, runner]))}
+            onClick={() => dismiss(runner)}
             aria-label={`Dismiss ${runner} sign-in banner`}
             title="Dismiss until the next failed run"
           >

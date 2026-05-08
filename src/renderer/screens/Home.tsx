@@ -367,21 +367,14 @@ export function Home(): ReactElement {
               return (
                 <div key={a.id} className="home-table-row">
                   <span className="dot" style={{ background: status.dotColor }} title={tooltip} />
-                  <div>
+                  <div className="home-table-row-body">
                     <div style={{ fontWeight: 600 }}>{a.displayName}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {labelForAgent(a.name)} · {a.runnerOverride ?? repo.defaultRunner} ·{' '}
                       {scheduleSummary(a)}
                     </div>
                   </div>
-                  <span
-                    className={`pill ${status.tone}`}
-                    title={tooltip}
-                    style={{ cursor: 'help' }}
-                  >
-                    {status.label}
-                  </span>
-                  <div className="row gap-2" style={{ alignItems: 'center' }}>
+                  <div className="home-table-row-actions">
                     {liveRunByAgentId.get(a.id) ? (
                       <StopRunButton
                         agent={a}
@@ -398,6 +391,13 @@ export function Home(): ReactElement {
                     )}
                     <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {a.timeoutMs / 1000 / 60}m timeout
+                    </span>
+                    <span
+                      className={`pill ${status.tone}`}
+                      title={tooltip}
+                      style={{ cursor: 'help' }}
+                    >
+                      {status.label}
                     </span>
                   </div>
                 </div>
@@ -438,29 +438,31 @@ export function Home(): ReactElement {
               return (
                 <div key={r.id} className="home-table-row">
                   <Icon.Pipeline size={14} color="var(--t-2)" />
-                  <div>
+                  <div className="home-table-row-body">
                     <div style={{ fontWeight: 600 }}>{r.taskRef ?? '(no task ref)'}</div>
                     <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
                       {labelForAgent(r.agentName)} · {r.runnerUsed} · {r.outputSummary ?? '—'}
                     </div>
                   </div>
-                  <span className={`pill ${stateTone(r.state)}`}>{r.state}</span>
-                  <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                    {r.startedAt ? short(r.startedAt) : ''}
-                  </span>
-                  {canCancel ? (
-                    <button
-                      type="button"
-                      className="btn ghost sm"
-                      title="Stop this run"
-                      onClick={async () => {
-                        const res = await window.obelisk.invoke('agents:cancel', { runId: r.id });
-                        if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
-                      }}
-                    >
-                      <Icon.Pause size={11} /> Stop
-                    </button>
-                  ) : null}
+                  <div className="home-table-row-actions">
+                    <span className={`pill ${stateTone(r.state)}`}>{r.state}</span>
+                    <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                      {r.startedAt ? short(r.startedAt) : ''}
+                    </span>
+                    {canCancel ? (
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        title="Stop this run"
+                        onClick={async () => {
+                          const res = await window.obelisk.invoke('agents:cancel', { runId: r.id });
+                          if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+                        }}
+                      >
+                        <Icon.Pause size={11} /> Stop
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
@@ -482,21 +484,23 @@ export function Home(): ReactElement {
             {backlog.slice(0, 6).map((b) => (
               <div key={b.id} className="home-table-row">
                 <Icon.Backlog size={14} color="var(--t-2)" />
-                <div>
+                <div className="home-table-row-body">
                   <div style={{ fontWeight: 600 }}>{b.title}</div>
                   <div style={{ fontSize: 11, color: 'var(--t-2)' }}>
                     {b.kind} · {b.priorityLabel ?? 'no priority'} ·{' '}
                     {b.githubIssue ? `#${b.githubIssue}` : 'manual'}
                   </div>
                 </div>
-                <span
-                  className={`pill ${b.priorityLabel === 'P0' ? 'bad' : b.priorityLabel === 'P1' ? 'warn' : ''}`}
-                >
-                  {b.priorityLabel ?? '—'}
-                </span>
-                <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
-                  {b.inProgressRun ? 'in flight' : 'queued'}
-                </span>
+                <div className="home-table-row-actions">
+                  <span
+                    className={`pill ${b.priorityLabel === 'P0' ? 'bad' : b.priorityLabel === 'P1' ? 'warn' : ''}`}
+                  >
+                    {b.priorityLabel ?? '—'}
+                  </span>
+                  <span style={{ fontSize: 11, color: 'var(--t-2)' }}>
+                    {b.inProgressRun ? 'in flight' : 'queued'}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
