@@ -36,6 +36,8 @@ export const ERROR_CODES = [
   'IOS_QA_NOT_CONFIGURED',
   'IOS_QA_SETUP_REQUIRED',
   'IOS_QA_NO_FLOWS',
+  'IOS_QA_NOTHING_CLAIMABLE',
+  'IOS_QA_POOL_FULL',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

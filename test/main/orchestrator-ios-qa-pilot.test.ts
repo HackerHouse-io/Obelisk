@@ -242,7 +242,7 @@ END_IOS_QA_FINDINGS
     expect(target.findingCount).toBe(0);
   });
 
-  it('returns no run when sim pool is exhausted', async () => {
+  it('throws IOS_QA_POOL_FULL when every sim slot is already claimed', async () => {
     // Manually claim each slot with a unique id so the UNIQUE index is happy.
     const db = getDb();
     const now = new Date().toISOString();
@@ -250,12 +250,56 @@ END_IOS_QA_FINDINGS
       `UPDATE qa_ios_sim_slots SET claimed_run_id = 'occupied-' || slot_index, claimed_at = ?`,
     ).run(now);
 
-    const result = await runAgent({
-      repoId,
-      agentName: 'ios-qa-pilot',
-      trigger: 'manual',
-      runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+    await expect(
+      runAgent({
+        repoId,
+        agentName: 'ios-qa-pilot',
+        trigger: 'manual',
+        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'IOS_QA_POOL_FULL',
+      message: expect.stringContaining('simulator pool'),
     });
-    expect(result.runId).toBe('');
+  });
+
+  it('throws IOS_QA_NOTHING_CLAIMABLE when every flow has already passed in the current cycle', async () => {
+    // Pre-mark all flows as passed by running selectTask once + recording
+    // a passed outcome for the claimed flow. Easiest: directly UPDATE the
+    // qa_ios_flows table to status='passed'.
+    const { computeFlowId } = await import('../../src/main/agents/ios-qa-pilot/flows');
+    // Sync the flows registry by calling listFlows after a successful
+    // selectTask path — easier to directly insert via UPDATE on the
+    // flow rows once syncFlowsToRegistry has populated them.
+    // We bootstrap the flow rows by running a single selectTask path
+    // that completes successfully, then mark all subsequent flows passed.
+    const db = getDb();
+    // Force-sync by referencing the same code path the handler uses.
+    const { iosQaPilotHandler } = await import('../../src/main/agents/ios-qa-pilot/index');
+    const { getRepo } = await import('../../src/main/db/repos');
+    const repo = getRepo(repoId)!;
+    // selectTask claims one flow + a slot; release them then mark all
+    // flows passed so the next run finds nothing claimable.
+    const selected = await iosQaPilotHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+    });
+    expect(selected).not.toBeNull();
+    // Release everything we just claimed.
+    db.prepare(`UPDATE qa_ios_flows SET claimed_run_id = NULL, claimed_at = NULL, status = 'passed'`).run();
+    db.prepare(`UPDATE qa_ios_sim_slots SET claimed_run_id = NULL, claimed_at = NULL`).run();
+    void computeFlowId; // prevent unused-import warning
+
+    await expect(
+      runAgent({
+        repoId,
+        agentName: 'ios-qa-pilot',
+        trigger: 'manual',
+        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: 'IOS_QA_NOTHING_CLAIMABLE',
+      hint: expect.stringContaining('Reset'),
+    });
   });
 });

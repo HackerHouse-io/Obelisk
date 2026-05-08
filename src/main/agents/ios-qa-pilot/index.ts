@@ -92,13 +92,28 @@ export const iosQaPilotHandler: AgentHandler = {
     const tempRunId = ulid(); // claim before the orchestrator's run row exists
 
     const flow = claimNextFlow(input.repo.id, tempRunId, preferredFlowId);
-    if (!flow) return null;
+    if (!flow) {
+      // claimNextFlow returns null when every flow is either already
+      // claimed by another live run or has status 'passed' in the current
+      // cycle. Surface the actionable difference instead of a generic
+      // "nothing to do".
+      throw new ObeliskError(
+        'IOS_QA_NOTHING_CLAIMABLE',
+        'No iOS QA flows are claimable right now — they may all be passing in the current cycle, or another iOS QA Pilot instance has them claimed.',
+        'Use "Reset iOS QA flows" on the iOS QA Pilot screen to re-test, or wait for in-flight runs to finish.',
+      );
+    }
 
     const slot = allocateSimSlot(tempRunId);
     if (!slot) {
-      // No simulator slot free — release the flow and bail; user retries when a slot frees.
+      // No simulator slot free. Release the flow we just claimed so it
+      // doesn't sit locked while the user waits for a slot to free up.
       releaseFlowClaim(flow.flowId, tempRunId);
-      return null;
+      throw new ObeliskError(
+        'IOS_QA_POOL_FULL',
+        'iOS simulator pool is fully claimed. Wait for a current run to finish, or raise `max_parallel` in `qa/ios.yml`.',
+        'Each in-flight iOS QA Pilot run holds one slot; the pool size = max_parallel.',
+      );
     }
 
     const ts = new Date().toISOString();

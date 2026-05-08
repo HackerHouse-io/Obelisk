@@ -441,6 +441,7 @@ function SidebarRow({
         type="button"
         className={`agents-list-item${selected ? ' selected' : ''}`}
         onClick={onSelect}
+        data-testid={`agent-list-item-${agent.name}`}
         style={{ paddingRight: 70 }}
       >
         <div className="agents-list-item-icon">
@@ -880,6 +881,7 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
             onClick={runNow}
             disabled={runStarting}
             aria-busy={runStarting}
+            data-testid={`agent-run-now-${agent.name}`}
             title={runStarting ? `Starting ${agent.displayName}…` : `Run ${agent.displayName} now`}
           >
             {runStarting ? (
@@ -900,7 +902,11 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       </div>
 
       {runError ? (
-        <div className="plan-editor-banner plan-editor-banner-error" role="alert">
+        <div
+          className="plan-editor-banner plan-editor-banner-error"
+          role="alert"
+          data-testid="agent-run-error"
+        >
           <Icon.AlertTri size={12} />
           <div>
             <div className="plan-editor-banner-title">Could not start the run</div>

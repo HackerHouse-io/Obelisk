@@ -31,6 +31,17 @@ export interface SeedPreview {
   repoId: string;
 }
 
+export interface SeedIosQaPilotInput {
+  /** Flow files to write under `<repo>/qa/ios-flows/`. */
+  flows: { fileName: string; title: string; priority?: 'P0' | 'P1' | 'P2'; body?: string }[];
+  /** Set `qa_ios_repo_state.setup_at` to a fresh ISO timestamp. */
+  setupDone?: boolean;
+  /** Number of pre-seeded sim slots in `qa_ios_sim_slots`. */
+  simSlots?: number;
+  /** Override the contents of `qa/ios.yml`. Defaults to a sane fixture. */
+  iosYml?: string;
+}
+
 /**
  * Pre-populate a SQLite DB at `<userDataDir>/obelisk.sqlite` with a repo,
  * one or more agents, and (optionally) a previewed finding.
@@ -51,6 +62,7 @@ export function seed(opts: {
     labels: string[];
   }[];
   testPlans?: SeedTestPlanInput[];
+  iosQaPilot?: SeedIosQaPilotInput;
 }): { repo: SeedRepo; agents: SeedAgent[]; previews: SeedPreview[] } {
   mkdirSync(opts.userDataDir, { recursive: true });
   const dbPath = join(opts.userDataDir, 'obelisk.sqlite');
@@ -112,6 +124,14 @@ export function seed(opts: {
     previews.push({ id: Number(info.lastInsertRowid), runId, repoId });
   }
 
+  // Optionally seed iOS QA Pilot fixtures: qa/ios.yml + flows on disk,
+  // plus setup_at + simulator slots in the DB. This skips the real
+  // Doctor (which requires Xcode + Appium) so tests can exercise the
+  // selectTask/runAgent path against a healthy iOS QA Pilot baseline.
+  if (opts.iosQaPilot) {
+    seedIosQaPilot(opts.repoLocalPath, repoId, opts.iosQaPilot, db);
+  }
+
   db.close();
 
   // Optionally seed test plan markdown files into the fixture repo so the
@@ -125,6 +145,57 @@ export function seed(opts: {
     agents,
     previews,
   };
+}
+
+function seedIosQaPilot(
+  repoLocalPath: string,
+  repoId: string,
+  cfg: SeedIosQaPilotInput,
+  db: DatabaseSync,
+): void {
+  const fs = require('node:fs') as typeof import('node:fs');
+  const flowsDir = join(repoLocalPath, 'qa', 'ios-flows');
+  fs.mkdirSync(flowsDir, { recursive: true });
+
+  const yml =
+    cfg.iosYml ??
+    [
+      'app_path: build/Debug-iphonesimulator/Fixture.app',
+      'bundle_id: com.example.fixture',
+      'simulator_device: iPhone 15',
+      'max_parallel: 2',
+      'appium_port_base: 4723',
+      'wda_port_base: 8100',
+      'flows_dir: qa/ios-flows',
+      '',
+    ].join('\n');
+  fs.mkdirSync(join(repoLocalPath, 'qa'), { recursive: true });
+  fs.writeFileSync(join(repoLocalPath, 'qa', 'ios.yml'), yml, 'utf8');
+
+  for (const f of cfg.flows) {
+    const body = f.body ?? '# Steps\n1. Tap something.\n2. Verify it.\n';
+    const fm = ['---', `title: ${f.title}`, `priority: ${f.priority ?? 'P1'}`, '---', '', body].join(
+      '\n',
+    );
+    fs.writeFileSync(join(flowsDir, f.fileName), fm, 'utf8');
+  }
+
+  if (cfg.setupDone) {
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO qa_ios_repo_state (repo_id, cycle, setup_at) VALUES (?, 0, ?)
+       ON CONFLICT(repo_id) DO UPDATE SET setup_at = excluded.setup_at`,
+    ).run(repoId, now);
+  }
+
+  const slotCount = cfg.simSlots ?? 0;
+  for (let i = 0; i < slotCount; i++) {
+    db.prepare(
+      `INSERT INTO qa_ios_sim_slots (slot_index, udid, appium_port, wda_port)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(slot_index) DO NOTHING`,
+    ).run(i, `e2e-fixture-udid-${i}`, 4723 + i, 8100 + i);
+  }
 }
 
 interface SeedTestPlanInput {
