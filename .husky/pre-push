@@ -1,4 +1,18 @@
 #!/usr/bin/env sh
 # Mirrors `pnpm verify` so the same gates run locally and in CI.
 # Skip with `git push --no-verify` only if you know what you're doing.
+
+# Catch source files that exist locally but are silently gitignored — they
+# pass `pnpm verify` here but break CI, which only sees what's in git.
+ignored=$(git ls-files --others --ignored --exclude-standard -- src/ test/ 2>/dev/null)
+if [ -n "$ignored" ]; then
+  echo "pre-push: source files under src/ or test/ are gitignored:" >&2
+  echo "$ignored" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "These exist locally but were never committed, so CI will fail to build." >&2
+  echo "Fix: anchor the matching .gitignore rule to the repo root (prefix with /)" >&2
+  echo "or add an explicit '!path/' negation." >&2
+  exit 1
+fi
+
 pnpm verify
