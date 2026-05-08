@@ -1352,6 +1352,19 @@ function RunnerModelCard({
       alive = false;
     };
   }, [runner, refreshTick]);
+  // Self-heal stale modelOverride: if the persisted value isn't a valid
+  // model for the current runner (e.g. user picked a Claude model, then
+  // switched to Codex — the DB still holds the Claude id while the
+  // dropdown silently displays the first Codex option), reset to null so
+  // the displayed default actually matches what runs use. Without this,
+  // "Run now" would pass the stale Claude id to the Codex CLI and fail
+  // with "model X is not supported when using Codex".
+  useEffect(() => {
+    if (agent.modelOverride == null) return;
+    if (models.length === 0) return;
+    if (models.some((m) => m.id === agent.modelOverride)) return;
+    void onUpdate({ modelOverride: null });
+  }, [agent.modelOverride, models, onUpdate]);
   const selectedModel = agent.modelOverride ?? defaultModelId ?? models[0]!.id;
   return (
     <div className="settings-card">
@@ -1369,7 +1382,7 @@ function RunnerModelCard({
             <button
               type="button"
               className={`btn${agent.runnerOverride == null ? ' primary' : ''}`}
-              onClick={() => void onUpdate({ runnerOverride: null })}
+              onClick={() => void onUpdate({ runnerOverride: null, modelOverride: null })}
             >
               Use repo default
             </button>
@@ -1378,7 +1391,17 @@ function RunnerModelCard({
                 key={opt}
                 type="button"
                 className={`btn${agent.runnerOverride === opt ? ' primary' : ''}`}
-                onClick={() => void onUpdate({ runnerOverride: opt })}
+                onClick={() => {
+                  // Clear modelOverride when the runner changes — model
+                  // namespaces don't overlap between Claude and Codex, so
+                  // carrying over the prior runner's id silently breaks
+                  // the next run.
+                  if (agent.runnerOverride !== opt) {
+                    void onUpdate({ runnerOverride: opt, modelOverride: null });
+                  } else {
+                    void onUpdate({ runnerOverride: opt });
+                  }
+                }}
               >
                 {opt === 'claude' ? 'Claude Code' : 'Codex'}
               </button>
