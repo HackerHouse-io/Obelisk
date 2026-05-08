@@ -137,9 +137,7 @@ export function SchedulePresetCard({
       <div className="sched-card-titlerow">
         <div>
           <div className="settings-card-title">Schedule</div>
-          <div className="settings-card-sub">
-            How often this agent runs on its own. {summary}.
-          </div>
+          <div className="settings-card-sub">How often this agent runs on its own. {summary}.</div>
         </div>
         <span
           className={`pill${agent.enabled && nextRelative ? ' brand' : ''} sched-next-pill`}
@@ -156,8 +154,8 @@ export function SchedulePresetCard({
       <div className="sched-card-body">
         {!agent.enabled ? (
           <div className="sched-paused-note">
-            This agent is paused — scheduled runs won&rsquo;t fire until you click{' '}
-            <b>Enable</b> in the header. <span className="mono">Run now</span> still works.
+            This agent is paused — scheduled runs won&rsquo;t fire until you click <b>Enable</b> in
+            the header. <span className="mono">Run now</span> still works.
           </div>
         ) : null}
 

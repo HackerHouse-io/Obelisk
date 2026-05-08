@@ -83,8 +83,9 @@ export function Coverage(): ReactElement {
           <div className="coverage-title">Coverage</div>
           <div className="coverage-sub">
             Per-file map of test cases, open findings, last passing QA run, and git churn since
-            then. Add labels to your test cases (and a <span className="mono">qa/coverage-map.md</span>{' '}
-            file) so each case maps to the files it exercises.
+            then. Add labels to your test cases (and a{' '}
+            <span className="mono">qa/coverage-map.md</span> file) so each case maps to the files it
+            exercises.
           </div>
         </div>
         <button type="button" className="btn sm" onClick={() => void load()} disabled={loading}>
@@ -218,7 +219,9 @@ function CoverageRow({ entry }: { entry: CoverageEntry }): ReactElement {
       <div className="coverage-path mono">{entry.path}</div>
       <div className="coverage-num">{entry.caseCount}</div>
       <div className="coverage-num">{entry.findingsCount}</div>
-      <div className="coverage-pass">{entry.lastPassedAt ? short(entry.lastPassedAt) : 'never'}</div>
+      <div className="coverage-pass">
+        {entry.lastPassedAt ? short(entry.lastPassedAt) : 'never'}
+      </div>
       <div className="coverage-num">{entry.churnSinceLastPass}</div>
     </div>
   );
@@ -254,7 +257,12 @@ function pct(numerator: number, denominator: number): string {
 function short(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   } catch {
     return iso;
   }

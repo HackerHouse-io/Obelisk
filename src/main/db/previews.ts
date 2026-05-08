@@ -209,9 +209,7 @@ export function listPreviewsForRepo(repoId: string, limit = 25): PreviewedFindin
 }
 
 function enrichmentFor(rows: PreviewRow[]): RowEnrichment {
-  const runIds = Array.from(
-    new Set(rows.map((r) => r.run_id).filter((id): id is string => !!id)),
-  );
+  const runIds = Array.from(new Set(rows.map((r) => r.run_id).filter((id): id is string => !!id)));
   const markers = loadMarkers();
   return {
     evidenceByRun: loadEvidenceMap(runIds),

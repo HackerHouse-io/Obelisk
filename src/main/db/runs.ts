@@ -70,10 +70,7 @@ export function createRun(input: CreateRunInput): Run {
   const insert = db.transaction(() => {
     if (input.taskRef !== null) {
       const existing = db
-        .prepare<
-          [string, string],
-          { id: string; agent_name: AgentName }
-        >(
+        .prepare<[string, string], { id: string; agent_name: AgentName }>(
           `SELECT id, agent_name FROM runs
             WHERE repo_id = ? AND task_ref = ?
               AND state IN ('queued','running','publishing','paused')
@@ -188,14 +185,16 @@ export interface RecentRunSummary {
   errorCode: string | null;
   outputSummary: string | null;
 }
-export function getRecentScheduledRunsForAgent(
-  agentId: string,
-  limit: number,
-): RecentRunSummary[] {
+export function getRecentScheduledRunsForAgent(agentId: string, limit: number): RecentRunSummary[] {
   return getDb()
     .prepare<
       [string, number],
-      { state: RunState; finished_at: string | null; error_code: string | null; output_summary: string | null }
+      {
+        state: RunState;
+        finished_at: string | null;
+        error_code: string | null;
+        output_summary: string | null;
+      }
     >(
       `SELECT state, finished_at, error_code, output_summary
          FROM runs

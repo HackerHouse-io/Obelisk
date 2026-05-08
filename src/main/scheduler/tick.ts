@@ -89,9 +89,7 @@ function dispatchDueAgents(repo: Repo): void {
     // singleton type can't both be dispatched within the same tick cycle
     // (the liveAgentNames check above only catches AlreadyRunning, not
     // AlreadyDispatching-in-this-tick).
-    const dispatchKey = handler.multiInstance
-      ? `${repo.id}:${a.id}`
-      : `${repo.id}:name:${a.name}`;
+    const dispatchKey = handler.multiInstance ? `${repo.id}:${a.id}` : `${repo.id}:name:${a.name}`;
     if (inFlightDispatch.has(dispatchKey)) continue;
 
     const cron = a.scheduleCron ?? defaultCronFor(a.name);

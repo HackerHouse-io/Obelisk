@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
-import type {
-  Agent,
-  AgentName,
-  AgentPermissions,
-  RunnerKind,
-} from '../../shared/types';
+import type { Agent, AgentName, AgentPermissions, RunnerKind } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 import { SchedulePresetCard } from './agents/SchedulePresetCard';
 import { scheduleSummary } from './agents/schedule-helpers';
@@ -879,11 +874,7 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
             onClick={runNow}
             disabled={runStarting}
             aria-busy={runStarting}
-            title={
-              runStarting
-                ? `Starting ${agent.displayName}…`
-                : `Run ${agent.displayName} now`
-            }
+            title={runStarting ? `Starting ${agent.displayName}…` : `Run ${agent.displayName} now`}
           >
             {runStarting ? (
               <>

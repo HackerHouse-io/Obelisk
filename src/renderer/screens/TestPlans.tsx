@@ -773,12 +773,7 @@ function RunButtonWithOptions({
             <label className="new-plan-label" htmlFor="plan-run-model">
               Model
             </label>
-            <ModelSelect
-              id="plan-run-model"
-              runner={runner}
-              value={model}
-              onChange={setModel}
-            />
+            <ModelSelect id="plan-run-model" runner={runner} value={model} onChange={setModel} />
           </div>
           <div className="plan-run-popover-actions">
             <button type="button" className="btn ghost sm" onClick={() => setOpen(false)}>

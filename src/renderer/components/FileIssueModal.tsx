@@ -158,9 +158,7 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
             </button>
           </header>
 
-          <div
-            className={`file-issue-grid${finding.evidence.length > 0 ? ' has-evidence' : ''}`}
-          >
+          <div className={`file-issue-grid${finding.evidence.length > 0 ? ' has-evidence' : ''}`}>
             <div className="file-issue-fields">
               <label className="file-issue-label">
                 <span>Title</span>

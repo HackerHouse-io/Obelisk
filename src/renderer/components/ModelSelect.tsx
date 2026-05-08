@@ -106,9 +106,7 @@ export function ModelSelect({ runner, value, onChange, disabled, id }: Props): R
   }
 
   const defaultOptionLabel =
-    runner !== '' && state.defaultModelId
-      ? `Use default (${state.defaultModelId})`
-      : 'Use default';
+    runner !== '' && state.defaultModelId ? `Use default (${state.defaultModelId})` : 'Use default';
 
   return (
     <div className="model-select">

@@ -135,9 +135,7 @@ function bodyFor(f: Finding): string {
     f.repro.trim(),
     '',
     `## Evidence`,
-    f.evidence && f.evidence.trim().length > 0
-      ? f.evidence.trim()
-      : '_(no evidence captured)_',
+    f.evidence && f.evidence.trim().length > 0 ? f.evidence.trim() : '_(no evidence captured)_',
     '',
     `## Suspected files`,
     f.suspected_files.length === 0

@@ -70,10 +70,7 @@ export function RunnerAuthBanner(): ReactElement | null {
   );
 }
 
-function mostRecentTerminalRun(
-  runs: Record<string, Run>,
-  runner: RunnerKind,
-): Run | null {
+function mostRecentTerminalRun(runs: Record<string, Run>, runner: RunnerKind): Run | null {
   let best: Run | null = null;
   for (const r of Object.values(runs)) {
     if (r.runnerUsed !== runner) continue;
