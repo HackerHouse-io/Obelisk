@@ -1,5 +1,9 @@
 import { listRepos } from '../db/repos';
-import { upsertBacklogFromGithub } from '../db/backlog';
+import {
+  upsertBacklogFromGithub,
+  listBacklogGhIssueNumbers,
+  deleteBacklogGhIssue,
+} from '../db/backlog';
 import { getSetting, setSetting } from '../db/settings';
 import { getGithub } from '../github/client';
 import { OBELISK_LABELS } from '../publisher/labels';
@@ -102,6 +106,7 @@ async function syncRepo(repo: Repo): Promise<void> {
   if (newEtag) setSetting(`repo:${repo.id}`, ETAG_KEY, newEtag);
 
   let upserted = 0;
+  const livePresent = new Set<number>();
   for (const issue of response.data) {
     if (issue.pull_request) continue; // GitHub returns PRs from this endpoint
     if (issue.draft) continue;
@@ -136,10 +141,73 @@ async function syncRepo(repo: Repo): Promise<void> {
       kind,
       priorityLabel: derivePriority(labelNames),
     });
+    livePresent.add(issue.number);
     upserted += 1;
   }
 
-  if (upserted > 0) {
+  // Reaper pass: any backlog row whose GitHub issue is no longer in our
+  // live-eligible set is stale. The two ways to land here:
+  //   1. Issue was closed (PR merged, manually closed, etc.) — GitHub's
+  //      `state: 'open'` filter dropped it from `response.data`.
+  //   2. The trigger label (`obelisk:fix` / `obelisk:feature`) was
+  //      removed — `deriveKind` returned null and we skipped the
+  //      upsert above.
+  // Either way the row should leave the backlog so Mission Control's
+  // "Next up" panel doesn't keep showing tasks the user already
+  // resolved. We re-fetch each candidate via gh.issues.get to confirm
+  // its state before deleting (avoids paginating-out false positives
+  // on repos with >50 open obelisk-labelled issues).
+  let reaped = 0;
+  const known = listBacklogGhIssueNumbers(repo.id);
+  for (const num of known) {
+    if (livePresent.has(num)) continue;
+    try {
+      const detail = await gh.issues.get({ owner, repo: name, issue_number: num });
+      const issue = detail.data;
+      const stillLive =
+        issue.state === 'open' &&
+        !issue.locked &&
+        deriveKind(
+          (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : (l?.name ?? ''))),
+        ) !== null;
+      if (stillLive) continue;
+      deleteBacklogGhIssue(repo.id, num);
+      reaped += 1;
+      appendAudit({
+        runId: 'system',
+        kind: 'backlog_row_reaped',
+        payload: {
+          repo: repo.githubFullName,
+          issueNumber: num,
+          reason:
+            issue.state === 'closed'
+              ? 'issue_closed'
+              : issue.locked
+                ? 'issue_locked'
+                : 'trigger_label_removed',
+        },
+      });
+    } catch (e) {
+      // 404 → issue deleted on GitHub. Drop the row anyway.
+      const status = (e as { status?: number }).status;
+      if (status === 404) {
+        deleteBacklogGhIssue(repo.id, num);
+        reaped += 1;
+        appendAudit({
+          runId: 'system',
+          kind: 'backlog_row_reaped',
+          payload: {
+            repo: repo.githubFullName,
+            issueNumber: num,
+            reason: 'issue_404',
+          },
+        });
+      }
+      // Other errors (rate limit, network) are non-fatal — try next sweep.
+    }
+  }
+
+  if (upserted > 0 || reaped > 0) {
     broadcast({ type: 'backlog.changed', repoId: repo.id });
   }
 }

@@ -554,6 +554,12 @@ export interface IpcMap {
     req: { itemId: string; runner?: RunnerKind | null; agent?: AgentName | null };
     res: BacklogItem;
   };
+  /**
+   * Force a backlog sync against GitHub for the given repo and return the
+   * refreshed list. Used by the Backlog screen's "Refresh" button so the
+   * user can pull immediately without waiting for the periodic sweep.
+   */
+  'backlog:refresh': { req: { repoId: string }; res: BacklogItem[] };
 
   // Playbook
   'playbook:get': { req: { repoId: string }; res: Playbook };

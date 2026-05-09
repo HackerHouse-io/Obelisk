@@ -24,7 +24,12 @@ const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 const TICK_MS = 30_000;
 const AUTO_MERGE_EVERY_N_TICKS = 10; // = 5 min
-const BACKLOG_SYNC_EVERY_N_TICKS = 4; // = 2 min
+// 5-minute auto-sync. The cost is small (Octokit's ETag cache turns most
+// calls into 304s with zero quota cost) but a 5-min cadence means a
+// merged PR's issue lingers in "Next up" for at most ~5 min — and the
+// Backlog screen has a manual Refresh button for users who want it
+// instantly. Earlier 2-min cadence felt chatty without much benefit.
+const BACKLOG_SYNC_EVERY_N_TICKS = 10; // = 5 min
 const WORKTREE_REAPER_EVERY_N_TICKS = 20; // = 10 min
 
 /**

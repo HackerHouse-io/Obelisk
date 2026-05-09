@@ -1,4 +1,5 @@
 import { listBacklog, reorderBacklog, setBacklogOverride } from '../db/backlog';
+import { syncBacklogForRepo } from '../scheduler/backlog-sync';
 import { broadcast } from './bus';
 import type { IpcMap } from '../../shared/types';
 
@@ -25,4 +26,18 @@ export async function handleBacklogSetOverride(
   });
   broadcast({ type: 'backlog.changed', repoId: updated.repoId });
   return updated;
+}
+
+/**
+ * Drive a foreground backlog sync against GitHub and return the refreshed
+ * list in one call. The sync runs the same code as the periodic sweep
+ * (additive upserts + closed-issue reaper), so the user gets exactly
+ * what they'd see ~5 min later but immediately. Errors propagate so the
+ * UI can surface a toast / banner — no silent failures.
+ */
+export async function handleBacklogRefresh(
+  payload: IpcMap['backlog:refresh']['req'],
+): Promise<IpcMap['backlog:refresh']['res']> {
+  await syncBacklogForRepo(payload.repoId);
+  return listBacklog(payload.repoId);
 }

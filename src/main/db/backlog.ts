@@ -207,6 +207,21 @@ export function upsertBacklogFromGithub(input: UpsertBacklogFromGithubInput): vo
 }
 
 /**
+ * Issue numbers currently held in the backlog as `source='gh_issue'`.
+ * Used by the sync sweep to detect rows whose GitHub issue has been
+ * closed or had its trigger label removed since last sync.
+ */
+export function listBacklogGhIssueNumbers(repoId: string): number[] {
+  return getDb()
+    .prepare<[string], { github_issue: number }>(
+      `SELECT github_issue FROM backlog
+        WHERE repo_id = ? AND source = 'gh_issue' AND github_issue IS NOT NULL`,
+    )
+    .all(repoId)
+    .map((r) => r.github_issue);
+}
+
+/**
  * Drop a `source='gh_issue'` backlog row for a known-closed issue. Called by
  * agent selectTask when it discovers the row points at a closed/locked
  * issue, so the next claim attempt doesn't keep tripping over it. Safe no-op

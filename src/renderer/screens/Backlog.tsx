@@ -5,6 +5,16 @@ import { runAgentByName } from '../state/agent-actions';
 import type { AgentName, BacklogItem } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 
+function humanizeAgo(d: Date): string {
+  const seconds = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
 type Filter = 'all' | 'bug' | 'feature';
 
 export function Backlog(): ReactElement {
@@ -16,11 +26,36 @@ export function Backlog(): ReactElement {
   const [filter, setFilter] = useState<Filter>('all');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
   const refetch = async (): Promise<void> => {
     if (!repo) return;
     const res = await window.obelisk.invoke('backlog:list', { repoId: repo.id });
     if (res.ok) setItems(res.value);
+  };
+
+  // Force a foreground sync against GitHub. Picks up newly-labelled
+  // issues AND drops rows whose underlying issue was closed / lost
+  // its trigger label. Cheaper than the auto-sweep would be: ETag
+  // caching makes most refreshes return a 304 from GitHub, and the
+  // reaper only re-fetches rows that actually fell out.
+  const refresh = async (): Promise<void> => {
+    if (!repo || refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const res = await window.obelisk.invoke('backlog:refresh', { repoId: repo.id });
+      if (res.ok) {
+        setItems(res.value);
+        setLastRefreshedAt(new Date());
+      } else {
+        setRefreshError(res.error.message);
+      }
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   useEffect(() => {
@@ -113,12 +148,59 @@ export function Backlog(): ReactElement {
             <div className="backlog-title">Backlog</div>
             <div className="backlog-sub">
               Drag to reorder. The top item is the next thing Bug Fixer or Feature Builder picks up.
+              {lastRefreshedAt ? (
+                <span style={{ marginLeft: 8, opacity: 0.7 }}>
+                  · Refreshed {humanizeAgo(lastRefreshedAt)}
+                </span>
+              ) : null}
             </div>
           </div>
-          <button type="button" className="btn primary" onClick={() => runFixerForKind('bug')}>
-            <Icon.Play size={11} /> Send top to fixer now
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              data-testid="backlog-refresh"
+              title="Pull the latest open issues from GitHub. Auto-syncs every ~5 min in the background."
+            >
+              {refreshing ? (
+                <>
+                  <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
+                  Refreshing…
+                </>
+              ) : (
+                <>
+                  <Icon.Refresh size={11} /> Refresh
+                </>
+              )}
+            </button>
+            <button type="button" className="btn primary" onClick={() => runFixerForKind('bug')}>
+              <Icon.Play size={11} /> Send top to fixer now
+            </button>
+          </div>
         </div>
+        {refreshError ? (
+          <div
+            className="plan-editor-banner plan-editor-banner-error"
+            role="alert"
+            style={{ marginTop: 8 }}
+          >
+            <Icon.AlertTri size={12} />
+            <div>
+              <div className="plan-editor-banner-title">Couldn’t refresh</div>
+              <div className="plan-editor-banner-body">{refreshError}</div>
+            </div>
+            <button
+              type="button"
+              className="btn ghost icon"
+              onClick={() => setRefreshError(null)}
+              aria-label="Dismiss"
+            >
+              <Icon.Close size={11} />
+            </button>
+          </div>
+        ) : null}
         <div className="backlog-filters">
           {(['all', 'bug', 'feature'] as Filter[]).map((f) => (
             <button

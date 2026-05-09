@@ -39,7 +39,12 @@ import {
   handleRunsDelete,
   handleRunsDeleteCompleted,
 } from './runs';
-import { handleBacklogList, handleBacklogReorder, handleBacklogSetOverride } from './backlog';
+import {
+  handleBacklogList,
+  handleBacklogReorder,
+  handleBacklogSetOverride,
+  handleBacklogRefresh,
+} from './backlog';
 import { handlePlaybookGet, handlePlaybookRegenerate, handlePlaybookSave } from './playbook';
 import {
   handlePreviewsList,
@@ -139,6 +144,7 @@ export function registerIpcHandlers(): void {
   register('backlog:list', handleBacklogList);
   register('backlog:reorder', handleBacklogReorder);
   register('backlog:setOverride', handleBacklogSetOverride);
+  register('backlog:refresh', handleBacklogRefresh);
 
   // Playbook
   register('playbook:get', handlePlaybookGet);

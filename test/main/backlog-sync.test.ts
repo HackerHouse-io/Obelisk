@@ -75,6 +75,40 @@ describe('deriveKind', () => {
   });
 });
 
+describe('listBacklogGhIssueNumbers', () => {
+  it('returns only gh_issue rows, not manual rows', async () => {
+    const { listBacklogGhIssueNumbers, createBacklogItem } = await import(
+      '../../src/main/db/backlog'
+    );
+    upsertBacklogFromGithub({
+      repoId,
+      githubIssue: 11,
+      title: 'first',
+      kind: 'bug',
+      priorityLabel: null,
+    });
+    upsertBacklogFromGithub({
+      repoId,
+      githubIssue: 22,
+      title: 'second',
+      kind: 'bug',
+      priorityLabel: null,
+    });
+    createBacklogItem({
+      repoId,
+      source: 'manual',
+      title: 'manual one',
+      kind: 'bug',
+    });
+    expect(listBacklogGhIssueNumbers(repoId).sort()).toEqual([11, 22]);
+  });
+
+  it('returns an empty array for a repo with no gh_issue rows', async () => {
+    const { listBacklogGhIssueNumbers } = await import('../../src/main/db/backlog');
+    expect(listBacklogGhIssueNumbers(repoId)).toEqual([]);
+  });
+});
+
 describe('upsertBacklogFromGithub', () => {
   it('inserts a new row on first call', () => {
     upsertBacklogFromGithub({
