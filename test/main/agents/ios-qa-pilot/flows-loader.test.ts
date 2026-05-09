@@ -11,11 +11,7 @@ import {
 import { closeDb, setDbPathForTesting } from '../../../../src/main/db';
 import { runMigrations } from '../../../../src/main/db/migrations';
 import { createRepo } from '../../../../src/main/db/repos';
-import {
-  getFlow,
-  listFlows,
-  listMigrationsForRepo,
-} from '../../../../src/main/db/qa-flows';
+import { getFlow, listFlows, listMigrationsForRepo } from '../../../../src/main/db/qa-flows';
 
 let tmp: string;
 let repoId: string;
@@ -49,7 +45,9 @@ function writeFlowFile(name: string, frontmatter: string, body: string): void {
 
 describe('parseFrontmatter', () => {
   it('extracts title, priority, and tags', () => {
-    const fm = parseFrontmatter('---\ntitle: Login\npriority: P0\ntags: [auth, smoke]\n---\n# body');
+    const fm = parseFrontmatter(
+      '---\ntitle: Login\npriority: P0\ntags: [auth, smoke]\n---\n# body',
+    );
     expect(fm.title).toBe('Login');
     expect(fm.priority).toBe('P0');
     expect(fm.tags).toEqual(['auth', 'smoke']);

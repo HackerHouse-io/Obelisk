@@ -6,7 +6,7 @@ import {
   resetFlows,
   type QaFlowRow,
 } from '../db/qa-flows';
-import { loadIosConfig } from '../agents/ios-qa-pilot/config';
+import { loadIosConfig, saveIosConfig } from '../agents/ios-qa-pilot/config';
 import { keepBooted } from '../agents/ios-qa-pilot/sim-pool';
 import { runDoctor, runSetup } from '../agents/ios-qa-pilot/doctor';
 import { runAgent } from '../orchestrator/run';
@@ -101,6 +101,7 @@ export async function handleQaDoctor(
   const cfg = loadIosConfig(repo.localPath);
   const report = await runDoctor({
     repoId: payload.repoId,
+    repoPath: repo.localPath,
     poolSize: cfg.maxParallel,
     appiumPortBase: cfg.appiumPortBase,
     wdaPortBase: cfg.wdaPortBase,
@@ -118,6 +119,7 @@ export async function handleQaDoctorSetup(
   const cfg = loadIosConfig(repo.localPath);
   const report = await runSetup({
     repoId: payload.repoId,
+    repoPath: repo.localPath,
     poolSize: cfg.maxParallel,
     appiumPortBase: cfg.appiumPortBase,
     wdaPortBase: cfg.wdaPortBase,
@@ -140,4 +142,39 @@ export async function handleQaDoctorSetup(
 export async function handleQaWarmPool(): Promise<IpcMap['qa:warmPool']['res']> {
   await keepBooted();
   return { ok: true };
+}
+
+export async function handleQaGetConfig(
+  payload: IpcMap['qa:getConfig']['req'],
+): Promise<IpcMap['qa:getConfig']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  const cfg = loadIosConfig(repo.localPath);
+  return {
+    appPath: cfg.appPath,
+    bundleId: cfg.bundleId,
+    simulatorDevice: cfg.simulatorDevice,
+    flowsDir: cfg.flowsDir,
+  };
+}
+
+export async function handleQaSaveConfig(
+  payload: IpcMap['qa:saveConfig']['req'],
+): Promise<IpcMap['qa:saveConfig']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  const merged = saveIosConfig(repo.localPath, {
+    appPath: payload.appPath,
+    bundleId: payload.bundleId,
+    simulatorDevice: payload.simulatorDevice,
+  });
+  // The doctor's repo_config row reads qa/ios.yml, so a fresh save means
+  // every open Doctor view should re-probe.
+  broadcast({ type: 'qa.doctorChanged', repoId: payload.repoId });
+  return {
+    appPath: merged.appPath,
+    bundleId: merged.bundleId,
+    simulatorDevice: merged.simulatorDevice,
+    flowsDir: merged.flowsDir,
+  };
 }

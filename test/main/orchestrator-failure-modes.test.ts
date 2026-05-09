@@ -78,10 +78,7 @@ let repoPath: string;
 async function makeFixtureRepo(): Promise<string> {
   const path = join(tmpRoot, 'repo');
   mkdirSync(join(path, 'auth'), { recursive: true });
-  writeFileSync(
-    join(path, 'auth/session.ts'),
-    `export function getSameSite() { return 'Lax'; }\n`,
-  );
+  writeFileSync(join(path, 'auth/session.ts'), `export function getSameSite() { return 'Lax'; }\n`);
   writeFileSync(`${path}/README.md`, '# fixture\n');
   const git = simpleGit(path);
   await git.init();
@@ -161,9 +158,10 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
     expect(result.reason).toBe('EVIDENCE_INCOMPLETE');
 
     const auditRows = getDb()
-      .prepare<[string, string], { payload: string }>(
-        "SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?",
-      )
+      .prepare<
+        [string, string],
+        { payload: string }
+      >('SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?')
       .all(result.runId, 'evidence_check');
     expect(auditRows.length).toBe(1);
     const payload = JSON.parse(auditRows[0]!.payload) as {
@@ -206,9 +204,7 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
     expect(result.reason).toBe('timeout');
 
     const run = getDb()
-      .prepare<[string], { error_code: string | null }>(
-        'SELECT error_code FROM runs WHERE id = ?',
-      )
+      .prepare<[string], { error_code: string | null }>('SELECT error_code FROM runs WHERE id = ?')
       .get(result.runId);
     expect(run?.error_code).toBe('TIMEOUT');
   });
@@ -240,9 +236,10 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
 
     expect(result.finalState).toBe('failed');
     const row = getDb()
-      .prepare<[string], { error_code: string | null; output_summary: string | null }>(
-        'SELECT error_code, output_summary FROM runs WHERE id = ?',
-      )
+      .prepare<
+        [string],
+        { error_code: string | null; output_summary: string | null }
+      >('SELECT error_code, output_summary FROM runs WHERE id = ?')
       .get(result.runId);
     expect(row?.error_code).toBe('RUNNER_NO_OUTPUT');
     expect(row?.output_summary).toMatch(/no output/);
@@ -272,9 +269,10 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
 
     expect(result.finalState).toBe('done');
     const row = getDb()
-      .prepare<[string], { output_summary: string | null }>(
-        'SELECT output_summary FROM runs WHERE id = ?',
-      )
+      .prepare<
+        [string],
+        { output_summary: string | null }
+      >('SELECT output_summary FROM runs WHERE id = ?')
       .get(result.runId);
     expect(row?.output_summary).toBe('Plan executed; no findings.');
   });

@@ -1,5 +1,6 @@
 import { simpleGit } from 'simple-git';
 import { getGithub } from '../github/client';
+import { getAuthedLogin } from '../auth/token-store';
 import { ObeliskError } from '../../shared/errors';
 import type { Repo, SafetyMode } from '../../shared/types';
 import type { PublishPlan } from '../agents/types';
@@ -28,6 +29,14 @@ export interface PublishInput {
   sourceIssueNumber?: number;
   /** PR number we're operating on (for review plans). */
   sourcePrNumber?: number;
+  /**
+   * Set when this publish is appending a fix-up commit to an existing PR
+   * (e.g. CI-failure auto-fix retry). When provided on a `pr` plan the
+   * publisher commits + pushes to the branch but skips `gh.pulls.create`,
+   * letting GitHub auto-attach the new commit. The returned PublishOutput's
+   * prNumber will be this value.
+   */
+  existingPrNumber?: number;
   /**
    * True when a human explicitly initiated the publish from the UI (e.g. clicking
    * "Send to GitHub" on a previewed finding). The safety mode gate governs
@@ -152,41 +161,59 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
       });
       await git.commit(commitMessage, { '--no-verify': null });
 
-      // Push the per-run branch to origin.
+      // Push the per-run branch to origin. For resume publishes the branch
+      // already has an upstream tracking ref, so set-upstream is a no-op
+      // (and harmless if re-set).
       await git.push(['--set-upstream', 'origin', input.branch]);
 
-      // Open the draft PR.
-      const created = await gh.pulls.create({
-        owner,
-        repo: repoName,
-        title: input.plan.title,
-        body: input.plan.body,
-        head: input.plan.head,
-        base: input.plan.base,
-        draft: input.plan.draft,
-      });
-
-      // Apply in-progress label to the source issue, if any.
-      if (input.sourceIssueNumber) {
-        await gh.issues.addLabels({
+      // Resume publishes (CI-retry fix-up) skip `pulls.create` because the PR
+      // already exists; the push above is enough — GitHub auto-attaches the
+      // commit. We still mirror evidence + return the existing PR number.
+      let prNumber: number;
+      let htmlUrl: string;
+      if (input.existingPrNumber) {
+        prNumber = input.existingPrNumber;
+        const existing = await gh.pulls
+          .get({ owner, repo: repoName, pull_number: prNumber })
+          .catch(() => null);
+        htmlUrl = existing?.data.html_url ?? '';
+      } else {
+        const created = await gh.pulls.create({
           owner,
           repo: repoName,
-          issue_number: input.sourceIssueNumber,
-          labels: [OBELISK_LABELS.inProgress],
+          title: input.plan.title,
+          body: input.plan.body,
+          head: input.plan.head,
+          base: input.plan.base,
+          draft: input.plan.draft,
         });
+        prNumber = created.data.number;
+        htmlUrl = created.data.html_url;
+
+        // Apply in-progress label to the source issue, if any. Resume
+        // publishes never re-apply: the original run already did, and the
+        // label survives on the issue across multiple commits.
+        if (input.sourceIssueNumber) {
+          await gh.issues.addLabels({
+            owner,
+            repo: repoName,
+            issue_number: input.sourceIssueNumber,
+            labels: [OBELISK_LABELS.inProgress],
+          });
+        }
       }
 
       // Mirror artifacts into the repo so reviewers without Obelisk can see them.
       mirrorEvidenceToRepo({
         worktreePath: input.worktreePath,
         runId: input.runId,
-        prNumber: created.data.number,
+        prNumber,
       });
 
       return {
         kind: 'pr',
-        prNumber: created.data.number,
-        htmlUrl: created.data.html_url,
+        prNumber,
+        htmlUrl,
       };
     }
 
@@ -222,10 +249,12 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
 }
 
 /**
- * Remove the `obelisk:in-progress` label after a run finishes (any state).
- * Best-effort — we never fail a run on label cleanup.
+ * Tear down the GitHub-side claim signals applied by `postClaimSignal` at
+ * selectTask time: remove the `obelisk:in-progress` label AND remove the
+ * connected user as an assignee. Called from the orchestrator's `finally`
+ * regardless of run outcome. Best-effort — we never fail a run on cleanup.
  */
-export async function clearInProgressLabel(
+export async function clearClaimSignals(
   repo: Repo,
   issueNumber: number | undefined,
 ): Promise<void> {
@@ -234,7 +263,27 @@ export async function clearInProgressLabel(
   if (!gh) return;
   const [owner, name] = repo.githubFullName.split('/');
   if (!owner || !name) return;
+
   await gh.issues
     .removeLabel({ owner, repo: name, issue_number: issueNumber, name: OBELISK_LABELS.inProgress })
     .catch(() => undefined);
+
+  const login = await getAuthedLogin().catch(() => null);
+  if (login) {
+    await gh.issues
+      .removeAssignees({
+        owner,
+        repo: name,
+        issue_number: issueNumber,
+        assignees: [login],
+      })
+      .catch(() => undefined);
+  }
 }
+
+/**
+ * @deprecated Use `clearClaimSignals` — this is kept as a thin shim while
+ * existing call sites migrate. Behaves identically (label + assignee) since
+ * Phase 1.2.
+ */
+export const clearInProgressLabel = clearClaimSignals;

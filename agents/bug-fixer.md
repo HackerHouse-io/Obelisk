@@ -31,6 +31,14 @@ Given a GitHub issue labeled `obelisk:fix`:
 
 If you cannot reproduce the bug, STOP. Emit `REPRO_FAILED: <reason>` and do not commit anything. The run will be paused and the user will be asked for clearer repro steps.
 
+# Scope hygiene (multi-agent)
+
+Many Bug Fixers may run in parallel against this repo. Keep your diff small and predictable so merge conflicts stay rare:
+
+- Touch the smallest set of files necessary. If your fix needs to change more than 5 files, STOP and emit `BLOCKED scope_too_wide: <reason>` instead of committing — the user will split the issue.
+- Never modify lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `Gemfile.lock`, `go.sum`, `poetry.lock`, etc.) or files marked `linguist-generated` in `.gitattributes`, unless the bug is exactly about that file.
+- If the fix touches a file that has changed on the default branch in the last 24 hours, prefer minimal-edit patches and call out the active churn in the PR `## Reasoning` section so the reviewer can sanity-check the rebase.
+
 # Output format
 
 Branch name: `obelisk/<run-id>`.

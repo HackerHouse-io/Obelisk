@@ -161,6 +161,68 @@ export function unlockBacklogItem(id: string): void {
     .run(new Date().toISOString(), id);
 }
 
+export interface UpsertBacklogFromGithubInput {
+  repoId: string;
+  githubIssue: number;
+  title: string;
+  kind: 'bug' | 'feature';
+  priorityLabel: 'P0' | 'P1' | 'P2' | null;
+}
+
+/**
+ * Idempotent upsert keyed on (repo_id, github_issue) for source='gh_issue'.
+ * Used by the periodic backlog-sync sweep — two sweeps that race still end
+ * with a single row thanks to migration 007's partial unique index.
+ *
+ * `added_at` only sets on first insert (DO UPDATE leaves it alone), so
+ * ranking by `added_at DESC` keeps reflecting when we *first* learned of
+ * the issue, not the last sync time.
+ */
+export function upsertBacklogFromGithub(input: UpsertBacklogFromGithubInput): void {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO backlog
+        (id, repo_id, source, github_issue, title, kind,
+         priority_label, user_pin_rank, agent_override, runner_override,
+         in_progress_run, added_at, last_seen_at)
+       VALUES (?, ?, 'gh_issue', ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
+       ON CONFLICT(repo_id, github_issue) WHERE source = 'gh_issue'
+       DO UPDATE SET
+         title = excluded.title,
+         kind = excluded.kind,
+         priority_label = excluded.priority_label,
+         last_seen_at = excluded.last_seen_at`,
+    )
+    .run(
+      ulid(),
+      input.repoId,
+      input.githubIssue,
+      input.title,
+      input.kind,
+      input.priorityLabel,
+      now,
+      now,
+    );
+}
+
+/**
+ * Drop a `source='gh_issue'` backlog row for a known-closed issue. Called by
+ * agent selectTask when it discovers the row points at a closed/locked
+ * issue, so the next claim attempt doesn't keep tripping over it. Safe no-op
+ * if the row is currently `in_progress_run` — we don't want to yank a row
+ * out from under a live run.
+ */
+export function deleteBacklogGhIssue(repoId: string, githubIssue: number): void {
+  getDb()
+    .prepare(
+      `DELETE FROM backlog
+        WHERE repo_id = ? AND github_issue = ? AND source = 'gh_issue'
+          AND in_progress_run IS NULL`,
+    )
+    .run(repoId, githubIssue);
+}
+
 export function reorderBacklog(repoId: string, orderedIds: string[]): void {
   const stmt = getDb().prepare('UPDATE backlog SET user_pin_rank = ? WHERE repo_id = ? AND id = ?');
   const tx = getDb().transaction((ids: string[]) => {

@@ -349,4 +349,3 @@ END_FINDINGS`;
     expect(body).toContain('AppState.reset()');
   });
 });
-

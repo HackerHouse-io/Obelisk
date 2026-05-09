@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { EmptyState } from '../ui/EmptyState';
@@ -178,6 +178,15 @@ export function Qa(): ReactElement {
         setupStep={setupStep}
       />
 
+      <RepoConfigForm
+        repoId={repo.id}
+        report={doctor}
+        onSaved={() => {
+          void refreshDoctor();
+          void refreshFlows();
+        }}
+      />
+
       {error ? (
         <div
           className="card"
@@ -295,4 +304,133 @@ function timeAgo(iso: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+interface RepoConfigFormProps {
+  repoId: string;
+  report: DoctorReport | null;
+  onSaved: () => void;
+}
+
+/**
+ * Inline editor for `qa/ios.yml`. Shown whenever the doctor's repo_config
+ * row is not green — Run setup scaffolds the file, this form fills it in
+ * without forcing the user to drop into an editor. Hidden once green so
+ * advanced users editing YAML directly aren't double-prompted.
+ */
+function RepoConfigForm({ repoId, report, onSaved }: RepoConfigFormProps): ReactElement | null {
+  const repoConfigCheck = report?.checks.find((c) => c.id === 'repo_config') ?? null;
+  const needsConfig = repoConfigCheck?.level !== undefined && repoConfigCheck.level !== 'green';
+
+  const [appPath, setAppPath] = useState('');
+  const [bundleId, setBundleId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Populate inputs from disk whenever the row needs attention. We don't
+  // want to overwrite typing-in-progress, so we only seed once per show.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!needsConfig) {
+      seededRef.current = false;
+      return;
+    }
+    if (seededRef.current) return;
+    seededRef.current = true;
+    let cancelled = false;
+    setLoading(true);
+    void window.obelisk
+      .invoke('qa:getConfig', { repoId })
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) {
+          setAppPath(res.value.appPath);
+          setBundleId(res.value.bundleId);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repoId, needsConfig]);
+
+  if (!needsConfig) return null;
+
+  const canSave = appPath.trim().length > 0 && bundleId.trim().length > 0 && !saving && !loading;
+
+  async function save(): Promise<void> {
+    setSaveError(null);
+    setSaving(true);
+    const res = await window.obelisk.invoke('qa:saveConfig', {
+      repoId,
+      appPath: appPath.trim(),
+      bundleId: bundleId.trim(),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setSaveError(res.error.message);
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div className="card col" style={{ padding: 12, gap: 10 }} data-testid="ios-config-form">
+      <div className="row" style={{ alignItems: 'baseline', gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Configure iOS app</span>
+        <span style={{ fontSize: 11, color: 'var(--t-3)' }}>
+          Saves to <span className="mono">qa/ios.yml</span>
+        </span>
+      </div>
+
+      <div className="col" style={{ gap: 4 }}>
+        <label style={{ fontSize: 11, color: 'var(--t-2)' }} htmlFor="ios-cfg-app-path">
+          App path (.app bundle, relative to repo root)
+        </label>
+        <input
+          id="ios-cfg-app-path"
+          data-testid="ios-config-app-path"
+          className="input mono"
+          type="text"
+          placeholder="build/Debug-iphonesimulator/MyApp.app"
+          value={appPath}
+          onChange={(e) => setAppPath(e.target.value)}
+          disabled={loading || saving}
+        />
+      </div>
+
+      <div className="col" style={{ gap: 4 }}>
+        <label style={{ fontSize: 11, color: 'var(--t-2)' }} htmlFor="ios-cfg-bundle-id">
+          Bundle ID (CFBundleIdentifier)
+        </label>
+        <input
+          id="ios-cfg-bundle-id"
+          data-testid="ios-config-bundle-id"
+          className="input mono"
+          type="text"
+          placeholder="com.example.myapp"
+          value={bundleId}
+          onChange={(e) => setBundleId(e.target.value)}
+          disabled={loading || saving}
+        />
+      </div>
+
+      {saveError ? <div style={{ fontSize: 12, color: 'var(--bad)' }}>{saveError}</div> : null}
+
+      <div className="row" style={{ gap: 8 }}>
+        <button
+          type="button"
+          className="btn primary sm"
+          onClick={() => void save()}
+          disabled={!canSave}
+          data-testid="ios-config-save"
+        >
+          {saving ? 'Saving…' : 'Save & re-check'}
+        </button>
+      </div>
+    </div>
+  );
 }

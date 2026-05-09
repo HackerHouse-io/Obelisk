@@ -8,6 +8,12 @@ export interface IosQaFinding {
   repro: string;
   likely_area: string;
   confidence: number;
+  /**
+   * Bucket for the finding. Defaults to 'functional' when unset (older
+   * agent definitions). Visual findings (text cutoff, alignment, etc.)
+   * pass at a lower confidence floor — see interpretResult.
+   */
+  category?: 'functional' | 'visual';
   evidence: {
     recording_path?: string;
     screenshots?: string[];
@@ -47,6 +53,73 @@ export function parseFlowMarkers(stdout: string): FlowMarkers {
   return { ok, inconclusive };
 }
 
+export interface IosScreenSnapshot {
+  /** User-supplied id, e.g. "home", "settings-empty". */
+  screenId: string;
+  /** Verbatim XCUI source; may be XML or JSON depending on driver. */
+  xcuiSource: string;
+  /** Optional path to the screenshot the agent captured at this point. */
+  screenshotPath?: string;
+}
+
+/**
+ * Parse zero or more `BEGIN_IOS_SCREEN_SNAPSHOT screen_id=<id>` blocks
+ * out of the agent's reasoning. The body is JSON, but to keep the
+ * agent's output cheap to emit we accept either:
+ *
+ *   1. A JSON object with `xcui_source`, `screenshot_path` keys.
+ *   2. A header line followed by the raw XCUI XML through to the
+ *      block end. (Cheaper because the agent doesn't have to escape
+ *      `"` and `\n` in xcui_source.)
+ *
+ * Returns one IosScreenSnapshot per block. Malformed blocks are
+ * skipped silently — orchestrator-side defect detection is best-
+ * effort and shouldn't fail a run.
+ */
+export function parseIosScreenSnapshots(stdout: string): IosScreenSnapshot[] {
+  const re =
+    /BEGIN_IOS_SCREEN_SNAPSHOT\s+screen_id=([^\s\n]+)\s*\n([\s\S]*?)\nEND_IOS_SCREEN_SNAPSHOT/g;
+  const out: IosScreenSnapshot[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stdout)) !== null) {
+    const screenId = m[1]!;
+    const body = m[2]!.trim();
+    if (!body) continue;
+    let xcui: string | null = null;
+    let screenshot: string | undefined;
+    if (body.startsWith('{')) {
+      try {
+        const json = JSON.parse(body) as {
+          xcui_source?: string;
+          screenshot_path?: string;
+        };
+        if (typeof json.xcui_source === 'string') xcui = json.xcui_source;
+        if (typeof json.screenshot_path === 'string') screenshot = json.screenshot_path;
+      } catch {
+        // fall through
+      }
+    } else {
+      // Raw XML form. First line may be a metadata comment with
+      // `screenshot=<path>`; strip it before passing the body on.
+      const lines = body.split(/\r?\n/);
+      const meta = /^#\s*screenshot=(\S+)/.exec(lines[0] ?? '');
+      if (meta) {
+        screenshot = meta[1]!;
+        xcui = lines.slice(1).join('\n');
+      } else {
+        xcui = body;
+      }
+    }
+    if (!xcui) continue;
+    out.push({
+      screenId,
+      xcuiSource: xcui,
+      ...(screenshot ? { screenshotPath: screenshot } : {}),
+    });
+  }
+  return out;
+}
+
 function isIosQaFinding(v: unknown): v is IosQaFinding {
   if (!v || typeof v !== 'object') return false;
   const o = v as Record<string, unknown>;
@@ -58,6 +131,8 @@ function isIosQaFinding(v: unknown): v is IosQaFinding {
   if (typeof o['likely_area'] !== 'string') return false;
   if (typeof o['confidence'] !== 'number') return false;
   if (o['confidence'] < 0 || o['confidence'] > 1) return false;
+  if (o['category'] !== undefined && o['category'] !== 'functional' && o['category'] !== 'visual')
+    return false;
   if (!o['evidence'] || typeof o['evidence'] !== 'object') return false;
   return true;
 }

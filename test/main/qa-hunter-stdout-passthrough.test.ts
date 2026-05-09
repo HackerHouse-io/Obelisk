@@ -130,9 +130,7 @@ describe('QA Hunter: stdout passthrough on no_changes', () => {
 
     // The findings should land in the previews table. Two of them.
     const previews = getDb()
-      .prepare<[string], { payload: string }>(
-        'SELECT payload FROM previews WHERE run_id = ?',
-      )
+      .prepare<[string], { payload: string }>('SELECT payload FROM previews WHERE run_id = ?')
       .all(result.runId);
     expect(previews.length).toBe(2);
 
@@ -144,9 +142,7 @@ describe('QA Hunter: stdout passthrough on no_changes', () => {
 
     // Run summary should reflect both findings.
     const run = getDb()
-      .prepare<[string], { output_summary: string }>(
-        'SELECT output_summary FROM runs WHERE id = ?',
-      )
+      .prepare<[string], { output_summary: string }>('SELECT output_summary FROM runs WHERE id = ?')
       .get(result.runId);
     expect(run?.output_summary).toMatch(/2 previews/);
   });

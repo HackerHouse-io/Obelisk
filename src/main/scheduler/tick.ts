@@ -5,13 +5,17 @@ import {
   getLastRunStartedAtForAgent,
   getRecentScheduledRunsForAgent,
 } from '../db/runs';
+import { getSetting } from '../db/settings';
 import { runAgent } from '../orchestrator/run';
 import { reapStaleRuns } from './heartbeat-reaper';
 import { autoMergeSweep } from './auto-merge';
+import { backlogSyncSweep } from './backlog-sync';
+import { worktreeReaperSweep } from './worktree-reaper';
+import { claimSignalReaperSweep } from './claim-signal-reaper';
 import { defaultCronFor, isDue } from './cron';
 import { broadcast } from '../ipc/bus';
 import { appendAudit } from '../logger/audit';
-import type { Agent, Repo } from '../../shared/types';
+import type { Agent, AgentName, Repo, Run } from '../../shared/types';
 import { getAgentHandler, listImplementedAgents } from '../agents/registry';
 
 /** Auto-pause threshold: N consecutive scheduled failures within the window. */
@@ -20,6 +24,20 @@ const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 const TICK_MS = 30_000;
 const AUTO_MERGE_EVERY_N_TICKS = 10; // = 5 min
+const BACKLOG_SYNC_EVERY_N_TICKS = 4; // = 2 min
+const WORKTREE_REAPER_EVERY_N_TICKS = 20; // = 10 min
+
+/**
+ * Default per-repo cap on concurrent runs of code-writing multi-instance
+ * agents (bug-fixer, feature-builder). Overridable per repo via the
+ * `repo:<id>:bug_fixer_cap` setting. Picked at 3 because it's enough to
+ * overlap I/O + LLM latency while staying under typical CI parallelism +
+ * GitHub create-PR secondary-rate-limit thresholds.
+ */
+const PATCH_AGENT_DEFAULT_CAP = 3;
+
+/** Names of multi-instance agents subject to the per-repo cap. */
+const PATCH_AGENT_NAMES = new Set<AgentName>(['bug-fixer', 'feature-builder']);
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let tickCount = 0;
@@ -58,8 +76,18 @@ async function tick(): Promise<void> {
     dispatchDueAgents(repo);
   }
 
+  if (tickCount % BACKLOG_SYNC_EVERY_N_TICKS === 0) {
+    void backlogSyncSweep();
+  }
   if (tickCount % AUTO_MERGE_EVERY_N_TICKS === 0) {
     void autoMergeSweep();
+  }
+  if (tickCount % WORKTREE_REAPER_EVERY_N_TICKS === 0) {
+    void worktreeReaperSweep();
+    // Same cadence as the worktree reaper: same 24h staleness window
+    // governs both, and rolling them onto adjacent ticks keeps the audit
+    // log easier to read.
+    void claimSignalReaperSweep();
   }
 }
 
@@ -83,6 +111,14 @@ function dispatchDueAgents(repo: Repo): void {
     // even if they're separate instance rows.
     const handler = getAgentHandler(a.name);
     if (!handler.multiInstance && liveAgentNames.has(a.name)) continue;
+
+    // Per-repo cap on patch-producing multi-instance agents. Adding more
+    // bug-fixer instances is the user's primary scaling lever, but unbounded
+    // parallelism risks GitHub secondary rate-limits and CI thrash.
+    if (PATCH_AGENT_NAMES.has(a.name) && handler.multiInstance) {
+      const cap = patchAgentCap(repo);
+      if (countLiveByName(liveRuns, a.name) >= cap) continue;
+    }
 
     // Defense-in-depth: tick-local dispatch dedup. For multi-instance handlers
     // we key by id; for singletons we key by name so two rows of the same
@@ -124,6 +160,20 @@ function dispatchDueAgents(repo: Repo): void {
         inFlightDispatch.delete(dispatchKey);
       });
   }
+}
+
+function countLiveByName(liveRuns: Run[], name: AgentName): number {
+  let n = 0;
+  for (const r of liveRuns) if (r.agentName === name) n += 1;
+  return n;
+}
+
+function patchAgentCap(repo: Repo): number {
+  const override = getSetting<number>(`repo:${repo.id}`, 'bug_fixer_cap');
+  if (typeof override === 'number' && Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+  return PATCH_AGENT_DEFAULT_CAP;
 }
 
 export function shouldOpenCircuitBreaker(agent: Agent, now: Date): boolean {

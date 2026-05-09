@@ -30,7 +30,7 @@ describe('runnerFallback', () => {
     expect(runnerFallback.decide('task-1', 'claude')).toBe('claude');
   });
 
-  it("classifies reasons correctly", () => {
+  it('classifies reasons correctly', () => {
     expect(classifyOutcome(undefined)).toBe('ok');
     expect(classifyOutcome('crash')).toBe('fatal_fail');
     expect(classifyOutcome('non_zero_exit')).toBe('fatal_fail');

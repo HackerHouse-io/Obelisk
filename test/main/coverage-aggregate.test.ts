@@ -10,10 +10,7 @@ import { createAgent } from '../../src/main/db/agents';
 import { createRun, transitionRun } from '../../src/main/db/runs';
 import { savePlan } from '../../src/main/test-plans/store';
 import { insertPreview } from '../../src/main/db/previews';
-import {
-  buildCoverageReport,
-  parseSuspectedFiles,
-} from '../../src/main/coverage/aggregate';
+import { buildCoverageReport, parseSuspectedFiles } from '../../src/main/coverage/aggregate';
 import { ulid } from 'ulid';
 import type { TestPlanFrontmatter } from '../../src/shared/types';
 
@@ -57,7 +54,10 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function plan(frontmatter: Partial<TestPlanFrontmatter>, blocks: Parameters<typeof savePlan>[0]['blocks']): string {
+function plan(
+  frontmatter: Partial<TestPlanFrontmatter>,
+  blocks: Parameters<typeof savePlan>[0]['blocks'],
+): string {
   const id = frontmatter.id ?? ulid();
   // savePlan requires the file to exist already — fake it by writing the markdown
   // directly via the parse module. Easier: use the store's helpers indirectly.
@@ -94,7 +94,9 @@ function makeRun(planId: string, finishedAt: Date, state: 'done' | 'failed' = 'd
   } else {
     transitionRun(run.id, 'failed', { errorCode: 'INTERNAL' });
   }
-  getDb().prepare('UPDATE runs SET finished_at = ? WHERE id = ?').run(finishedAt.toISOString(), run.id);
+  getDb()
+    .prepare('UPDATE runs SET finished_at = ? WHERE id = ?')
+    .run(finishedAt.toISOString(), run.id);
   return run.id;
 }
 

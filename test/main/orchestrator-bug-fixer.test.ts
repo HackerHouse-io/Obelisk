@@ -132,7 +132,9 @@ describe('orchestrator: bug-fixer happy path', () => {
 
     // State machine fired in order.
     const transitions = events
-      .filter((e): e is Extract<BusEvent, { type: 'run.transition' }> => e.type === 'run.transition')
+      .filter(
+        (e): e is Extract<BusEvent, { type: 'run.transition' }> => e.type === 'run.transition',
+      )
       .map((e) => e.state);
     expect(transitions).toEqual(['running', 'running', 'publishing', 'failed']);
 
@@ -198,9 +200,10 @@ describe('orchestrator: bug-fixer happy path', () => {
     // We re-open the DB and read directly (lower-level than the IPC handler).
     const { getDb } = await import('../../src/main/db');
     const auditRows = getDb()
-      .prepare<[string, string], { payload: string }>(
-        "SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?",
-      )
+      .prepare<
+        [string, string],
+        { payload: string }
+      >('SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?')
       .all(result.runId, 'evidence_check');
     expect(auditRows.length).toBe(1);
     const payload = JSON.parse(auditRows[0]!.payload) as {

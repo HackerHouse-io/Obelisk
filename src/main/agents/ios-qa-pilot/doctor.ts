@@ -1,7 +1,13 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { bootstrapPool, keepBooted, type BootstrapOpts } from './sim-pool';
 import { getSetupAt, listSimSlots, setSetupAt } from '../../db/qa-flows';
+import { isConfigured, loadIosConfig, saveIosConfig, type IosConfigPatch } from './config';
+import { detectIosConfig } from './xcode-detect';
+import { scaffoldMemoryFile } from './memory';
+import { scaffoldFile } from '../../util/scaffold-file';
 
 const exec = promisify(execFile);
 
@@ -26,7 +32,11 @@ export interface DoctorReport {
   checkedAt: string;
 }
 
-export type SetupStep = 'install-appium' | 'install-xcuitest' | 'bootstrap-pool';
+export type SetupStep =
+  | 'install-appium'
+  | 'install-xcuitest'
+  | 'bootstrap-pool'
+  | 'scaffold-config';
 
 export interface SetupProgress {
   step: SetupStep;
@@ -36,6 +46,13 @@ export interface SetupProgress {
 
 export interface DoctorOpts {
   repoId: string;
+  /**
+   * Repo working tree. Required so the doctor can probe `qa/ios.yml`. Without
+   * this the doctor would report green even when the repo has no config and
+   * the orchestrator would refuse to dispatch — the exact disconnect users
+   * hit when "Run now" fails right after seeing "Setup healthy".
+   */
+  repoPath: string;
   poolSize: number;
   appiumPortBase: number;
   wdaPortBase: number;
@@ -51,6 +68,7 @@ const STEP_LABELS: Record<SetupStep, string> = {
   'install-appium': 'Installing Appium',
   'install-xcuitest': 'Installing Appium xcuitest driver',
   'bootstrap-pool': 'Bootstrapping simulator pool',
+  'scaffold-config': 'Scaffolding qa/ios.yml',
 };
 
 export async function runDoctor(opts: DoctorOpts): Promise<DoctorReport> {
@@ -64,6 +82,7 @@ export async function runDoctor(opts: DoctorOpts): Promise<DoctorReport> {
   checks.push(await checkXcuitestDriver(run));
   checks.push(checkPoolSlots(opts.poolSize));
   checks.push(checkSetupTimestamp(opts.repoId));
+  checks.push(checkRepoConfig(opts.repoPath));
 
   const overall: CheckLevel = checks.some((c) => c.level === 'red')
     ? 'red'
@@ -127,7 +146,40 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
     }
   }
 
-  // 3. Bootstrap pool slots (clones simulators if missing).
+  // 3. Configure qa/ios.yml. The goal is one-click setup: scan the repo
+  // for an Xcode project, ask xcodebuild for the bundle id + product
+  // path, and fill in qa/ios.yml so the user never has to know what
+  // those values are. If detection fails (no project, xcodebuild
+  // unavailable, ambiguous schemes) we fall back to scaffolding an empty
+  // file so the inline form on the QA Pilot screen has something to
+  // edit. Detection NEVER overwrites fields that are already filled in.
+  emit('scaffold-config', 'started');
+  try {
+    scaffoldRepoConfig(opts.repoPath);
+    let cfg = loadIosConfig(opts.repoPath);
+    const detected = await detectIosConfig(opts.repoPath, run).catch(() => null);
+    if (detected) {
+      const patch: IosConfigPatch = {};
+      if (!cfg.appPath) patch.appPath = detected.appPath;
+      if (!cfg.bundleId) patch.bundleId = detected.bundleId;
+      if (Object.keys(patch).length > 0) cfg = saveIosConfig(opts.repoPath, patch);
+    }
+    // The flow registry needs at least one *.flow.md or the agent
+    // refuses to dispatch (IOS_QA_NO_FLOWS). Scaffold a default
+    // app-sweep flow that drives the user's test plan when the dir is
+    // empty — Run setup is then sufficient to reach a runnable state.
+    scaffoldDefaultFlow(opts.repoPath, cfg.flowsDir);
+    // Per-project memory file for the iOS QA Pilot agent. Created
+    // once, append-only thereafter. Picked up automatically by the
+    // orchestrator's qa/*.md inliner.
+    scaffoldMemoryFile(opts.repoPath);
+    emit('scaffold-config', 'completed');
+  } catch (e) {
+    errors.push({ step: 'configure qa/ios.yml', error: errorMessage(e) });
+    emit('scaffold-config', 'failed');
+  }
+
+  // 4. Bootstrap pool slots (clones simulators if missing).
   emit('bootstrap-pool', 'started');
   try {
     const bootstrap: BootstrapOpts = {
@@ -145,7 +197,9 @@ export async function runSetup(opts: DoctorOpts): Promise<DoctorReport> {
     emit('bootstrap-pool', 'failed');
   }
 
-  // 4. Only stamp setup_at when every required step landed.
+  // 5. Only stamp setup_at when every required step landed. setup_at means
+  // "environment is ready" — the repo_config check is independent and
+  // stays red until the user fills in qa/ios.yml.
   if (errors.length === 0) {
     setSetupAt(opts.repoId, new Date().toISOString());
   }
@@ -353,6 +407,111 @@ function checkPoolSlots(expected: number): DoctorCheck {
     detail: `${slots.length} slots ready (${slots.map((s) => `slot ${s.slotIndex}`).join(', ')}).`,
   };
 }
+
+function checkRepoConfig(repoPath: string): DoctorCheck {
+  const ymlPath = join(repoPath, 'qa', 'ios.yml');
+  if (!existsSync(ymlPath)) {
+    return {
+      id: 'repo_config',
+      label: 'Repo config (qa/ios.yml)',
+      level: 'red',
+      detail:
+        '`qa/ios.yml` is missing — the agent needs `app_path` and `bundle_id` to launch the simulator app.',
+      remediation:
+        'Click "Run setup" to scaffold a starter qa/ios.yml, then open the file and fill in app_path + bundle_id.',
+    };
+  }
+  const cfg = loadIosConfig(repoPath);
+  if (!isConfigured(cfg)) {
+    const missing: string[] = [];
+    if (!cfg.appPath) missing.push('app_path');
+    if (!cfg.bundleId) missing.push('bundle_id');
+    return {
+      id: 'repo_config',
+      label: 'Repo config (qa/ios.yml)',
+      level: 'red',
+      detail: `qa/ios.yml is present but missing required field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.`,
+      remediation: `Open qa/ios.yml in the repo and set ${missing.map((m) => `\`${m}\``).join(' and ')}, then click "Re-check".`,
+    };
+  }
+  return {
+    id: 'repo_config',
+    label: 'Repo config (qa/ios.yml)',
+    level: 'green',
+    detail: `app_path=${cfg.appPath} · bundle_id=${cfg.bundleId}`,
+  };
+}
+
+/**
+ * Write a default `<flowsDir>/app-sweep.flow.md` if no `*.flow.md` files
+ * are present yet. Returns true when a new file was written. Idempotent:
+ * once any flow file exists (even unrelated to this scaffold), the
+ * function does nothing — it never overwrites the user's edits or adds
+ * a duplicate after the user has authored their own flows.
+ */
+export function scaffoldDefaultFlow(repoPath: string, flowsDir: string): boolean {
+  const dir = join(repoPath, flowsDir);
+  let existingFlows = false;
+  try {
+    if (existsSync(dir)) {
+      existingFlows = readdirSync(dir).some((f) => f.endsWith('.flow.md'));
+    }
+  } catch {
+    existingFlows = false;
+  }
+  if (existingFlows) return false;
+  return scaffoldFile(join(dir, 'app-sweep.flow.md'), DEFAULT_FLOW_BODY);
+}
+
+const DEFAULT_FLOW_BODY = [
+  '---',
+  'title: App sweep',
+  'priority: P0',
+  '---',
+  '',
+  '# Steps',
+  '',
+  '1. Launch the app from a clean state (kill prior process if running).',
+  '2. Walk through every case listed in the assigned test plan.',
+  '3. For each case: follow the **Repro** steps and verify the **Expected** outcome.',
+  '4. Capture a screenshot for any case that fails or behaves unexpectedly.',
+  '',
+  '# Notes',
+  '',
+  '- Each test plan case is a checkpoint — log a finding for any divergence.',
+  '- Edit this file to split into focused per-feature flows once you know',
+  '  which surfaces of the app you want to sweep separately.',
+  '',
+].join('\n');
+
+/**
+ * Write a starter `qa/ios.yml` if one doesn't already exist. The empty
+ * quoted strings keep the YAML syntactically valid while making it
+ * obvious which fields the user must fill in. The doctor stays red
+ * (isConfigured returns false) until the user replaces the empties.
+ */
+export function scaffoldRepoConfig(repoPath: string): boolean {
+  return scaffoldFile(join(repoPath, 'qa', 'ios.yml'), STARTER_IOS_YML);
+}
+
+const STARTER_IOS_YML = [
+  '# iOS QA Pilot configuration. Edit the empty fields below, then',
+  '# click "Re-check" on the iOS QA Pilot screen.',
+  '',
+  '# Path to your built .app bundle, relative to the repo root.',
+  '# Example: build/Debug-iphonesimulator/MyApp.app',
+  'app_path: ""',
+  '',
+  "# CFBundleIdentifier from your app's Info.plist.",
+  '# Example: com.example.myapp',
+  'bundle_id: ""',
+  '',
+  '# Optional — defaults below are sensible for most projects.',
+  '# simulator_device: "iPhone 15"',
+  '# max_parallel: 2',
+  '# flows_dir: qa/ios-flows',
+  '',
+].join('\n');
 
 function checkSetupTimestamp(repoId: string): DoctorCheck {
   const at = getSetupAt(repoId);

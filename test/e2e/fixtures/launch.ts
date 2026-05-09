@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import type { SeedAgent, SeedPreview, SeedRepo } from './seed';
+import type { SeedAgent, SeedBacklogRow, SeedPreview, SeedRepo } from './seed';
 import { seed } from './seed';
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
@@ -14,7 +14,12 @@ export interface LaunchedApp {
   window: Page;
   userDataDir: string;
   repoDir: string;
-  fixtures: { repo: SeedRepo; agents: SeedAgent[]; previews: SeedPreview[] } | null;
+  fixtures: {
+    repo: SeedRepo;
+    agents: SeedAgent[];
+    previews: SeedPreview[];
+    backlog: SeedBacklogRow[];
+  } | null;
   cleanup: () => Promise<void>;
 }
 
@@ -28,6 +33,21 @@ export interface LaunchOptions {
    * the runner preflight to pass.
    */
   pathOverride?: string;
+  /**
+   * Point Octokit at a stub HTTP server (see `github-stub.ts`). Sets
+   * `OBELISK_GITHUB_BASE_URL` for the spawned Electron process so every
+   * Octokit call hits the stub instead of api.github.com — the only way
+   * to e2e-test the full claim/sync/PR pipeline without a live repo.
+   */
+  githubBaseUrl?: string;
+  /**
+   * Force `getAuthedLogin()` to return this value instead of consulting
+   * the local Keychain. Required when the test harness needs the
+   * cross-installation guard (or any other login-driven branch) to fire
+   * deterministically without depending on the developer's signed-in
+   * GitHub account.
+   */
+  authedLoginOverride?: string;
 }
 
 /**
@@ -61,9 +81,23 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
       ...process.env,
       OBELISK_E2E: '1',
       PATH: opts.pathOverride ?? '/usr/bin:/bin:/usr/sbin:/sbin',
+      ...(opts.githubBaseUrl ? { OBELISK_GITHUB_BASE_URL: opts.githubBaseUrl } : {}),
+      ...(opts.authedLoginOverride ? { OBELISK_AUTHED_LOGIN: opts.authedLoginOverride } : {}),
     },
     timeout: 30_000,
   });
+  // Forward main-process stderr/stdout to the test runner when debugging.
+  // Set OBELISK_E2E_DEBUG=1 to see what main is doing — particularly useful
+  // when an "element not found" failure is really a silent main-process
+  // crash on boot.
+  if (process.env['OBELISK_E2E_DEBUG'] === '1') {
+    app.process().stderr?.on('data', (chunk: Buffer | string) => {
+      process.stderr.write(`[electron-main] ${chunk}`);
+    });
+    app.process().stdout?.on('data', (chunk: Buffer | string) => {
+      process.stdout.write(`[electron-main] ${chunk}`);
+    });
+  }
 
   const window = await app.firstWindow({ timeout: 30_000 });
   await window.waitForLoadState('domcontentloaded');

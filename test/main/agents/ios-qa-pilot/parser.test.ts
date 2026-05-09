@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseFlowMarkers,
   parseIosQaFindings,
+  parseIosScreenSnapshots,
 } from '../../../../src/main/agents/ios-qa-pilot/parser';
 
 describe('parseIosQaFindings', () => {
@@ -70,14 +71,72 @@ FLOW_INCONCLUSIVE: bbbb2222: WDA failed to attach
 FLOW_OK: cccc3333`;
     const m = parseFlowMarkers(stdout);
     expect(m.ok).toEqual(['aaaa1111', 'cccc3333']);
-    expect(m.inconclusive).toEqual([
-      { flowId: 'bbbb2222', reason: 'WDA failed to attach' },
-    ]);
+    expect(m.inconclusive).toEqual([{ flowId: 'bbbb2222', reason: 'WDA failed to attach' }]);
   });
 
   it('returns empty arrays when no markers present', () => {
     const m = parseFlowMarkers('nothing here');
     expect(m.ok).toEqual([]);
     expect(m.inconclusive).toEqual([]);
+  });
+});
+
+describe('parseIosScreenSnapshots', () => {
+  it('parses the raw form with a screenshot metadata comment', () => {
+    const stdout = `prose
+
+BEGIN_IOS_SCREEN_SNAPSHOT screen_id=home
+# screenshot=obelisk-evidence/F/home.png
+<XCUIElementTypeApplication name="App"/>
+END_IOS_SCREEN_SNAPSHOT
+`;
+    const snaps = parseIosScreenSnapshots(stdout);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0]!.screenId).toBe('home');
+    expect(snaps[0]!.screenshotPath).toBe('obelisk-evidence/F/home.png');
+    expect(snaps[0]!.xcuiSource).toContain('XCUIElementTypeApplication');
+  });
+
+  it('parses the JSON form', () => {
+    const stdout = `BEGIN_IOS_SCREEN_SNAPSHOT screen_id=settings
+{"xcui_source": "<X/>", "screenshot_path": "obelisk-evidence/F/s.png"}
+END_IOS_SCREEN_SNAPSHOT`;
+    const snaps = parseIosScreenSnapshots(stdout);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0]!.xcuiSource).toBe('<X/>');
+    expect(snaps[0]!.screenshotPath).toBe('obelisk-evidence/F/s.png');
+  });
+
+  it('parses raw form without a screenshot metadata comment', () => {
+    const stdout = `BEGIN_IOS_SCREEN_SNAPSHOT screen_id=login
+<XCUIElementTypeApplication name="X"/>
+END_IOS_SCREEN_SNAPSHOT`;
+    const snaps = parseIosScreenSnapshots(stdout);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0]!.screenshotPath).toBeUndefined();
+    expect(snaps[0]!.xcuiSource).toContain('XCUIElementTypeApplication');
+  });
+
+  it('extracts multiple snapshots from one stdout', () => {
+    const stdout = `
+BEGIN_IOS_SCREEN_SNAPSHOT screen_id=a
+<X/>
+END_IOS_SCREEN_SNAPSHOT
+
+filler
+
+BEGIN_IOS_SCREEN_SNAPSHOT screen_id=b
+<Y/>
+END_IOS_SCREEN_SNAPSHOT
+`;
+    const snaps = parseIosScreenSnapshots(stdout);
+    expect(snaps.map((s) => s.screenId)).toEqual(['a', 'b']);
+  });
+
+  it('skips empty / malformed blocks instead of crashing', () => {
+    const stdout = `BEGIN_IOS_SCREEN_SNAPSHOT screen_id=empty
+
+END_IOS_SCREEN_SNAPSHOT`;
+    expect(parseIosScreenSnapshots(stdout)).toEqual([]);
   });
 });

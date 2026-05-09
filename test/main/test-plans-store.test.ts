@@ -84,25 +84,67 @@ describe('test-plans store', () => {
     expect(plan.frontmatter.feature).toBe('Sign In Flow');
   });
 
-  it('listPlans filters by agentName', () => {
-    createPlan({
+  it('listPlans filters by agentName when plans narrow their agentNames list', () => {
+    // createPlan now defaults to all QA agents; explicit `agentNames`
+    // narrows so the filter has something to exclude.
+    const a = createPlan({
+      repoPath: repoDir,
+      agentName: 'qa-hunter',
+      agentNames: ['qa-hunter'],
+      scope: 'whole-app',
+      blocks: blocks(),
+      generatedBy: 'manual',
+    });
+    const b = createPlan({
+      repoPath: repoDir,
+      agentName: 'manual-qa',
+      agentNames: ['manual-qa'],
+      scope: 'whole-app',
+      blocks: blocks(),
+      generatedBy: 'manual',
+    });
+    expect(listPlans(repoDir).length).toBe(2);
+    const onlyHunter = listPlans(repoDir, 'qa-hunter');
+    expect(onlyHunter.map((p) => p.id)).toEqual([a.frontmatter.id]);
+    expect(listPlans(repoDir, 'manual-qa').map((p) => p.id)).toEqual([b.frontmatter.id]);
+  });
+
+  it('createPlan defaults to enabling every QA agent', () => {
+    // The chips on the plan editor are all selected on a brand-new plan;
+    // the user shouldn't have to opt every QA agent in by hand.
+    const plan = createPlan({
       repoPath: repoDir,
       agentName: 'qa-hunter',
       scope: 'whole-app',
       blocks: blocks(),
       generatedBy: 'manual',
     });
-    createPlan({
+    expect(plan.frontmatter.agentNames).toEqual(['qa-hunter', 'manual-qa', 'ios-qa-pilot']);
+    // Each QA agent's listPlans call must find the plan.
+    expect(listPlans(repoDir, 'qa-hunter').map((p) => p.id)).toContain(plan.frontmatter.id);
+    expect(listPlans(repoDir, 'manual-qa').map((p) => p.id)).toContain(plan.frontmatter.id);
+    expect(listPlans(repoDir, 'ios-qa-pilot').map((p) => p.id)).toContain(plan.frontmatter.id);
+  });
+
+  it('listPlans returns a plan for every agent in its agentNames list', () => {
+    // After createPlan + savePlan, a single plan can target multiple agents.
+    // Both agents must be able to find the plan via listPlans(agent).
+    const created = createPlan({
       repoPath: repoDir,
-      agentName: 'manual-qa',
+      agentName: 'qa-hunter',
       scope: 'whole-app',
       blocks: blocks(),
       generatedBy: 'manual',
     });
-    const all = listPlans(repoDir);
-    expect(all.length).toBe(2);
-    const onlyHunter = listPlans(repoDir, 'qa-hunter');
-    expect(onlyHunter.map((p) => p.agentName)).toEqual(['qa-hunter']);
+    savePlan({
+      repoPath: repoDir,
+      planId: created.frontmatter.id,
+      blocks: created.blocks,
+      agentNames: ['qa-hunter', 'ios-qa-pilot'],
+    });
+    expect(listPlans(repoDir, 'qa-hunter').map((p) => p.id)).toContain(created.frontmatter.id);
+    expect(listPlans(repoDir, 'ios-qa-pilot').map((p) => p.id)).toContain(created.frontmatter.id);
+    expect(listPlans(repoDir, 'manual-qa').map((p) => p.id)).not.toContain(created.frontmatter.id);
   });
 
   it('savePlan bumps version + persists changes', () => {

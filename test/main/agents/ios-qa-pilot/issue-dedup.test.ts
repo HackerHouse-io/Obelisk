@@ -6,9 +6,7 @@ import { closeDb, setDbPathForTesting } from '../../../../src/main/db';
 import { runMigrations } from '../../../../src/main/db/migrations';
 import { createRepo } from '../../../../src/main/db/repos';
 import { createRun } from '../../../../src/main/db/runs';
-import {
-  buildPublishPlan,
-} from '../../../../src/main/agents/ios-qa-pilot/issue';
+import { buildPublishPlan } from '../../../../src/main/agents/ios-qa-pilot/issue';
 import type { IosQaFinding } from '../../../../src/main/agents/ios-qa-pilot/parser';
 
 // One mock for both branches — toggle the in-memory `existingIssue` value.

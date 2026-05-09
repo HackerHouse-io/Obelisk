@@ -139,24 +139,20 @@ describe('toAssignedPlan', () => {
 });
 
 describe('generateTestPlan (LLM-only)', () => {
-  it(
-    'rejects when no runner is installed (no silent skeleton fallback)',
-    async () => {
-      // Force the runner check to fail by clearing PATH for this test.
-      const originalPath = process.env['PATH'];
-      process.env['PATH'] = '';
-      try {
-        await expect(
-          generateTestPlan({
-            repo: fakeRepo(),
-            agentName: 'qa-hunter',
-            scope: 'whole-app',
-          }),
-        ).rejects.toThrow(/Neither Claude Code nor Codex/);
-      } finally {
-        process.env['PATH'] = originalPath;
-      }
-    },
-    20_000,
-  );
+  it('rejects when no runner is installed (no silent skeleton fallback)', async () => {
+    // Force the runner check to fail by clearing PATH for this test.
+    const originalPath = process.env['PATH'];
+    process.env['PATH'] = '';
+    try {
+      await expect(
+        generateTestPlan({
+          repo: fakeRepo(),
+          agentName: 'qa-hunter',
+          scope: 'whole-app',
+        }),
+      ).rejects.toThrow(/Neither Claude Code nor Codex/);
+    } finally {
+      process.env['PATH'] = originalPath;
+    }
+  }, 20_000);
 });

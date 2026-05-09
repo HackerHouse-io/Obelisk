@@ -28,6 +28,12 @@ export async function getGithub(): Promise<Octokit | null> {
   const client = new ObeliskOctokit({
     auth: stored.token,
     userAgent: 'obelisk-app/0.0.1',
+    // E2E + integration tests point Octokit at a local stub HTTP server
+    // by setting OBELISK_GITHUB_BASE_URL. In production the env var is
+    // unset and Octokit falls back to its built-in api.github.com base.
+    ...(process.env['OBELISK_GITHUB_BASE_URL']
+      ? { baseUrl: process.env['OBELISK_GITHUB_BASE_URL'] }
+      : {}),
     retry: {
       doNotRetry: [400, 401, 403, 404, 422],
     },

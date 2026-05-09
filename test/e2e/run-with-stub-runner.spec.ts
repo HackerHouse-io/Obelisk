@@ -54,9 +54,9 @@ test('Run QA Hunter dispatches the run and navigates to Mission Control when a r
   // Successful dispatch navigates to Mission Control. The pipeline view's
   // header is the canonical landmark for that screen.
   await expect(
-    page.getByRole('heading', { name: /Mission Control|Pipeline/i }).or(
-      page.locator('.mc-stage').first(),
-    ),
+    page
+      .getByRole('heading', { name: /Mission Control|Pipeline/i })
+      .or(page.locator('.mc-stage').first()),
   ).toBeVisible({ timeout: 15_000 });
 
   // The run row eventually appears on the canvas (queued/running/done all

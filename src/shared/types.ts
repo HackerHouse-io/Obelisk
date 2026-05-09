@@ -105,6 +105,13 @@ export interface Agent {
   nextFireAt?: ISO | null;
   /** Last `started_at` for any run of this agent, regardless of outcome. */
   lastRunAt?: ISO | null;
+  /**
+   * Default test plan for QA agents. When set, Run now (and scheduled
+   * runs) dispatch with this plan; if the plan is later deleted or no
+   * longer applies, the field is null and the agent falls back to
+   * single-plan resolution.
+   */
+  defaultPlanId?: string | null;
 }
 
 export interface Run {
@@ -118,10 +125,38 @@ export interface Run {
   finishedAt: ISO | null;
   trigger: 'schedule' | 'manual' | 'webhook' | 'cloud';
   taskRef: string | null;
+  /**
+   * Snapshot of the human-readable task title at claim time. For Bug Fixer
+   * / Feature Builder this is the GitHub issue title (or manual backlog
+   * row title); for QA agents it's the test plan name; for PR Reviewer the
+   * PR title. Null on rows from before migration 008.
+   */
+  taskContext: string | null;
   runnerUsed: RunnerKind;
   fallbackUsed: boolean;
   outputSummary: string | null;
   errorCode: string | null;
+}
+
+export interface BugFixerHealth {
+  /** ISO timestamp marking the start of the rolling 7-day window. */
+  windowStart: ISO;
+  prsOpened: number;
+  runsDone: number;
+  runsFailed: number;
+  /** Runs aborted by the server-side scope guard (>5 files, lockfile, etc.). */
+  scopeTooWide: number;
+  rebaseSuccess: number;
+  rebaseConflict: number;
+  rebaseError: number;
+  rebaseEscalated: number;
+  ciRetrySuccess: number;
+  ciRetryFailed: number;
+  ciRetryEscalated: number;
+  /** A sibling Obelisk install was already working an issue we tried to claim. */
+  crossInstallSkipped: number;
+  /** Stale `obelisk:in-progress` labels cleared by the reaper. */
+  claimSignalReaped: number;
 }
 
 export interface AuditLine {
@@ -171,7 +206,13 @@ export interface TestPlanFrontmatter {
   name: string;
   scope: TestPlanScope;
   feature: string | null;
-  agentName: AgentName;
+  /**
+   * QA agents this plan can be run by. A plan defines a set of test cases;
+   * different QA agents (qa-hunter, manual-qa, ios-qa-pilot) are different
+   * ways of executing those cases, so the same plan can apply to many.
+   * Always non-empty; defaults to `['qa-hunter']` when unspecified.
+   */
+  agentNames: AgentName[];
   generatedAt: ISO;
   generatedBy: 'claude' | 'codex' | 'heuristic' | 'manual';
   version: number;
@@ -210,7 +251,7 @@ export interface TestPlanSummary {
   name: string;
   scope: TestPlanScope;
   feature: string | null;
-  agentName: AgentName;
+  agentNames: AgentName[];
   caseCount: number;
   generatedAt: ISO;
   updatedAt: ISO;
@@ -349,7 +390,11 @@ export interface DoctorReport {
   setupAt: ISO | null;
 }
 
-export type DoctorSetupStep = 'install-appium' | 'install-xcuitest' | 'bootstrap-pool';
+export type DoctorSetupStep =
+  | 'install-appium'
+  | 'install-xcuitest'
+  | 'bootstrap-pool'
+  | 'scaffold-config';
 
 /* ---------- IPC channel map ---------- */
 
@@ -370,6 +415,18 @@ export interface IpcMap {
   'repos:list': { req: void; res: Repo[] };
   'repos:connect': { req: { localPath?: string; githubFullName?: string }; res: Repo };
   'repos:setMode': { req: { repoId: string; mode: SafetyMode }; res: Repo };
+  /**
+   * Per-repo bug-fixer / feature-builder knobs. Returns the current
+   * effective values after the optional patch is applied. Pass any subset
+   * of the fields to update them; omitted fields stay as-is.
+   */
+  'repos:bugFixerSettings': {
+    req: {
+      repoId: string;
+      patch?: { mergeQueueEnabled?: boolean; cap?: number; maxFiles?: number };
+    };
+    res: { mergeQueueEnabled: boolean; cap: number; maxFiles: number };
+  };
   'repos:pickFolder': { req: void; res: { path: string | null } };
   'repos:listGitHubRepos': {
     req: void;
@@ -404,9 +461,19 @@ export interface IpcMap {
        */
       modelOverride?: string;
     };
-    res: { runId: string };
+    res: {
+      runId: string;
+      /** Stable reference for what got claimed (e.g. `issue#42`, `backlog#<id>`, `plan:<id>`). */
+      taskRef: string | null;
+      /** Human-readable title — GitHub issue title, plan name, etc. */
+      taskContext: string | null;
+    };
   };
   'agents:cancel': { req: { runId: string }; res: { ok: true } };
+  'bugFixer:health': {
+    req: { repoId: string };
+    res: BugFixerHealth;
+  };
   'agents:update': { req: { agentId: string; patch: Partial<Agent> }; res: Agent };
   'agents:create': {
     req: {
@@ -531,7 +598,7 @@ export interface IpcMap {
       repoId: string;
       blocks: TestPlanBlock[];
       name?: string;
-      agentName?: AgentName;
+      agentNames?: AgentName[];
     };
     res: { savedAt: ISO };
   };
@@ -581,6 +648,19 @@ export interface IpcMap {
   'qa:doctor': { req: { repoId: string }; res: DoctorReport };
   'qa:doctorSetup': { req: { repoId: string }; res: DoctorReport };
   'qa:warmPool': { req: void; res: { ok: true } };
+  'qa:getConfig': {
+    req: { repoId: string };
+    res: { appPath: string; bundleId: string; simulatorDevice: string; flowsDir: string };
+  };
+  'qa:saveConfig': {
+    req: {
+      repoId: string;
+      appPath?: string;
+      bundleId?: string;
+      simulatorDevice?: string;
+    };
+    res: { appPath: string; bundleId: string; simulatorDevice: string; flowsDir: string };
+  };
 
   // Settings
   'settings:get': { req: void; res: Settings };

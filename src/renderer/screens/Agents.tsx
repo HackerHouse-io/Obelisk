@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from 'react';
 import { Icon, type IconName } from '../icons';
 import { useStore } from '../state/store';
 import type {
@@ -7,6 +15,7 @@ import type {
   AgentPermissions,
   DoctorReport,
   RunnerKind,
+  TestPlanSummary,
 } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 import { SchedulePresetCard } from './agents/SchedulePresetCard';
@@ -792,13 +801,20 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       }
       // Mirror the Test Plans run flow exactly: dispatch the same toast
       // event (RunStartedToast picks it up at the shell), then route to
-      // Mission Control. The toast tolerates missing planName / caseCount.
+      // Mission Control. We also forward the claimed taskRef + taskContext
+      // (issue#42 + "Crash on cold start") and the repo's full name so the
+      // toast can render a clickable GitHub link.
+      const ownerRepo =
+        useStore.getState().repos.find((r) => r.id === agent.repoId)?.githubFullName ?? null;
       window.dispatchEvent(
         new CustomEvent('obelisk:run-started', {
           detail: {
             runId: res.value.runId,
             agentName: agent.name,
             displayName: agent.displayName,
+            taskRef: res.value.taskRef ?? null,
+            taskContext: res.value.taskContext ?? null,
+            repoFullName: ownerRepo,
           },
         }),
       );
@@ -932,6 +948,12 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
 
       <StatsCard agent={agent} />
       <MissionCard agent={agent} />
+      {agent.name === 'bug-fixer' || agent.name === 'feature-builder' ? (
+        <BugFixerHealthCard repoId={agent.repoId} />
+      ) : null}
+      {QA_AGENT_NAMES.includes(agent.name) ? (
+        <DefaultPlanCard agent={agent} onUpdate={update} />
+      ) : null}
       <SkillsCard agent={agent} />
       <SchedulePresetCard agent={agent} onUpdate={update} />
       <PermissionsCard agent={agent} onUpdate={update} />
@@ -1177,6 +1199,156 @@ function MissionCard({ agent }: { agent: Agent }): ReactElement {
   );
 }
 
+function BugFixerHealthCard({ repoId }: { repoId: string }): ReactElement {
+  const [data, setData] = useState<import('../../shared/types').BugFixerHealth | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    const res = await window.obelisk.invoke('bugFixer:health', { repoId });
+    if (res.ok) {
+      setData(res.value);
+      setError(null);
+    } else {
+      setError(res.error.message);
+    }
+  }, [repoId]);
+
+  useEffect(() => {
+    void refresh();
+    // Repaint on any run transition so the counts feel live.
+    return window.obelisk.subscribe((evt) => {
+      if (evt.type === 'run.transition' || evt.type === 'run.created') {
+        void refresh();
+      }
+    });
+  }, [refresh]);
+
+  if (error) {
+    return (
+      <div className="settings-card">
+        <div className="settings-card-title">Health (last 7 days)</div>
+        <div className="settings-card-sub">Couldn’t load: {error}</div>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="settings-card">
+        <div className="settings-card-title">Health (last 7 days)</div>
+        <div className="settings-card-sub">Loading…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-card" data-testid="bug-fixer-health-card">
+      <div className="settings-card-title">Health (last 7 days)</div>
+      <div className="settings-card-sub">
+        Aggregated from the audit log. Helps you spot rebase storms, scope blowups, and
+        sibling-installation collisions before they pile up.
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gap: 10,
+          marginTop: 10,
+        }}
+      >
+        <HealthMetric
+          label="PRs opened"
+          value={data.prsOpened}
+          tone={data.prsOpened > 0 ? 'ok' : 'neutral'}
+          testId="health-prs-opened"
+        />
+        <HealthMetric
+          label="Runs done"
+          value={data.runsDone}
+          tone={data.runsDone > 0 ? 'ok' : 'neutral'}
+          testId="health-runs-done"
+        />
+        <HealthMetric
+          label="Runs failed"
+          value={data.runsFailed}
+          tone={data.runsFailed > 0 ? 'warn' : 'neutral'}
+          testId="health-runs-failed"
+        />
+        <HealthMetric
+          label="Scope blocked"
+          value={data.scopeTooWide}
+          tone={data.scopeTooWide > 0 ? 'warn' : 'neutral'}
+          testId="health-scope-blocked"
+        />
+        <HealthMetric
+          label="Rebases ok / conflict"
+          value={`${data.rebaseSuccess} / ${data.rebaseConflict}`}
+          tone={data.rebaseConflict > 0 ? 'warn' : 'neutral'}
+          testId="health-rebases"
+        />
+        <HealthMetric
+          label="CI retry ok / failed"
+          value={`${data.ciRetrySuccess} / ${data.ciRetryFailed}`}
+          tone={data.ciRetryFailed > 0 ? 'warn' : 'neutral'}
+          testId="health-ci-retry"
+        />
+        <HealthMetric
+          label="Escalations"
+          value={data.rebaseEscalated + data.ciRetryEscalated}
+          tone={data.rebaseEscalated + data.ciRetryEscalated > 0 ? 'bad' : 'neutral'}
+          testId="health-escalations"
+        />
+        <HealthMetric
+          label="Cross-install skips"
+          value={data.crossInstallSkipped}
+          tone="neutral"
+          testId="health-cross-install"
+        />
+        <HealthMetric
+          label="Stale signals reaped"
+          value={data.claimSignalReaped}
+          tone="neutral"
+          testId="health-reaped"
+        />
+      </div>
+    </div>
+  );
+}
+
+function HealthMetric({
+  label,
+  value,
+  tone,
+  testId,
+}: {
+  label: string;
+  value: string | number;
+  tone: 'ok' | 'warn' | 'bad' | 'neutral';
+  testId: string;
+}): ReactElement {
+  const color =
+    tone === 'ok'
+      ? 'var(--ok)'
+      : tone === 'warn'
+        ? 'var(--warn)'
+        : tone === 'bad'
+          ? 'var(--bad)'
+          : 'var(--t-1)';
+  return (
+    <div
+      data-testid={testId}
+      style={{
+        background: 'var(--bg-0)',
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        padding: '8px 10px',
+      }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 600, color }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--t-2)', marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
 function SkillsCard({ agent }: { agent: Agent }): ReactElement {
   const repos = useStore((s) => s.repos);
   const repo = repos.find((r) => r.id === agent.repoId);
@@ -1227,6 +1399,136 @@ function SkillsCard({ agent }: { agent: Agent }): ReactElement {
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── Default test plan ───────────────────────── */
+
+const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+
+function DefaultPlanCard({
+  agent,
+  onUpdate,
+}: {
+  agent: Agent;
+  onUpdate: (patch: Partial<Agent>) => Promise<void>;
+}): ReactElement {
+  const [plans, setPlans] = useState<TestPlanSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    const res = await window.obelisk.invoke('testPlans:list', {
+      repoId: agent.repoId,
+      agentName: agent.name,
+    });
+    setLoading(false);
+    if (res.ok) {
+      setPlans(res.value);
+      setError(null);
+    } else {
+      setError(res.error.message);
+    }
+  }, [agent.repoId, agent.name]);
+
+  useEffect(() => {
+    void refresh();
+    const unsubscribe = window.obelisk.subscribe((evt) => {
+      if (evt.type === 'testPlans.changed' && evt.repoId === agent.repoId) void refresh();
+    });
+    return unsubscribe;
+  }, [refresh, agent.repoId]);
+
+  // If the saved default no longer applies to this agent (plan deleted, or
+  // the user removed this agent from the plan's agentNames), drop it from
+  // the agent record so the dropdown doesn't display a stale id.
+  useEffect(() => {
+    if (loading || !agent.defaultPlanId) return;
+    if (!plans.some((p) => p.id === agent.defaultPlanId)) {
+      void onUpdate({ defaultPlanId: null });
+    }
+  }, [loading, plans, agent.defaultPlanId, onUpdate]);
+
+  // Auto-pick the first available plan as the default so the user doesn't
+  // have to make an explicit assignment to dispatch. We track per-agent
+  // whether we've already auto-picked so that explicitly choosing
+  // "— No default —" later sticks (it would otherwise re-fire).
+  const autoPickedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (loading) return;
+    if (agent.defaultPlanId) return;
+    if (plans.length === 0) return;
+    if (autoPickedRef.current.has(agent.id)) return;
+    autoPickedRef.current.add(agent.id);
+    void onUpdate({ defaultPlanId: plans[0]!.id });
+  }, [loading, plans, agent.defaultPlanId, agent.id, onUpdate]);
+
+  const value =
+    agent.defaultPlanId && plans.some((p) => p.id === agent.defaultPlanId)
+      ? agent.defaultPlanId
+      : '';
+
+  async function onChange(next: string): Promise<void> {
+    await onUpdate({ defaultPlanId: next || null });
+  }
+
+  return (
+    <div className="settings-card">
+      <div className="settings-card-title">Default test plan</div>
+      <div className="settings-card-sub">
+        Pick a plan to run automatically when you click <em>Run now</em> or when this agent fires on
+        a schedule. You can still pick a different plan ad-hoc from the Test Plans screen.
+      </div>
+      <div style={{ marginTop: 10 }}>
+        {loading ? (
+          <div style={{ fontSize: 12, color: 'var(--t-3)' }}>Loading plans…</div>
+        ) : plans.length === 0 ? (
+          <div className="col" style={{ gap: 6 }}>
+            <div style={{ fontSize: 12, color: 'var(--t-2)' }}>
+              No test plans target this agent yet.
+            </div>
+            <div className="row gap-2">
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => useStore.getState().setRoute('test-plans')}
+              >
+                Open Test Plans
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="row gap-2" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+            <select
+              data-testid={`agent-default-plan-${agent.name}`}
+              className="file-issue-input"
+              value={value}
+              onChange={(e) => void onChange(e.target.value)}
+              style={{ minWidth: 240 }}
+            >
+              <option value="">— No default (pick at run time) —</option>
+              {plans.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.caseCount} case{p.caseCount === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => useStore.getState().setRoute('test-plans')}
+              title="Edit or create plans"
+            >
+              Manage plans
+            </button>
+          </div>
+        )}
+        {error ? (
+          <div style={{ fontSize: 12, color: 'var(--bad)', marginTop: 6 }}>{error}</div>
+        ) : null}
       </div>
     </div>
   );

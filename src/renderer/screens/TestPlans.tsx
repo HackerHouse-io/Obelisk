@@ -121,7 +121,7 @@ export function TestPlans(): ReactElement {
   const saveBlocks = useCallback(
     async (
       blocks: TestPlanBlock[],
-      patch?: { name?: string; agentName?: AgentName },
+      patch?: { name?: string; agentNames?: AgentName[] },
     ): Promise<void> => {
       if (!repo || !activePlan) return;
       const res = await window.obelisk.invoke('testPlans:save', {
@@ -129,7 +129,9 @@ export function TestPlans(): ReactElement {
         repoId: repo.id,
         blocks,
         ...(patch?.name ? { name: patch.name } : {}),
-        ...(patch?.agentName ? { agentName: patch.agentName } : {}),
+        ...(patch?.agentNames && patch.agentNames.length > 0
+          ? { agentNames: patch.agentNames }
+          : {}),
       });
       if (res.ok) setSavedAt(res.value.savedAt);
     },
@@ -159,14 +161,19 @@ export function TestPlans(): ReactElement {
     [activePlan, saveBlocks],
   );
 
-  const onChangeAgent = useCallback(
-    (next: AgentName) => {
-      if (!activePlan || next === activePlan.frontmatter.agentName) return;
+  const onChangeAgents = useCallback(
+    (next: AgentName[]) => {
+      if (!activePlan) return;
+      const dedup = Array.from(new Set(next));
+      if (dedup.length === 0) return;
+      const current = activePlan.frontmatter.agentNames;
+      const same = current.length === dedup.length && current.every((a, i) => a === dedup[i]);
+      if (same) return;
       setActivePlan({
         ...activePlan,
-        frontmatter: { ...activePlan.frontmatter, agentName: next },
+        frontmatter: { ...activePlan.frontmatter, agentNames: dedup },
       });
-      void saveBlocks(activePlan.blocks, { agentName: next });
+      void saveBlocks(activePlan.blocks, { agentNames: dedup });
     },
     [activePlan, saveBlocks],
   );
@@ -202,6 +209,7 @@ export function TestPlans(): ReactElement {
 
   async function runWithPlan(
     plan: TestPlan,
+    targetAgent: AgentName,
     overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
   ): Promise<void> {
     if (!repo || runStarting) return;
@@ -214,11 +222,9 @@ export function TestPlans(): ReactElement {
         setRunStarting(false);
         return;
       }
-      const agent = agentsRes.value.find((a) => a.name === plan.frontmatter.agentName);
+      const agent = agentsRes.value.find((a) => a.name === targetAgent);
       if (!agent) {
-        setRunError(
-          `No ${labelForAgent(plan.frontmatter.agentName)} agent installed for this repo.`,
-        );
+        setRunError(`No ${labelForAgent(targetAgent)} agent installed for this repo.`);
         setRunStarting(false);
         return;
       }
@@ -239,7 +245,7 @@ export function TestPlans(): ReactElement {
         new CustomEvent('obelisk:run-started', {
           detail: {
             runId: res.value.runId,
-            agentName: plan.frontmatter.agentName,
+            agentName: targetAgent,
             planName: plan.frontmatter.name,
             caseCount: plan.caseCount,
           },
@@ -335,8 +341,8 @@ export function TestPlans(): ReactElement {
             runStarting={runStarting}
             onChange={onChangeBlocks}
             onRename={onRenamePlan}
-            onChangeAgent={onChangeAgent}
-            onRun={(overrides) => void runWithPlan(activePlan, overrides)}
+            onChangeAgents={onChangeAgents}
+            onRun={(targetAgent, overrides) => void runWithPlan(activePlan, targetAgent, overrides)}
             onDismissRunError={() => setRunError(null)}
             onDelete={() => {
               const summary = plans.find((p) => p.id === activePlan.frontmatter.id);
@@ -463,7 +469,7 @@ function PlanEditor({
   runStarting,
   onChange,
   onRename,
-  onChangeAgent,
+  onChangeAgents,
   onRun,
   onDismissRunError,
   onDelete,
@@ -474,8 +480,11 @@ function PlanEditor({
   runStarting: boolean;
   onChange: (blocks: TestPlanBlock[]) => void;
   onRename: (next: string) => void;
-  onChangeAgent: (next: AgentName) => void;
-  onRun: (overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string }) => void;
+  onChangeAgents: (next: AgentName[]) => void;
+  onRun: (
+    targetAgent: AgentName,
+    overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
+  ) => void;
   onDismissRunError: () => void;
   onDelete: () => void;
 }): ReactElement {
@@ -552,7 +561,7 @@ function PlanEditor({
               ? `feature · ${plan.frontmatter.feature}`
               : 'whole app'}
             <span className="plan-editor-sep">·</span>
-            <AgentSelect value={plan.frontmatter.agentName} onChange={onChangeAgent} />
+            <AgentMultiSelect value={plan.frontmatter.agentNames} onChange={onChangeAgents} />
             <span className="plan-editor-sep">·</span>
             {plan.caseCount} case{plan.caseCount === 1 ? '' : 's'}
             <span className="plan-editor-sep">·</span>
@@ -570,7 +579,7 @@ function PlanEditor({
             <Icon.Trash size={14} />
           </button>
           <RunButtonWithOptions
-            agentLabel={labelForAgent(plan.frontmatter.agentName)}
+            agents={plan.frontmatter.agentNames}
             caseCount={plan.caseCount}
             runStarting={runStarting}
             onRun={onRun}
@@ -679,25 +688,38 @@ function PlanEditor({
 }
 
 function RunButtonWithOptions({
-  agentLabel,
+  agents,
   caseCount,
   runStarting,
   onRun,
 }: {
-  agentLabel: string;
+  agents: AgentName[];
   caseCount: number;
   runStarting: boolean;
-  onRun: (overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string }) => void;
+  onRun: (
+    targetAgent: AgentName,
+    overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
+  ) => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const [runner, setRunner] = useState<'' | 'claude' | 'codex'>('');
   const [model, setModel] = useState<string>('');
+  const [target, setTarget] = useState<AgentName>(agents[0] ?? 'qa-hunter');
+  // Keep `target` in sync with the plan's agent list — if the user removes
+  // the currently-selected agent from the chips, fall back to the first one.
+  useEffect(() => {
+    if (!agents.includes(target)) {
+      setTarget(agents[0] ?? 'qa-hunter');
+    }
+  }, [agents, target]);
   const wrapRef = useRef<HTMLDivElement>(null);
   useClickOutside(open, wrapRef, () => setOpen(false));
 
+  const agentLabel = labelForAgent(target);
+
   function start(): void {
     setOpen(false);
-    onRun({
+    onRun(target, {
       ...(runner ? { runnerOverride: runner } : {}),
       ...(model.trim() ? { modelOverride: model.trim() } : {}),
     });
@@ -746,8 +768,30 @@ function RunButtonWithOptions({
         <div className="plan-run-popover" role="dialog" aria-label="Run options">
           <div className="plan-run-popover-title">Run {agentLabel}</div>
           <div className="plan-run-popover-sub">
-            Pick the model for this run. Doesn&rsquo;t change the agent&rsquo;s default.
+            {agents.length > 1
+              ? 'Pick which agent runs this plan, and the model for the run.'
+              : "Pick the model for this run. Doesn't change the agent's default."}
           </div>
+          {agents.length > 1 ? (
+            <div className="plan-run-popover-field">
+              <label className="new-plan-label" htmlFor="plan-run-target">
+                Agent
+              </label>
+              <select
+                id="plan-run-target"
+                className="file-issue-input"
+                value={target}
+                onChange={(e) => setTarget(e.target.value as AgentName)}
+                data-testid="plan-run-target"
+              >
+                {agents.map((a) => (
+                  <option key={a} value={a}>
+                    {labelForAgent(a)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div className="plan-run-popover-field">
             <label className="new-plan-label" htmlFor="plan-run-runner">
               Runner
@@ -796,27 +840,53 @@ function RunButtonWithOptions({
 
 const AGENT_OPTIONS: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
 
-function AgentSelect({
+function AgentMultiSelect({
   value,
   onChange,
 }: {
-  value: AgentName;
-  onChange: (next: AgentName) => void;
+  value: AgentName[];
+  onChange: (next: AgentName[]) => void;
 }): ReactElement {
+  function toggle(agent: AgentName): void {
+    if (value.includes(agent)) {
+      // Always keep at least one agent selected — a plan that targets
+      // nobody can't be run by anyone.
+      if (value.length === 1) return;
+      onChange(value.filter((a) => a !== agent));
+    } else {
+      onChange([...value, agent]);
+    }
+  }
   return (
-    <select
-      className="plan-editor-agent-select"
-      value={value}
-      onChange={(e) => onChange(e.target.value as AgentName)}
-      aria-label="Plan target agent"
-      title="Switch which QA agent runs this plan"
+    <span
+      className="plan-editor-agent-chips"
+      role="group"
+      aria-label="QA agents this plan applies to"
+      data-testid="plan-agent-chips"
     >
-      {AGENT_OPTIONS.map((a) => (
-        <option key={a} value={a}>
-          {labelForAgent(a)}
-        </option>
-      ))}
-    </select>
+      {AGENT_OPTIONS.map((a) => {
+        const on = value.includes(a);
+        return (
+          <button
+            key={a}
+            type="button"
+            className={`pill plan-editor-agent-chip${on ? ' selected' : ''}`}
+            aria-pressed={on}
+            onClick={() => toggle(a)}
+            data-testid={`plan-agent-chip-${a}`}
+            title={
+              on
+                ? value.length === 1
+                  ? `${labelForAgent(a)} — at least one agent must stay selected`
+                  : `Remove ${labelForAgent(a)} from this plan`
+                : `Make this plan runnable by ${labelForAgent(a)}`
+            }
+          >
+            {labelForAgent(a)}
+          </button>
+        );
+      })}
+    </span>
   );
 }
 

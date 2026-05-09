@@ -145,6 +145,38 @@ export async function handleReposSetMode(
 }
 
 /**
+ * Read or update the per-repo bug-fixer / feature-builder knobs. Each
+ * field has a sensible default that matches the rest of the codebase
+ * (cap=3, maxFiles=5, mergeQueueEnabled=false).
+ */
+export async function handleReposBugFixerSettings(
+  payload: IpcMap['repos:bugFixerSettings']['req'],
+): Promise<IpcMap['repos:bugFixerSettings']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  const scope = `repo:${payload.repoId}` as const;
+  const { getSetting, setSetting } = await import('../db/settings');
+
+  if (payload.patch) {
+    if (payload.patch.mergeQueueEnabled !== undefined) {
+      setSetting(scope, 'merge_queue_enabled', payload.patch.mergeQueueEnabled);
+    }
+    if (payload.patch.cap !== undefined) {
+      setSetting(scope, 'bug_fixer_cap', payload.patch.cap);
+    }
+    if (payload.patch.maxFiles !== undefined) {
+      setSetting(scope, 'bug_fixer_max_files', payload.patch.maxFiles);
+    }
+  }
+
+  return {
+    mergeQueueEnabled: getSetting<boolean>(scope, 'merge_queue_enabled') ?? false,
+    cap: getSetting<number>(scope, 'bug_fixer_cap') ?? 3,
+    maxFiles: getSetting<number>(scope, 'bug_fixer_max_files') ?? 5,
+  };
+}
+
+/**
  * Surface OS folder-picker through IPC. Returns null if the user cancels.
  */
 export async function handleReposPickFolder(): Promise<IpcMap['repos:pickFolder']['res']> {

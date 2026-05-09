@@ -65,6 +65,33 @@ export interface AgentHandler {
    * successful run and skips the patch/failing-test-diff artifacts.
    */
   readonly producesPatch: boolean;
+
+  /**
+   * Side-effecting setup the orchestrator runs after `selectTask` succeeds
+   * but BEFORE the runner is spawned. Use this for infrastructure that
+   * must exist for the agent to function — booting a simulator, spawning
+   * an Appium server, warming a database. Returning a `RunInfra` lets
+   * the orchestrator call `teardown()` after the run terminates (success
+   * or failure), which is guaranteed to run even if the spawn crashes.
+   *
+   * If `preRun` throws, the run transitions to failed and `postRun`
+   * is not invoked.
+   */
+  preRun?(input: PreRunInput): Promise<RunInfra | null>;
+}
+
+export interface PreRunInput {
+  runId: string;
+  selected: SelectedTask;
+  repo: Repo;
+}
+
+export interface RunInfra {
+  /**
+   * Always runs in the orchestrator's `finally` block. Errors are
+   * swallowed — they should not shadow run failure. Make this idempotent.
+   */
+  teardown: () => Promise<void>;
 }
 
 export interface SelectTaskInput {
@@ -86,6 +113,39 @@ export interface SelectTaskInput {
   agentId?: string;
 }
 
+/**
+ * Marker passed through `RunAgentInput` for resumed runs (e.g. the
+ * CI-failure auto-fix loop). When set, the orchestrator bypasses the
+ * agent's `selectTask` and assembles the SelectedTask itself: the worktree
+ * is attached to `prBranch` (not forked from the default branch), the
+ * publisher skips `gh.pulls.create` (the PR already exists), and the
+ * task.context is augmented with the failure log.
+ *
+ * Agents don't need to inspect this — the orchestrator handles it.
+ */
+export interface ResumeContext {
+  kind: 'ci_failure';
+  prNumber: number;
+  /** The PR's head ref. The orchestrator attaches a worktree to it directly. */
+  prBranch: string;
+  /** Original run id whose PR this is. Used for audit linkage and task_ref reuse. */
+  originalRunId: string;
+  /** Original task_ref so per-task-ref single-flight applies. */
+  taskRef: string;
+  /** Agent name to spawn for the retry — typically the same as the original run. */
+  agentName: AgentName;
+  /** Original GitHub issue number, if any (for sourceIssueNumber on publish). */
+  githubNumber?: number;
+  /**
+   * Truncated failing-CI log, capped at ~10KB total. Spliced into the
+   * agent's task.context so the runner can read it without an extra
+   * GitHub API call.
+   */
+  failureLog: string;
+  /** Free-form one-liner summarising the original task. Goes into task.context. */
+  originalTitle: string;
+}
+
 export interface SelectedTask {
   task: TaskPayload;
   /** The backlog row to lock as in-progress, if applicable. */
@@ -101,6 +161,12 @@ export interface SelectedTask {
    * succeeds, and (b) releases the claim with a result on completion.
    */
   prReviewClaimId?: string;
+  /**
+   * iOS QA Pilot sets this with the simulator slot it claimed. The
+   * orchestrator's preRun reads it to boot the sim and start Appium
+   * before the agent spawn.
+   */
+  iosSimSlot?: { udid: string; appiumPort: number; wdaPort: number };
 }
 
 export interface InterpretResultInput {

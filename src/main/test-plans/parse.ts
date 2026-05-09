@@ -16,11 +16,16 @@ import type {
  *   name: Full app sweep
  *   scope: whole-app
  *   feature: null
- *   agentName: qa-hunter
+ *   agentNames:
+ *     - qa-hunter
+ *     - ios-qa-pilot
  *   generatedAt: 2026-05-05T20:00:00Z
  *   generatedBy: claude
  *   version: 1
  *   ---
+ *
+ * Legacy plans with `agentName: qa-hunter` (singular) are migrated on read
+ * to `agentNames: [qa-hunter]` so existing repos keep working.
  *
  *   ## <Section title>
  *   - [ ] <Case title>                ← optional `severity:P0` and `scope:auth,checkout`
@@ -51,12 +56,17 @@ export function parsePlanFile(raw: string): ParsedPlan {
 }
 
 export function serializePlan(frontmatter: TestPlanFrontmatter, blocks: TestPlanBlock[]): string {
+  const agents = frontmatter.agentNames.length > 0 ? frontmatter.agentNames : ['qa-hunter'];
+  const agentsYaml =
+    agents.length === 1
+      ? `agentNames: [${agents[0]}]`
+      : `agentNames:\n${agents.map((a) => `  - ${a}`).join('\n')}`;
   const fmYaml = [
     `id: ${frontmatter.id}`,
     `name: ${quoteIfNeeded(frontmatter.name)}`,
     `scope: ${frontmatter.scope}`,
     `feature: ${frontmatter.feature ? quoteIfNeeded(frontmatter.feature) : 'null'}`,
-    `agentName: ${frontmatter.agentName}`,
+    agentsYaml,
     `generatedAt: ${frontmatter.generatedAt}`,
     `generatedBy: ${frontmatter.generatedBy}`,
     `version: ${frontmatter.version}`,
@@ -151,7 +161,7 @@ function normalizeFrontmatter(raw: Record<string, unknown>): TestPlanFrontmatter
   const name = stringField(raw, 'name') ?? id;
   const scope = (stringField(raw, 'scope') ?? 'whole-app') as TestPlanScope;
   const feature = stringField(raw, 'feature');
-  const agentName = (stringField(raw, 'agentName') ?? 'qa-hunter') as AgentName;
+  const agentNames = readAgentNames(raw);
   const generatedAt = stringField(raw, 'generatedAt') ?? new Date().toISOString();
   const generatedBy = (stringField(raw, 'generatedBy') ??
     'manual') as TestPlanFrontmatter['generatedBy'];
@@ -162,11 +172,42 @@ function normalizeFrontmatter(raw: Record<string, unknown>): TestPlanFrontmatter
     name,
     scope: scope === 'feature' ? 'feature' : 'whole-app',
     feature: scope === 'feature' ? (feature ?? null) : null,
-    agentName,
+    agentNames,
     generatedAt,
     generatedBy,
     version,
   };
+}
+
+/**
+ * Read either `agentNames: [...]` (new) or `agentName: x` (legacy). Empty
+ * input falls back to `['qa-hunter']` so callers always get a non-empty
+ * list. Duplicates are removed but order is preserved.
+ */
+function readAgentNames(raw: Record<string, unknown>): AgentName[] {
+  const out: AgentName[] = [];
+  const seen = new Set<string>();
+  const push = (v: unknown): void => {
+    if (typeof v !== 'string') return;
+    const t = v.trim();
+    if (!t || t === 'null' || seen.has(t)) return;
+    seen.add(t);
+    out.push(t as AgentName);
+  };
+  const list = raw['agentNames'];
+  if (Array.isArray(list)) {
+    for (const v of list) push(v);
+  } else if (typeof list === 'string') {
+    // YAML inline form like `agentNames: [a, b]` is parsed by gray-matter
+    // as an array, but `agentNames: a, b` would land here as a string.
+    for (const part of list.split(',')) push(part);
+  }
+  if (out.length === 0) {
+    const single = stringField(raw, 'agentName');
+    if (single) push(single);
+  }
+  if (out.length === 0) out.push('qa-hunter');
+  return out;
 }
 
 function stringField(o: Record<string, unknown>, key: string): string | null {

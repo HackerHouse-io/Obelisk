@@ -31,6 +31,26 @@ export interface SeedPreview {
   repoId: string;
 }
 
+export interface SeedBacklogInput {
+  source?: 'manual' | 'gh_issue';
+  /** Required when source is 'gh_issue'. */
+  githubIssue?: number;
+  title: string;
+  kind: 'bug' | 'feature';
+  priorityLabel?: 'P0' | 'P1' | 'P2' | null;
+  /** Optional pin rank — lower wins over priority. */
+  userPinRank?: number | null;
+}
+
+export interface SeedBacklogRow {
+  id: string;
+  title: string;
+  kind: 'bug' | 'feature';
+  priorityLabel: 'P0' | 'P1' | 'P2' | null;
+  source: 'manual' | 'gh_issue';
+  githubIssue: number | null;
+}
+
 export interface SeedIosQaPilotInput {
   /** Flow files to write under `<repo>/qa/ios-flows/`. */
   flows: { fileName: string; title: string; priority?: 'P0' | 'P1' | 'P2'; body?: string }[];
@@ -40,6 +60,12 @@ export interface SeedIosQaPilotInput {
   simSlots?: number;
   /** Override the contents of `qa/ios.yml`. Defaults to a sane fixture. */
   iosYml?: string;
+  /**
+   * Skip writing `qa/ios.yml` entirely. Use this to reproduce the user-facing
+   * "Setup healthy but Run now refuses" disconnect: every environment check
+   * is green, but the per-repo config file is missing so dispatch refuses.
+   */
+  omitIosYml?: boolean;
 }
 
 /**
@@ -55,15 +81,33 @@ export function seed(opts: {
   repoLocalPath: string;
   mode?: 'observe' | 'issues' | 'prs' | 'automerge';
   agents?: SeedAgent['name'][];
+  /**
+   * Number of additional instances per agent type. Useful for multi-instance
+   * agents (bug-fixer, feature-builder, ios-qa-pilot, pr-reviewer) when a test
+   * needs to assert on parallelism, naming, etc. Defaults to 1.
+   */
+  agentCounts?: Partial<Record<SeedAgent['name'], number>>;
+  /** Each instance is enabled by default unless this is false. */
+  agentsEnabled?: boolean;
   previews?: {
     agentName: SeedAgent['name'];
     title: string;
     body: string;
     labels: string[];
   }[];
+  /**
+   * Backlog rows for `bug-fixer` / `feature-builder` to claim. Returned IDs
+   * (in seed order) let tests assert exactly which row got picked.
+   */
+  backlogItems?: SeedBacklogInput[];
   testPlans?: SeedTestPlanInput[];
   iosQaPilot?: SeedIosQaPilotInput;
-}): { repo: SeedRepo; agents: SeedAgent[]; previews: SeedPreview[] } {
+}): {
+  repo: SeedRepo;
+  agents: SeedAgent[];
+  previews: SeedPreview[];
+  backlog: SeedBacklogRow[];
+} {
   mkdirSync(opts.userDataDir, { recursive: true });
   const dbPath = join(opts.userDataDir, 'obelisk.sqlite');
   const db = new DatabaseSync(dbPath);
@@ -82,17 +126,58 @@ export function seed(opts: {
   ).run(repoId, fullName, opts.repoLocalPath, 'main', opts.mode ?? 'observe', 'claude', now, now);
 
   const agents: SeedAgent[] = [];
+  const enabledFlag = opts.agentsEnabled === false ? 0 : 0; // default: disabled (matches prior behaviour)
   for (const name of opts.agents ?? ['qa-hunter']) {
-    const agentId = ulid();
+    const copies = Math.max(1, opts.agentCounts?.[name] ?? 1);
+    for (let i = 0; i < copies; i++) {
+      const agentId = ulid();
+      const display = i === 0 ? agentDisplayNameFor(name) : `${agentDisplayNameFor(name)} ${i + 1}`;
+      // Bug Fixer / Feature Builder need draft_prs=1 so the run row's
+      // permission audit reflects what's actually exercised by the test.
+      const draftPrs = name === 'bug-fixer' || name === 'feature-builder' ? 1 : 0;
+      db.prepare(
+        `INSERT INTO agents (
+          id, repo_id, name, display_name, enabled, runner_override, model_override,
+          schedule_cron, schedule_json, timeout_ms,
+          perm_read_code, perm_run_tests, perm_create_issues, perm_draft_prs, perm_merge,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 1, 1, 1, ?, 0, ?)`,
+      ).run(agentId, repoId, name, display, enabledFlag, 30 * 60 * 1000, draftPrs, now);
+      agents.push({ id: agentId, repoId, name, displayName: display });
+    }
+  }
+
+  const backlog: SeedBacklogRow[] = [];
+  for (const item of opts.backlogItems ?? []) {
+    const id = ulid();
+    const source = item.source ?? 'manual';
+    const ghIssue = source === 'gh_issue' ? (item.githubIssue ?? null) : null;
     db.prepare(
-      `INSERT INTO agents (
-        id, repo_id, name, display_name, enabled, runner_override, model_override,
-        schedule_cron, schedule_json, timeout_ms,
-        perm_read_code, perm_run_tests, perm_create_issues, perm_draft_prs, perm_merge,
-        created_at
-      ) VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, NULL, ?, 1, 1, 1, 0, 0, ?)`,
-    ).run(agentId, repoId, name, agentDisplayNameFor(name), 30 * 60 * 1000, now);
-    agents.push({ id: agentId, repoId, name, displayName: agentDisplayNameFor(name) });
+      `INSERT INTO backlog
+        (id, repo_id, source, github_issue, title, kind,
+         priority_label, user_pin_rank, agent_override, runner_override,
+         in_progress_run, added_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+    ).run(
+      id,
+      repoId,
+      source,
+      ghIssue,
+      item.title,
+      item.kind,
+      item.priorityLabel ?? null,
+      item.userPinRank ?? null,
+      now,
+      now,
+    );
+    backlog.push({
+      id,
+      title: item.title,
+      kind: item.kind,
+      priorityLabel: item.priorityLabel ?? null,
+      source,
+      githubIssue: ghIssue,
+    });
   }
 
   const previews: SeedPreview[] = [];
@@ -117,9 +202,7 @@ export function seed(opts: {
       labels: p.labels,
     });
     const info = db
-      .prepare(
-        `INSERT INTO audit_log (run_id, at, kind, payload) VALUES (?, ?, 'preview', ?)`,
-      )
+      .prepare(`INSERT INTO audit_log (run_id, at, kind, payload) VALUES (?, ?, 'preview', ?)`)
       .run(runId, now, payload);
     previews.push({ id: Number(info.lastInsertRowid), runId, repoId });
   }
@@ -144,6 +227,7 @@ export function seed(opts: {
     repo: { id: repoId, fullName, localPath: opts.repoLocalPath },
     agents,
     previews,
+    backlog,
   };
 }
 
@@ -157,26 +241,33 @@ function seedIosQaPilot(
   const flowsDir = join(repoLocalPath, 'qa', 'ios-flows');
   fs.mkdirSync(flowsDir, { recursive: true });
 
-  const yml =
-    cfg.iosYml ??
-    [
-      'app_path: build/Debug-iphonesimulator/Fixture.app',
-      'bundle_id: com.example.fixture',
-      'simulator_device: iPhone 15',
-      'max_parallel: 2',
-      'appium_port_base: 4723',
-      'wda_port_base: 8100',
-      'flows_dir: qa/ios-flows',
-      '',
-    ].join('\n');
   fs.mkdirSync(join(repoLocalPath, 'qa'), { recursive: true });
-  fs.writeFileSync(join(repoLocalPath, 'qa', 'ios.yml'), yml, 'utf8');
+  if (!cfg.omitIosYml) {
+    const yml =
+      cfg.iosYml ??
+      [
+        'app_path: build/Debug-iphonesimulator/Fixture.app',
+        'bundle_id: com.example.fixture',
+        'simulator_device: iPhone 15',
+        'max_parallel: 2',
+        'appium_port_base: 4723',
+        'wda_port_base: 8100',
+        'flows_dir: qa/ios-flows',
+        '',
+      ].join('\n');
+    fs.writeFileSync(join(repoLocalPath, 'qa', 'ios.yml'), yml, 'utf8');
+  }
 
   for (const f of cfg.flows) {
     const body = f.body ?? '# Steps\n1. Tap something.\n2. Verify it.\n';
-    const fm = ['---', `title: ${f.title}`, `priority: ${f.priority ?? 'P1'}`, '---', '', body].join(
-      '\n',
-    );
+    const fm = [
+      '---',
+      `title: ${f.title}`,
+      `priority: ${f.priority ?? 'P1'}`,
+      '---',
+      '',
+      body,
+    ].join('\n');
     fs.writeFileSync(join(flowsDir, f.fileName), fm, 'utf8');
   }
 
@@ -213,10 +304,7 @@ function seedTestPlanFiles(repoLocalPath: string, plans: SeedTestPlanInput[]): v
   mkdirSync(dir, { recursive: true });
   for (const p of plans) {
     const id =
-      p.id ??
-      (p.scope === 'feature' && p.feature
-        ? `feature-${slugify(p.feature)}`
-        : 'full-app');
+      p.id ?? (p.scope === 'feature' && p.feature ? `feature-${slugify(p.feature)}` : 'full-app');
     const cases = Array.from({ length: p.cases ?? 2 }, (_, i) => i + 1)
       .map(
         (n) =>
@@ -238,11 +326,13 @@ function seedTestPlanFiles(repoLocalPath: string, plans: SeedTestPlanInput[]): v
 }
 
 function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 48) || 'plan';
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+      .slice(0, 48) || 'plan'
+  );
 }
 
 function capitalize(s: string): string {

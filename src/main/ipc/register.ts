@@ -17,6 +17,7 @@ import {
   handleReposSetMode,
   handleReposPickFolder,
   handleReposListGitHubRepos,
+  handleReposBugFixerSettings,
 } from './repos';
 import { handleAllowlistList, handleAllowlistAdd, handleAllowlistRemove } from './allowlist';
 import {
@@ -29,6 +30,7 @@ import {
   handleAgentsDelete,
   handleAgentsReadMd,
 } from './agents';
+import { handleBugFixerHealth } from './bug-fixer-health';
 import {
   handleRunsList,
   handleRunsGet,
@@ -58,10 +60,12 @@ import { handleCoverageList } from './coverage';
 import {
   handleQaDoctor,
   handleQaDoctorSetup,
+  handleQaGetConfig,
   handleQaList,
   handleQaPlan,
   handleQaReset,
   handleQaRunFlow,
+  handleQaSaveConfig,
   handleQaWarmPool,
 } from './qa';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
@@ -103,6 +107,7 @@ export function registerIpcHandlers(): void {
   register('repos:list', handleReposList);
   register('repos:connect', handleReposConnect);
   register('repos:setMode', handleReposSetMode);
+  register('repos:bugFixerSettings', handleReposBugFixerSettings);
   register('repos:pickFolder', handleReposPickFolder);
   register('repos:listGitHubRepos', handleReposListGitHubRepos);
 
@@ -120,6 +125,7 @@ export function registerIpcHandlers(): void {
   register('agents:clone', handleAgentsClone);
   register('agents:delete', handleAgentsDelete);
   register('agents:readMd', handleAgentsReadMd);
+  register('bugFixer:health', handleBugFixerHealth);
 
   // Runs (Phase 4 — real)
   register('runs:list', handleRunsList);
@@ -165,6 +171,8 @@ export function registerIpcHandlers(): void {
   register('qa:doctor', handleQaDoctor);
   register('qa:doctorSetup', handleQaDoctorSetup);
   register('qa:warmPool', handleQaWarmPool);
+  register('qa:getConfig', handleQaGetConfig);
+  register('qa:saveConfig', handleQaSaveConfig);
 
   // Settings (Phase 9 — real)
   register('settings:get', handleSettingsGet);

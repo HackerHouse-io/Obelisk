@@ -58,9 +58,7 @@ test('Run button reflects pending state via aria-disabled while IPC is in flight
   // attribute set inside an evaluate() callback so we observe the React
   // state-update synchronously after the dispatch.
   const observedDuringClick = await page.evaluate(async () => {
-    const btn = document.querySelector(
-      '[data-testid="run-qa-hunter"]',
-    ) as HTMLButtonElement | null;
+    const btn = document.querySelector('[data-testid="run-qa-hunter"]') as HTMLButtonElement | null;
     if (!btn) return { found: false };
     btn.click();
     // Wait one microtask so React applies the synchronous setRunState.

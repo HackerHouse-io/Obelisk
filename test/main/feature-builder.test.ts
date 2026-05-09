@@ -76,7 +76,10 @@ END_FEATURE_OUTPUT
 });
 
 describe('featureBuilderHandler.interpretResult', () => {
-  function fakeRunResult(stdout: string, files: string[]): {
+  function fakeRunResult(
+    stdout: string,
+    files: string[],
+  ): {
     ok: true;
     patch: { diff: string; filesChanged: string[] };
     testsRun: never[];

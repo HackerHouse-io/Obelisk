@@ -6,11 +6,7 @@ import { closeDb, setDbPathForTesting } from '../../src/main/db';
 import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
 import { createAgent } from '../../src/main/db/agents';
-import {
-  createRun,
-  getActiveRunForTaskRef,
-  transitionRun,
-} from '../../src/main/db/runs';
+import { createRun, getActiveRunForTaskRef, transitionRun } from '../../src/main/db/runs';
 import { ObeliskError } from '../../src/shared/errors';
 
 let tmp: string;

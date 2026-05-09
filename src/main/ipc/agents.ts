@@ -69,15 +69,22 @@ export async function handleAgentsRun(
       settled = true;
       fn();
     };
+    // If the caller didn't specify a task, fall back to the agent's saved
+    // default plan. The Agents screen exposes a "Default test plan"
+    // dropdown that writes this — clicking Run now then dispatches that
+    // plan without any extra prompting.
+    const effectiveTaskId =
+      payload.taskId ?? (agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined);
     runAgent({
       repoId: agent.repoId,
       agentName: agent.name,
       agentId: agent.id,
       trigger: 'manual',
-      taskId: payload.taskId,
+      taskId: effectiveTaskId,
       ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
       ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
-      onStarted: (runId) => settle(() => resolve({ runId })),
+      onStarted: ({ runId, taskRef, taskContext }) =>
+        settle(() => resolve({ runId, taskRef, taskContext })),
     }).then(
       (result) => {
         // selectTask returned null (or some other path that completed
@@ -86,7 +93,7 @@ export async function handleAgentsRun(
         // message instead of a stuck spinner.
         settle(() =>
           result.runId
-            ? resolve({ runId: result.runId })
+            ? resolve({ runId: result.runId, taskRef: null, taskContext: null })
             : reject(
                 new ObeliskError('NOT_FOUND', result.reason ?? 'No task to work on right now.'),
               ),

@@ -61,3 +61,58 @@ export async function clearGitHubToken(): Promise<void> {
   await keytar.deletePassword(SERVICE, ACCOUNT_LOGIN).catch(() => undefined);
   await keytar.deletePassword(SERVICE, ACCOUNT_SCOPES).catch(() => undefined);
 }
+
+/**
+ * The connected GitHub user's login (lowercased). Used by claim-on-github
+ * to assign issues to the right user, by clearClaimSignals to remove just
+ * that assignee on cleanup, and by the cross-installation guard to
+ * recognise a sibling Obelisk install.
+ *
+ * The keychain caches the login at sign-in time, so the fast path is a
+ * local OS call. When the keychain doesn't have it (older sign-ins, test
+ * harnesses, or when `OBELISK_GITHUB_BASE_URL` points at a stub server),
+ * we fall back to `gh.users.getAuthenticated` and cache the result for
+ * the lifetime of the process.
+ */
+let authedLoginCache: string | null = null;
+let authedLoginToken: string | null = null;
+
+export async function getAuthedLogin(): Promise<string | null> {
+  // Test/e2e override: explicit env var beats keychain so an isolated
+  // harness doesn't depend on whatever login the developer's local
+  // Keychain happens to hold from a prior real sign-in.
+  const override = process.env['OBELISK_AUTHED_LOGIN'];
+  if (override && override.length > 0) return override.toLowerCase();
+
+  const stored = await loadGitHubToken();
+  if (!stored) {
+    authedLoginCache = null;
+    authedLoginToken = null;
+    return null;
+  }
+  if (stored.login) return stored.login.toLowerCase();
+
+  // Reset the cache when the user signs in/out.
+  if (authedLoginCache && authedLoginToken === stored.token) return authedLoginCache;
+
+  try {
+    const { getGithub } = await import('../github/client');
+    const gh = await getGithub();
+    if (!gh) return null;
+    const resp = await gh.users.getAuthenticated();
+    const login = resp.data.login?.toLowerCase() ?? null;
+    if (login) {
+      authedLoginCache = login;
+      authedLoginToken = stored.token;
+    }
+    return login;
+  } catch {
+    return null;
+  }
+}
+
+/** Test hook: clear the in-process cache between fixtures. */
+export function _resetAuthedLoginCacheForTesting(): void {
+  authedLoginCache = null;
+  authedLoginToken = null;
+}

@@ -68,7 +68,9 @@ function makeRunAndPreview(title: string): { runId: string; previewId: number } 
 
 describe('previews survive deletion of their originating run', () => {
   it('listPreviewsForRepo still returns the finding after the run is deleted', () => {
-    const { runId, previewId } = makeRunAndPreview('[bug] Reset progress leaves streak state behind');
+    const { runId, previewId } = makeRunAndPreview(
+      '[bug] Reset progress leaves streak state behind',
+    );
     expect(listPreviewsForRepo(repoId)).toHaveLength(1);
 
     deleteRun(runId);

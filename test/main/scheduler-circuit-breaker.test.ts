@@ -6,11 +6,7 @@ import { closeDb, getDb, setDbPathForTesting } from '../../src/main/db';
 import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
 import { createAgent, getAgent } from '../../src/main/db/agents';
-import {
-  createRun,
-  getRecentScheduledRunsForAgent,
-  transitionRun,
-} from '../../src/main/db/runs';
+import { createRun, getRecentScheduledRunsForAgent, transitionRun } from '../../src/main/db/runs';
 import { shouldOpenCircuitBreaker } from '../../src/main/scheduler/tick';
 import type { Agent } from '../../src/shared/types';
 

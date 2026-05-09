@@ -28,7 +28,11 @@ import type {
   TestPlanSummary,
 } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
+import { parsePlanIdFromTaskRef } from '../../shared/task-refs';
 import { countByState, derivePerCaseState } from './mission-control-helpers';
+
+// Re-export so test files importing from this module path keep working.
+export { parsePlanIdFromTaskRef };
 
 /**
  * Mission Control: 7-stage pipeline + 460px right drawer with 4 tabs.
@@ -336,6 +340,7 @@ export function MissionControl(): ReactElement {
                         run={run}
                         instanceName={run.agentId ? agentLabels.get(run.agentId) : undefined}
                         planNames={planNames}
+                        repoFullName={repo?.githubFullName ?? null}
                         stageColor={stage.color}
                         selected={run.id === selectedRunId}
                         onClick={() => {
@@ -382,6 +387,7 @@ function RunCard({
   run,
   instanceName,
   planNames,
+  repoFullName,
   stageColor,
   selected,
   onClick,
@@ -391,6 +397,7 @@ function RunCard({
   run: Run;
   instanceName?: string;
   planNames: Map<string, string>;
+  repoFullName: string | null;
   stageColor: string;
   selected: boolean;
   onClick: () => void;
@@ -406,9 +413,15 @@ function RunCard({
   const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
   const canCancel = run.state === 'queued' || run.state === 'running';
 
-  // A friendlier title than raw `plan:<id>` / `gh:<n>` task refs. Falls back
-  // to the literal taskRef so unknown shapes still render usefully.
-  const { title, subtitle } = describeTaskRef(run.taskRef, planNames);
+  // A friendlier title than raw `plan:<id>` / `issue#<n>` / `backlog#<id>`
+  // task refs. Pulls in the snapshotted task_context so the user sees the
+  // GitHub issue title (or manual backlog title) the agent claimed.
+  const { title, subtitle, issueHref } = describeTaskRef(
+    run.taskRef,
+    run.taskContext,
+    planNames,
+    repoFullName,
+  );
   const timeLine = describeRunTime(run);
   const summaryLine = describeOutcome(run);
 
@@ -431,7 +444,23 @@ function RunCard({
           <div className="mc-card-title" title={run.taskRef ?? undefined}>
             {title}
           </div>
-          {subtitle ? <div className="mc-card-subtitle">{subtitle}</div> : null}
+          {subtitle ? (
+            <div className="mc-card-subtitle">
+              {issueHref ? (
+                <a
+                  href={issueHref}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  data-testid={`mc-card-issue-link-${run.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {subtitle}
+                </a>
+              ) : (
+                subtitle
+              )}
+            </div>
+          ) : null}
         </div>
         <div ref={menuRef} className="mc-card-menu">
           <button
@@ -530,25 +559,47 @@ function RunCard({
   );
 }
 
-function describeTaskRef(
+export function describeTaskRef(
   taskRef: string | null,
+  taskContext: string | null,
   planNames: Map<string, string>,
-): { title: string; subtitle: string | null } {
-  if (!taskRef) return { title: 'Ad-hoc run', subtitle: null };
+  repoFullName: string | null,
+): { title: string; subtitle: string | null; issueHref: string | null } {
+  if (!taskRef) return { title: 'Ad-hoc run', subtitle: null, issueHref: null };
   if (taskRef.startsWith('plan:')) {
     const planId = taskRef.slice('plan:'.length);
     const name = planNames.get(planId);
-    if (name) return { title: name, subtitle: 'Test plan' };
-    return { title: planId || 'Test plan', subtitle: 'Test plan (deleted)' };
+    if (name) return { title: name, subtitle: 'Test plan', issueHref: null };
+    return { title: planId || 'Test plan', subtitle: 'Test plan (deleted)', issueHref: null };
   }
+  // Bug Fixer / Feature Builder claim refs: `issue#<n>` for GitHub-backed
+  // backlog rows, `backlog#<id>` for manual rows.
+  if (taskRef.startsWith('issue#')) {
+    const num = taskRef.slice('issue#'.length);
+    const title = taskContext?.trim() ? taskContext.trim() : `Issue #${num}`;
+    const href =
+      repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName)
+        ? `https://github.com/${repoFullName}/issues/${num}`
+        : null;
+    return { title, subtitle: `GitHub issue #${num}`, issueHref: href };
+  }
+  if (taskRef.startsWith('backlog#')) {
+    const title = taskContext?.trim() ? taskContext.trim() : 'Manual backlog item';
+    return { title, subtitle: 'Manual backlog', issueHref: null };
+  }
+  // Legacy shape kept for old run rows.
   if (taskRef.startsWith('gh:')) {
     const num = taskRef.slice('gh:'.length);
-    return { title: `Issue #${num}`, subtitle: 'GitHub' };
+    return { title: `Issue #${num}`, subtitle: 'GitHub', issueHref: null };
   }
   if (taskRef.startsWith('manual:')) {
-    return { title: taskRef.slice('manual:'.length) || 'Manual task', subtitle: 'Manual' };
+    return {
+      title: taskRef.slice('manual:'.length) || 'Manual task',
+      subtitle: 'Manual',
+      issueHref: null,
+    };
   }
-  return { title: taskRef, subtitle: null };
+  return { title: taskRef, subtitle: null, issueHref: null };
 }
 
 function describeRunTime(run: Run): string | null {
@@ -664,6 +715,8 @@ const ERROR_CODE_HELP: Partial<Record<ErrorCode, string>> = {
     'The repo safety mode blocks this action (e.g. trying to open a PR while in Observe).',
   AGENT_BUSY: 'Another instance of this agent is already running for this repo.',
   RUN_ACTIVE: 'This run is still active and can’t be modified yet.',
+  SCOPE_TOO_WIDE:
+    'The patch touched too many files (or a lockfile / generated file). Split the work or raise the per-repo `bug_fixer_max_files` setting.',
 };
 
 function errorCodeHelp(code: string): string {
@@ -1126,11 +1179,6 @@ function groupBlocks(plan: TestPlan): PlanGroup[] {
     }
   }
   return groups;
-}
-
-function parsePlanIdFromTaskRef(taskRef: string | null): string | null {
-  if (!taskRef) return null;
-  return taskRef.startsWith('plan:') ? taskRef.slice('plan:'.length) : null;
 }
 
 function FindingsTab({

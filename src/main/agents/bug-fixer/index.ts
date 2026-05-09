@@ -1,7 +1,16 @@
 import { ulid } from 'ulid';
-import { claimNextBacklogItem, unlockBacklogItem, getBacklogItem } from '../../db/backlog';
+import {
+  claimNextBacklogItem,
+  unlockBacklogItem,
+  deleteBacklogGhIssue,
+  getBacklogItem,
+} from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
-import { fetchIssueAuthor } from '../lib/fetch-issue-author';
+import { fetchIssueContext } from '../lib/fetch-issue-author';
+import { postClaimSignal } from '../lib/claim-on-github';
+import { getAuthedLogin } from '../../auth/token-store';
+import { OBELISK_LABELS } from '../../publisher/labels';
+import { appendAudit } from '../../logger/audit';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -55,20 +64,76 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
     }
     tried.add(item.id);
 
-    const author = await fetchIssueAuthor(input.repo.githubFullName, item.githubIssue);
-    if (author === null) {
+    if (!item.githubIssue) {
       // Manual backlog item with no GitHub issue — skip allowlist (no actor).
       return wrap(item);
     }
-    const allow = checkActorAllowlist({
-      repoId: input.repo.id,
-      login: author,
-      source: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
-    });
-    if (allow.ok) return wrap(item);
 
-    // Allowlist denied — release and try the next candidate.
-    unlockBacklogItem(item.id);
+    // One API call to fetch author + state + locked. Lets us short-circuit
+    // on closed/locked rows without a second round-trip.
+    const ctx = await fetchIssueContext(input.repo.githubFullName, item.githubIssue);
+    if (!ctx) {
+      // No context returned (deleted user, malformed full name) — drop the
+      // row so we don't loop on it.
+      unlockBacklogItem(item.id);
+      deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+      continue;
+    }
+    if (ctx.state === 'closed' || ctx.locked) {
+      // The issue was closed or locked since the last sync. Drop the row
+      // before releasing — this is the only place the bug-fixer learns the
+      // issue is done.
+      unlockBacklogItem(item.id);
+      deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+      continue;
+    }
+
+    // Cross-installation guard: another Obelisk install (or our own
+    // crashed prior run) may already be working this issue. The signature
+    // is "obelisk:in-progress label present AND the connected user is an
+    // assignee". We skip and unlock — the claim-signal reaper will clear
+    // a genuinely orphaned signal after 24h, at which point this issue
+    // becomes claimable again.
+    const authedLogin = await getAuthedLogin().catch(() => null);
+    if (
+      ctx.labels.includes(OBELISK_LABELS.inProgress) &&
+      authedLogin &&
+      ctx.assignees.includes(authedLogin)
+    ) {
+      appendAudit({
+        runId: 'system',
+        kind: 'cross_install_skipped',
+        payload: {
+          source: `issue#${item.githubIssue}`,
+          login: authedLogin,
+          assignees: ctx.assignees,
+        },
+      });
+      unlockBacklogItem(item.id);
+      continue;
+    }
+
+    if (ctx.author) {
+      const allow = checkActorAllowlist({
+        repoId: input.repo.id,
+        login: ctx.author,
+        source: `issue#${item.githubIssue}`,
+      });
+      if (!allow.ok) {
+        unlockBacklogItem(item.id);
+        continue;
+      }
+    }
+
+    // Apply the GitHub-side claim signal (assignee + label) before returning.
+    // Best-effort and audit-logged; never aborts the run.
+    await postClaimSignal({
+      repo: input.repo,
+      issueNumber: item.githubIssue,
+      source: `issue#${item.githubIssue}`,
+    });
+
+    return wrap(item);
   }
   return null;
 }

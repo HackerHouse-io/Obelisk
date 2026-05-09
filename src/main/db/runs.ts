@@ -17,6 +17,7 @@ interface RunRow {
   last_heartbeat_at: string | null;
   trigger: 'schedule' | 'manual' | 'webhook' | 'cloud';
   task_ref: string | null;
+  task_context: string | null;
   runner_used: RunnerKind;
   fallback_used: number;
   output_summary: string | null;
@@ -35,6 +36,7 @@ function mapRow(r: RunRow): Run {
     finishedAt: r.finished_at,
     trigger: r.trigger,
     taskRef: r.task_ref,
+    taskContext: r.task_context,
     runnerUsed: r.runner_used,
     fallbackUsed: r.fallback_used === 1,
     outputSummary: r.output_summary,
@@ -48,6 +50,14 @@ export interface CreateRunInput {
   agentId: string | null;
   trigger: 'schedule' | 'manual' | 'webhook' | 'cloud';
   taskRef: string | null;
+  /**
+   * Snapshot of the task's human-readable context at claim time (typically
+   * the GitHub issue title, or the manual backlog item title). Persisted on
+   * the run row so the renderer can show "Bug Fixer is working on issue#42
+   * — Crash on cold start" without joining back to a row that may have
+   * been unlocked/deleted in the meantime.
+   */
+  taskContext?: string | null;
   runnerUsed: RunnerKind;
 }
 
@@ -88,9 +98,9 @@ export function createRun(input: CreateRunInput): Run {
     db.prepare(
       `INSERT INTO runs
         (id, repo_id, agent_name, agent_id, state, started_at, last_heartbeat_at,
-         trigger, task_ref, runner_used, fallback_used, output_summary,
+         trigger, task_ref, task_context, runner_used, fallback_used, output_summary,
          error_code, worktree_path)
-       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
+       VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`,
     ).run(
       id,
       input.repoId,
@@ -100,6 +110,7 @@ export function createRun(input: CreateRunInput): Run {
       now,
       input.trigger,
       input.taskRef,
+      input.taskContext ?? null,
       input.runnerUsed,
     );
   });
@@ -116,6 +127,24 @@ export function createRun(input: CreateRunInput): Run {
  * Useful for the renderer when surfacing "this plan is already running" in
  * UI without trying to start a duplicate run.
  */
+/**
+ * Latest run (any state) for `(repoId, taskRef)`. Used by the claim-signal
+ * reaper to decide whether a lingering `obelisk:in-progress` label is
+ * orphaned: if the latest run for the same task_ref is terminal and old
+ * enough, we clear the label.
+ */
+export function getLatestRunForTaskRef(repoId: string, taskRef: string): Run | null {
+  const row = getDb()
+    .prepare<[string, string], RunRow>(
+      `SELECT * FROM runs
+        WHERE repo_id = ? AND task_ref = ?
+        ORDER BY started_at DESC NULLS LAST, id DESC
+        LIMIT 1`,
+    )
+    .get(repoId, taskRef);
+  return row ? mapRow(row) : null;
+}
+
 export function getActiveRunForTaskRef(repoId: string, taskRef: string): Run | null {
   const row = getDb()
     .prepare<[string, string], RunRow>(

@@ -119,9 +119,10 @@ describe('agents:cancel — stop an in-flight run', () => {
     expect(result.reason).toBe('user_cancelled');
 
     const row = getDb()
-      .prepare<[string], { state: string; output_summary: string | null }>(
-        'SELECT state, output_summary FROM runs WHERE id = ?',
-      )
+      .prepare<
+        [string],
+        { state: string; output_summary: string | null }
+      >('SELECT state, output_summary FROM runs WHERE id = ?')
       .get(runId!);
     expect(row?.state).toBe('cancelled');
     expect(row?.output_summary).toMatch(/Stopped by the user/);

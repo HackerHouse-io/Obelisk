@@ -38,6 +38,9 @@ export const ERROR_CODES = [
   'IOS_QA_NO_FLOWS',
   'IOS_QA_NOTHING_CLAIMABLE',
   'IOS_QA_POOL_FULL',
+  'IOS_QA_APPIUM_FAILED',
+  'IOS_QA_BUILD_FAILED',
+  'SCOPE_TOO_WIDE',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

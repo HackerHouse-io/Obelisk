@@ -2648,6 +2648,33 @@ body {
   border-color: var(--brand);
 }
 
+.plan-editor-agent-chips {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.plan-editor-agent-chip {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--t-3);
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+}
+.plan-editor-agent-chip:hover {
+  color: var(--t-1);
+  border-color: var(--t-3);
+}
+.plan-editor-agent-chip.selected {
+  color: var(--brand-text);
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
 .plan-editor-actions {
   flex-shrink: 0;
   align-items: center;

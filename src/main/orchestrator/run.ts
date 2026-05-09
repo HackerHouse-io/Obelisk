@@ -21,7 +21,7 @@ import { isCancelled as runIsCancelled, registerRun, unregisterRun } from './act
 import { CaseProgressTracker } from './case-progress';
 import { broadcast } from '../ipc/bus';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
-import { createWorktree, destroyWorktree } from '../git/worktree';
+import { createWorktree, attachWorktree, destroyWorktree } from '../git/worktree';
 import { inferChangeKind } from '../evidence/infer-change-kind';
 import { learnFromPatch } from '../agents/playbook-learner';
 import { getPlaybookDraft, quickRegeneratePlaybook } from '../agents/playbook-bootstrapper/publish';
@@ -29,8 +29,10 @@ import { simpleGit } from 'simple-git';
 import { saveArtifact } from '../evidence/artifact-store';
 import { checkEvidence } from '../evidence/check';
 import { renderPrBody } from '../evidence/pr-body';
-import { publish, clearInProgressLabel } from '../publisher';
+import { publish, clearClaimSignals } from '../publisher';
 import type { RepoSummary, Permissions } from '../prompt-compiler';
+import { checkPatchScope } from '../agents/lib/scope-guard';
+import { getSetting } from '../db/settings';
 
 export interface RunAgentInput {
   repoId: string;
@@ -69,8 +71,18 @@ export interface RunAgentInput {
    * to resolve as soon as we have a runId — without waiting for the (possibly
    * minutes-long) CLI invocation. Skipped when selectTask returns null (no
    * run row is created in that case).
+   *
+   * Receives `taskRef` and `taskContext` so the renderer can show "Bug Fixer
+   * is working on issue#42 — Crash on cold start" the moment Run-now resolves.
    */
-  onStarted?: (runId: string) => void;
+  onStarted?: (info: { runId: string; taskRef: string | null; taskContext: string | null }) => void;
+  /**
+   * Set by the CI-failure auto-fix loop. When provided, the orchestrator
+   * bypasses `selectTask` (assembling the SelectedTask itself), attaches a
+   * worktree to the existing PR branch, and tells the publisher to skip
+   * `pulls.create`. See `agents/types.ts:ResumeContext`.
+   */
+  resumeContext?: import('../agents/types').ResumeContext;
 }
 
 export interface RunAgentOutput {
@@ -117,12 +129,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   const repoDefaultRunner = effectiveDefaultRunner(repo);
 
   // 1) Pick a task. multi-instance handlers use agentId to attribute claims.
-  const selected = await handler.selectTask({
-    repo,
-    defaultRunner: repoDefaultRunner,
-    taskId: input.taskId,
-    ...(agentRow ? { agentId: agentRow.id } : {}),
-  });
+  //    For resumed runs (CI-failure auto-fix) we bypass selectTask and build
+  //    the SelectedTask from the resumeContext so the agent doesn't redraw
+  //    a fresh issue from the backlog.
+  const selected: import('../agents/types').SelectedTask | null = input.resumeContext
+    ? buildResumedSelectedTask(input.resumeContext)
+    : await handler.selectTask({
+        repo,
+        defaultRunner: repoDefaultRunner,
+        taskId: input.taskId,
+        ...(agentRow ? { agentId: agentRow.id } : {}),
+      });
   if (!selected) {
     return { runId: '', finalState: 'done', reason: 'nothing to do' };
   }
@@ -157,6 +174,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       agentId: agentRow?.id ?? null,
       trigger: input.trigger,
       taskRef: selected.task.ref,
+      taskContext: selected.task.context ?? null,
       runnerUsed: runnerKind,
     });
   } catch (e) {
@@ -191,7 +209,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   // sabotage a run that's already past createRun.
   if (input.onStarted) {
     try {
-      input.onStarted(run.id);
+      input.onStarted({
+        runId: run.id,
+        taskRef: selected.task.ref ?? null,
+        taskContext: selected.task.context ?? null,
+      });
     } catch {
       // ignore
     }
@@ -203,15 +225,40 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   const abortController = registerRun(run.id);
 
   let worktreeHandle: { worktreePath: string; branch: string } | null = null;
+  let runInfra: import('../agents/types').RunInfra | null = null;
   try {
-    // 4) Create worktree.
-    worktreeHandle = await createWorktree({
-      repoPath: repo.localPath,
-      repoId: repo.id,
-      runId: run.id,
-      baseBranch: repo.defaultBranch,
-    });
+    // 4) Worktree. Resumed runs attach to the existing PR branch so the
+    //    fix-up commit appends to it; fresh runs fork a new branch off the
+    //    repo's default branch.
+    if (input.resumeContext) {
+      worktreeHandle = await attachWorktree({
+        repoPath: repo.localPath,
+        repoId: repo.id,
+        slot: `${input.resumeContext.originalRunId}-resume-${run.id}`,
+        branch: input.resumeContext.prBranch,
+      });
+    } else {
+      worktreeHandle = await createWorktree({
+        repoPath: repo.localPath,
+        repoId: repo.id,
+        runId: run.id,
+        baseBranch: repo.defaultBranch,
+      });
+    }
     transitionRun(run.id, 'running', { worktreePath: worktreeHandle.worktreePath });
+
+    // 4b) Agent-specific infrastructure setup — boot a simulator, start
+    // an Appium server, etc. The teardown handle is invoked in the
+    // `finally` block regardless of success/failure so we don't leak
+    // child processes when the runner crashes. Skipped under vitest so
+    // unit tests don't shell out to xcrun/appium during parallel runs.
+    if (handler.preRun && !process.env['VITEST']) {
+      runInfra = await handler.preRun({
+        runId: run.id,
+        selected,
+        repo,
+      });
+    }
 
     // 5) Compile the prompt. We compile per-runner because the layout differs
     //    (Claude takes --system-prompt-file + attachments; Codex inlines the
@@ -394,6 +441,35 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
 
     if (handler.producesPatch) {
+      // Server-side scope guard for code-writing agents. The bug-fixer
+      // prompt asks the LLM to keep diffs small, but prompts aren't
+      // enforceable — an LLM that "helpfully" touches 30 files will, and
+      // those PRs are exactly what creates merge-conflict storms when
+      // many bug-fixers run in parallel. The guard rejects oversized or
+      // blacklisted patches before publish.
+      if (input.agentName === 'bug-fixer' || input.agentName === 'feature-builder') {
+        const cap = readScopeCap(repo.id);
+        const scope = checkPatchScope(ok.patch.filesChanged, { maxFiles: cap });
+        if (!scope.ok) {
+          appendAudit({
+            runId: run.id,
+            kind: 'scope_too_wide',
+            payload: {
+              reason: scope.reason,
+              offending: scope.offending,
+              max: cap,
+            },
+          });
+          transitionRun(run.id, 'failed', {
+            errorCode: 'SCOPE_TOO_WIDE',
+            outputSummary: scope.detail.slice(0, 500),
+            runnerUsed: runResult.runnerUsed,
+            fallbackUsed: runResult.fallbackUsed,
+          });
+          return { runId: run.id, finalState: 'failed', reason: 'SCOPE_TOO_WIDE' };
+        }
+      }
+
       saveArtifact({
         runId: run.id,
         repoId: repo.id,
@@ -554,6 +630,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
           plan,
           commitSubject: plan.kind === 'pr' ? plan.title : `chore: ${selected.task.ref}`,
           ...(selected.task.githubNumber ? { sourceIssueNumber: selected.task.githubNumber } : {}),
+          ...(input.resumeContext ? { existingPrNumber: input.resumeContext.prNumber } : {}),
         });
         published.push(result);
         appendAudit({ runId: run.id, kind: 'published', payload: result });
@@ -609,6 +686,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   } finally {
     // Always release the active-runs entry — this run is no longer cancelable.
     unregisterRun(run.id);
+    // Tear down agent-specific infrastructure (Appium server, etc.) BEFORE
+    // any other cleanup so the user doesn't see stale ports lingering.
+    if (runInfra) {
+      await runInfra.teardown().catch(() => undefined);
+    }
     if (selected?.backlogItem) {
       unlockBacklogItem(selected.backlogItem.id);
     }
@@ -632,10 +714,56 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         await destroyWorktree(repo.localPath, worktreeHandle.worktreePath).catch(() => undefined);
       }
     }
-    if (selected.task.githubNumber) {
-      await clearInProgressLabel(repo, selected.task.githubNumber).catch(() => undefined);
+    // Resume runs share the original issue's claim signals; the original
+    // run's lifecycle still owns clearing them. Skipping here avoids
+    // racing with a still-open original PR's label.
+    if (selected.task.githubNumber && !input.resumeContext) {
+      await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
   }
+}
+
+const DEFAULT_SCOPE_CAP = 5;
+
+/** Per-repo override read from settings; falls back to DEFAULT_SCOPE_CAP. */
+function readScopeCap(repoId: string): number {
+  const v = getSetting<number>(`repo:${repoId}`, 'bug_fixer_max_files');
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+  return DEFAULT_SCOPE_CAP;
+}
+
+/**
+ * Assemble a SelectedTask for a CI-retry resumed run. The orchestrator uses
+ * this in place of `handler.selectTask` so the retry doesn't pop a different
+ * issue off the backlog.
+ *
+ * The failure log is spliced into `task.context` so the agent reads it from
+ * the existing prompt path; no prompt-compiler surgery required.
+ */
+function buildResumedSelectedTask(
+  ctx: import('../agents/types').ResumeContext,
+): import('../agents/types').SelectedTask {
+  const context = [
+    `This run is a CI-failure retry for PR #${ctx.prNumber} (branch: ${ctx.prBranch}).`,
+    `Original task: ${ctx.originalTitle}`,
+    '',
+    'Your job: write the SMALLEST fix-up commit that addresses the failing checks.',
+    '- Do NOT rebase or rewrite history; just append a commit.',
+    '- Do NOT open a new PR; the existing PR will pick up the new commit automatically.',
+    '- If you cannot determine a safe fix, emit `BLOCKED ci_retry: <reason>` and stop.',
+    '',
+    '# Failing CI log (truncated)',
+    ctx.failureLog,
+  ].join('\n');
+
+  return {
+    task: {
+      ref: ctx.taskRef,
+      kind: 'bug',
+      context,
+      ...(ctx.githubNumber ? { githubNumber: ctx.githubNumber } : {}),
+    },
+  };
 }
 
 /* ---------- internals ---------- */

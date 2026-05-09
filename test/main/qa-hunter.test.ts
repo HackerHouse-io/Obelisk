@@ -8,8 +8,10 @@ const RICH_FINDING = {
     'When Safari refreshes the session with strict cookies enabled, the silent refresh handler reads a missing Set-Cookie as success and clears the in-memory token, signing the user out mid-session.',
   expected: 'User stays signed in after a 30s idle on Safari.',
   actual: 'User is redirected to /login after a 30s idle on Safari.',
-  repro: '1. Open Safari with strict cookies. 2. Sign in. 3. Idle 30s. 4. Click any authenticated link.',
-  evidence: 'src/auth/session.ts:142 calls readCookie() unconditionally on a 200 response and assigns null when Safari omits Set-Cookie.',
+  repro:
+    '1. Open Safari with strict cookies. 2. Sign in. 3. Idle 30s. 4. Click any authenticated link.',
+  evidence:
+    'src/auth/session.ts:142 calls readCookie() unconditionally on a 200 response and assigns null when Safari omits Set-Cookie.',
   suspected_files: ['src/auth/session.ts:142'],
   suggested_test: "describe('refresh', () => { it('handles strict cookies', () => { /* … */ }) })",
 };
@@ -21,8 +23,10 @@ const SECOND_FINDING = {
     'POST /reports does not validate the request body. An empty payload reaches the DB layer and triggers a 500 from a NOT NULL violation, but the handler never returns a structured error to the caller.',
   expected: 'POST /reports with an empty body returns a 400 describing the missing fields.',
   actual: 'POST /reports with an empty body returns a 500 with no body.',
-  repro: '1. Hit `POST /reports` with `{}` and a valid auth token. 2. Observe 500 + empty body in the response.',
-  evidence: 'src/routes/reports.ts:23 destructures `name` and `period` from `req.body` without a guard; the DB insert throws on NOT NULL.',
+  repro:
+    '1. Hit `POST /reports` with `{}` and a valid auth token. 2. Observe 500 + empty body in the response.',
+  evidence:
+    'src/routes/reports.ts:23 destructures `name` and `period` from `req.body` without a guard; the DB insert throws on NOT NULL.',
   suspected_files: ['src/routes/reports.ts:23'],
   suggested_test: 'POST should reject body without required fields and return 400.',
 };

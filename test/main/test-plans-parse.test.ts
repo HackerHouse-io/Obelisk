@@ -28,7 +28,9 @@ version: 1
     const parsed = parsePlanFile(raw);
     expect(parsed.frontmatter.id).toBe('full-app');
     expect(parsed.frontmatter.scope).toBe('whole-app');
-    expect(parsed.frontmatter.agentName).toBe('qa-hunter');
+    // Legacy `agentName: qa-hunter` (singular) is preserved on read by being
+    // migrated to the new `agentNames` list.
+    expect(parsed.frontmatter.agentNames).toEqual(['qa-hunter']);
     expect(parsed.blocks).toHaveLength(5); // 2 sections + 3 cases
 
     const auth = parsed.blocks[0]!;
@@ -113,12 +115,47 @@ scope: whole-app
       name: 'Tricky: name',
       scope: 'whole-app',
       feature: null,
-      agentName: 'qa-hunter',
+      agentNames: ['qa-hunter'],
       generatedAt: '2026-05-05T20:00:00Z',
       generatedBy: 'manual',
       version: 1,
     };
     const md = serializePlan(fm, []);
     expect(md).toContain('name: "Tricky: name"');
+  });
+
+  it('round-trips multiple agentNames', () => {
+    const fm: TestPlanFrontmatter = {
+      id: 'multi',
+      name: 'Multi-agent plan',
+      scope: 'whole-app',
+      feature: null,
+      agentNames: ['qa-hunter', 'ios-qa-pilot'],
+      generatedAt: '2026-05-05T20:00:00Z',
+      generatedBy: 'manual',
+      version: 1,
+    };
+    const md = serializePlan(fm, []);
+    const reparsed = parsePlanFile(md);
+    expect(reparsed.frontmatter.agentNames).toEqual(['qa-hunter', 'ios-qa-pilot']);
+  });
+
+  it('legacy singular `agentName` is migrated, even with no agentNames present', () => {
+    const raw = `---
+id: legacy
+name: Legacy plan
+scope: whole-app
+feature: null
+agentName: ios-qa-pilot
+generatedAt: 2026-05-05T20:00:00Z
+generatedBy: manual
+version: 1
+---
+
+## A
+- [ ] X
+`;
+    const parsed = parsePlanFile(raw);
+    expect(parsed.frontmatter.agentNames).toEqual(['ios-qa-pilot']);
   });
 });

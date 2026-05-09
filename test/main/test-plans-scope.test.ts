@@ -7,7 +7,7 @@ const FRONTMATTER: TestPlanFrontmatter = {
   name: 'Full app sweep',
   scope: 'whole-app',
   feature: null,
-  agentName: 'qa-hunter',
+  agentNames: ['qa-hunter'],
   generatedAt: '2026-05-07T12:00:00Z',
   generatedBy: 'manual',
   version: 1,

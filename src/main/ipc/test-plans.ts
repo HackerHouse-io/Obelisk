@@ -35,7 +35,9 @@ export async function handleTestPlansSave(
     planId: payload.planId,
     blocks: payload.blocks,
     ...(payload.name ? { name: payload.name } : {}),
-    ...(payload.agentName ? { agentName: payload.agentName } : {}),
+    ...(payload.agentNames && payload.agentNames.length > 0
+      ? { agentNames: payload.agentNames }
+      : {}),
   });
   broadcast({ type: 'testPlans.changed', repoId: repo.id });
   return { savedAt: saved.updatedAt };

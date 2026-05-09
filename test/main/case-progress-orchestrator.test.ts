@@ -113,7 +113,9 @@ describe('case-progress: orchestrator wiring', () => {
           { payload: string }
         >('SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?')
         .all(result.runId, 'case_progress');
-      const events = auditRows.map((r) => JSON.parse(r.payload) as { caseId: string; status: string });
+      const events = auditRows.map(
+        (r) => JSON.parse(r.payload) as { caseId: string; status: string },
+      );
       expect(events).toEqual([
         { caseId: '01H_AAA', status: 'running' },
         { caseId: '01H_AAA', status: 'passed' },
@@ -123,8 +125,9 @@ describe('case-progress: orchestrator wiring', () => {
 
       // Bus broadcasts should mirror the audit rows.
       const busProgress = captured
-        .filter((e): e is Extract<BusEvent, { type: 'run.caseProgress' }> =>
-          e.type === 'run.caseProgress',
+        .filter(
+          (e): e is Extract<BusEvent, { type: 'run.caseProgress' }> =>
+            e.type === 'run.caseProgress',
         )
         .filter((e) => e.runId === result.runId)
         .map((e) => ({ caseId: e.caseId, status: e.status }));

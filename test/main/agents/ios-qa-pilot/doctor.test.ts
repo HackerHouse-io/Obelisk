@@ -1,15 +1,28 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, setDbPathForTesting } from '../../../../src/main/db';
 import { runMigrations } from '../../../../src/main/db/migrations';
 import { createRepo } from '../../../../src/main/db/repos';
-import { runDoctor, runSetup } from '../../../../src/main/agents/ios-qa-pilot/doctor';
+import {
+  runDoctor,
+  runSetup,
+  scaffoldRepoConfig,
+} from '../../../../src/main/agents/ios-qa-pilot/doctor';
 import { getSetupAt, upsertSimSlot, setSetupAt } from '../../../../src/main/db/qa-flows';
 
 let tmp: string;
 let repoId: string;
+
+function writeIosYml(): void {
+  mkdirSync(join(tmp, 'qa'), { recursive: true });
+  writeFileSync(
+    join(tmp, 'qa', 'ios.yml'),
+    'app_path: build/Debug-iphonesimulator/Fixture.app\nbundle_id: com.example.fixture\n',
+    'utf8',
+  );
+}
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'obelisk-doctor-'));
@@ -23,6 +36,10 @@ beforeEach(() => {
     defaultRunner: 'claude',
   });
   repoId = repo.id;
+  // Most tests assume the repo config is in place (they're focused on
+  // environment readiness). The "missing config" test below opts out by
+  // not calling this helper.
+  writeIosYml();
 });
 
 afterEach(() => {
@@ -67,6 +84,7 @@ describe('runDoctor', () => {
     });
     const report = await runDoctor({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -91,6 +109,7 @@ describe('runDoctor', () => {
     });
     const report = await runDoctor({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -115,6 +134,7 @@ describe('runDoctor', () => {
     });
     const report = await runDoctor({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -156,6 +176,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -194,6 +215,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -221,6 +243,7 @@ describe('runDoctor', () => {
     });
     const report = await runDoctor({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -274,6 +297,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -316,6 +340,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -359,6 +384,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -395,6 +421,7 @@ describe('runDoctor', () => {
 
     const report = await runSetup({
       repoId,
+      repoPath: tmp,
       poolSize: 2,
       appiumPortBase: 4723,
       wdaPortBase: 8100,
@@ -410,5 +437,210 @@ describe('runDoctor', () => {
     expect(errs.detail).toContain('which appium: /opt/homebrew/bin/appium');
     expect(errs.detail).toContain('appium --version: 2.5.0');
     expect(errs.detail).toContain('APPIUM_HOME:');
+  });
+
+  // Regression: the doctor used to report "Setup healthy" even when the
+  // repo had no qa/ios.yml. Users would click Run now, the orchestrator
+  // would throw IOS_QA_NOT_CONFIGURED, and the disconnect made it look
+  // like a bug in dispatch rather than a missing per-repo config.
+  it('reports red when qa/ios.yml is missing, even with a fully healthy environment', async () => {
+    rmSync(join(tmp, 'qa', 'ios.yml'), { force: true });
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    setSetupAt(repoId, new Date().toISOString());
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+    const report = await runDoctor({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+    expect(report.overall).toBe('red');
+    const cfg = report.checks.find((c) => c.id === 'repo_config')!;
+    expect(cfg.level).toBe('red');
+    expect(cfg.detail).toContain('qa/ios.yml');
+    expect(cfg.remediation).toContain('app_path');
+    expect(cfg.remediation).toContain('bundle_id');
+  });
+
+  // Regression: previously, "Run setup" couldn't move repo_config from
+  // red to green because nothing in the setup pipeline created qa/ios.yml.
+  // Users were stuck — Run setup completed, but the red row persisted with
+  // no in-app way forward. The fix scaffolds an empty qa/ios.yml so the
+  // user has a concrete file to edit; the doctor then transitions from
+  // "file missing" to "fields empty" with a clear next step.
+  it('runSetup scaffolds qa/ios.yml when missing, and Doctor messaging shifts to "fill in the fields"', async () => {
+    rmSync(join(tmp, 'qa', 'ios.yml'), { force: true });
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+
+    const report = await runSetup({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    // File now exists, with placeholder app_path/bundle_id.
+    expect(existsSync(join(tmp, 'qa', 'ios.yml'))).toBe(true);
+    const body = readFileSync(join(tmp, 'qa', 'ios.yml'), 'utf8');
+    expect(body).toContain('app_path:');
+    expect(body).toContain('bundle_id:');
+
+    // Doctor row shifts: no longer "file missing", now "fields empty".
+    const cfg = report.checks.find((c) => c.id === 'repo_config')!;
+    expect(cfg.level).toBe('red');
+    expect(cfg.detail).toContain('missing required field');
+    expect(cfg.detail).toContain('app_path');
+    expect(cfg.detail).toContain('bundle_id');
+    // Remediation now points at editing the file, not creating it.
+    expect(cfg.remediation).toContain('Open qa/ios.yml');
+    expect(cfg.remediation).toContain('Re-check');
+
+    // setup_at IS stamped — the environment is ready, the user just needs
+    // to fill in the file. Repo config and setup_at are independent signals.
+    expect(getSetupAt(repoId)).not.toBeNull();
+  });
+
+  it('runSetup does not overwrite an existing qa/ios.yml', async () => {
+    const userBody = 'app_path: build/MyApp.app\nbundle_id: com.user.real\n# my comment\n';
+    writeFileSync(join(tmp, 'qa', 'ios.yml'), userBody, 'utf8');
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+
+    await runSetup({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+
+    // The user's bytes are preserved verbatim.
+    expect(readFileSync(join(tmp, 'qa', 'ios.yml'), 'utf8')).toBe(userBody);
+  });
+
+  it('runSetup scaffolds a default flow file when qa/ios-flows is empty', async () => {
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+    await runSetup({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+    expect(existsSync(join(tmp, 'qa', 'ios-flows', 'app-sweep.flow.md'))).toBe(true);
+    const body = readFileSync(join(tmp, 'qa', 'ios-flows', 'app-sweep.flow.md'), 'utf8');
+    expect(body).toContain('title: App sweep');
+    expect(body).toContain('priority: P0');
+  });
+
+  it('runSetup does not overwrite an existing flow file or scaffold a duplicate', async () => {
+    mkdirSync(join(tmp, 'qa', 'ios-flows'), { recursive: true });
+    writeFileSync(
+      join(tmp, 'qa', 'ios-flows', 'login.flow.md'),
+      '---\ntitle: Login\n---\n# Steps\n1. Tap login\n',
+      'utf8',
+    );
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+    await runSetup({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+    // Existing file untouched, no scaffolded file added.
+    expect(readFileSync(join(tmp, 'qa', 'ios-flows', 'login.flow.md'), 'utf8')).toContain(
+      'title: Login',
+    );
+    expect(existsSync(join(tmp, 'qa', 'ios-flows', 'app-sweep.flow.md'))).toBe(false);
+  });
+
+  it('scaffoldRepoConfig is idempotent and creates a valid YAML stub', () => {
+    rmSync(join(tmp, 'qa', 'ios.yml'), { force: true });
+    expect(scaffoldRepoConfig(tmp)).toBe(true);
+    expect(existsSync(join(tmp, 'qa', 'ios.yml'))).toBe(true);
+    // Second call is a no-op — never clobbers existing content.
+    expect(scaffoldRepoConfig(tmp)).toBe(false);
+  });
+
+  it('reports red when qa/ios.yml is present but bundle_id is missing', async () => {
+    writeFileSync(
+      join(tmp, 'qa', 'ios.yml'),
+      'app_path: build/Debug-iphonesimulator/Fixture.app\n',
+      'utf8',
+    );
+    upsertSimSlot({ slotIndex: 0, udid: 'a', appiumPort: 4723, wdaPort: 8100 });
+    upsertSimSlot({ slotIndex: 1, udid: 'b', appiumPort: 4724, wdaPort: 8101 });
+    setSetupAt(repoId, new Date().toISOString());
+    const fakeExec = makeFakeExec({
+      'xcode-select -p': { stdout: '/Applications/Xcode.app', stderr: '' },
+      'xcrun simctl list runtimes -j': { stdout: RUNTIMES_OK, stderr: '' },
+      'node --version': { stdout: 'v20.0.0', stderr: '' },
+      'appium --version': { stdout: '2.0.0', stderr: '' },
+      'appium driver list --installed --json': { stdout: DRIVERS_WITH_XCUITEST, stderr: '' },
+    });
+    const report = await runDoctor({
+      repoId,
+      repoPath: tmp,
+      poolSize: 2,
+      appiumPortBase: 4723,
+      wdaPortBase: 8100,
+      device: 'iPhone 15',
+      exec: fakeExec as never,
+    });
+    expect(report.overall).toBe('red');
+    const cfg = report.checks.find((c) => c.id === 'repo_config')!;
+    expect(cfg.level).toBe('red');
+    expect(cfg.detail).toContain('bundle_id');
   });
 });

@@ -3,12 +3,7 @@ import {
   countByState,
   derivePerCaseState,
 } from '../../src/renderer/screens/mission-control-helpers';
-import type {
-  AuditLine,
-  PreviewedFinding,
-  RunState,
-  TestPlan,
-} from '../../src/shared/types';
+import type { AuditLine, PreviewedFinding, RunState, TestPlan } from '../../src/shared/types';
 
 function makePlan(caseIds: string[]): TestPlan {
   return {
@@ -27,7 +22,11 @@ function makePlan(caseIds: string[]): TestPlan {
   } as unknown as TestPlan;
 }
 
-function progress(caseId: string, status: 'running' | 'passed' | 'failed' | 'inconclusive', at = '2026-05-08T00:00:00Z'): AuditLine {
+function progress(
+  caseId: string,
+  status: 'running' | 'passed' | 'failed' | 'inconclusive',
+  at = '2026-05-08T00:00:00Z',
+): AuditLine {
   return {
     id: `audit-${caseId}-${status}`,
     runId: 'run-1',
@@ -37,7 +36,12 @@ function progress(caseId: string, status: 'running' | 'passed' | 'failed' | 'inc
   } as unknown as AuditLine;
 }
 
-function counts(plan: TestPlan, auditLog: AuditLine[], runState: RunState, findings: PreviewedFinding[] = []) {
+function counts(
+  plan: TestPlan,
+  auditLog: AuditLine[],
+  runState: RunState,
+  findings: PreviewedFinding[] = [],
+) {
   return countByState(derivePerCaseState({ plan, auditLog, findings, runState }));
 }
 
@@ -107,7 +111,12 @@ describe('derivePerCaseState', () => {
   it('a finding tagged with case_id flips that case to failed even without a CASE_FAIL marker', () => {
     const plan = makePlan(['c1', 'c2']);
     const findings = [
-      { id: 'f1', runId: 'run-1', body: 'case_id: c2\nFooBar', dismissed: false } as unknown as PreviewedFinding,
+      {
+        id: 'f1',
+        runId: 'run-1',
+        body: 'case_id: c2\nFooBar',
+        dismissed: false,
+      } as unknown as PreviewedFinding,
     ];
     const c = counts(plan, [progress('c1', 'passed')], 'done', findings);
     expect(c.passed).toBe(1);

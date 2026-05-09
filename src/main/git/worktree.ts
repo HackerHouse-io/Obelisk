@@ -54,6 +54,50 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
   return { worktreePath: dir, branch };
 }
 
+export interface AttachWorktreeInput {
+  /** Source repo's local clone path. */
+  repoPath: string;
+  /** Stable id for the repo (used to namespace the worktree directory). */
+  repoId: string;
+  /**
+   * Slot id used as the worktree directory name. CI-retry callers pass
+   * something like `<runId>-ci-retry-<timestamp>` so it doesn't collide with
+   * the original run's reaped (or live) worktree.
+   */
+  slot: string;
+  /** Existing remote branch to check out (e.g. an open PR's head ref). */
+  branch: string;
+}
+
+/**
+ * Attach a worktree to an EXISTING remote branch (vs `createWorktree`, which
+ * creates a fresh branch off a base). Used for the CI-retry resume flow:
+ * the new run pushes a fix-up commit to the same branch the original PR is
+ * tracking, so GitHub auto-attaches the commit to the PR.
+ */
+export async function attachWorktree(input: AttachWorktreeInput): Promise<WorktreeHandle> {
+  const root = worktreesRoot();
+  const dir = join(root, input.repoId, input.slot);
+
+  if (existsSync(dir)) {
+    throw new ObeliskError(
+      'CONFLICT',
+      `worktree already exists: ${dir}`,
+      'Pick a fresh slot id; attachWorktree refuses to clobber an existing dir.',
+    );
+  }
+  mkdirSync(join(root, input.repoId), { recursive: true });
+
+  const git = simpleGit(input.repoPath);
+  // `git worktree add <path> <branch>` checks out the existing branch into
+  // the new worktree without creating a new local branch. Fetching first
+  // ensures the local ref matches origin so the agent sees the latest tip.
+  await git.fetch('origin', input.branch).catch(() => undefined);
+  await git.raw(['worktree', 'add', dir, input.branch]);
+
+  return { worktreePath: dir, branch: input.branch };
+}
+
 export async function destroyWorktree(repoPath: string, worktreePath: string): Promise<void> {
   const git = simpleGit(repoPath);
   // Best-effort: `worktree remove` complains about uncommitted changes;

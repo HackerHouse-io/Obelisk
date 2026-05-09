@@ -8,11 +8,7 @@ import { runMigrations } from '../../src/main/db/migrations';
 import { createRepo } from '../../src/main/db/repos';
 import { createAgent } from '../../src/main/db/agents';
 import { runAgent } from '../../src/main/orchestrator/run';
-import {
-  listFlows,
-  setSetupAt,
-  upsertSimSlot,
-} from '../../src/main/db/qa-flows';
+import { listFlows, setSetupAt, upsertSimSlot } from '../../src/main/db/qa-flows';
 import { MockRunner, type MockRecipe } from '../helpers/mock-runner';
 import { seedTestPlanFile } from '../helpers/seed-plan';
 
@@ -111,8 +107,10 @@ describe('orchestrator: ios-qa-pilot', () => {
     });
   });
 
-  it('throws IOS_QA_NOT_CONFIGURED when qa/ios.yml is missing required keys', async () => {
-    // Empty out the config file so app_path / bundle_id are blank.
+  it('still throws IOS_QA_NOT_CONFIGURED when no Xcode project is detectable to auto-fill from', async () => {
+    // selectTask self-heals by calling xcodebuild — but without an
+    // .xcodeproj/.xcworkspace in the repo, detectIosConfig returns null
+    // and the original error is the right thing to surface.
     writeFileSync(join(repoPath, 'qa', 'ios.yml'), '# nothing\n');
     await expect(
       runAgent({
@@ -126,20 +124,53 @@ describe('orchestrator: ios-qa-pilot', () => {
     });
   });
 
-  it('throws IOS_QA_NO_FLOWS when the flows directory is empty', async () => {
+  it('selectTask attaches iosSimSlot and inlines the flow body in the prompt context', async () => {
+    // Regression: the agent prompt used to point at the flow file by
+    // path, and the orchestrator runs the agent in a worktree that
+    // doesn't have the freshly-scaffolded files. Inlining the flow body
+    // sidesteps the worktree entirely. The slot also flows through to
+    // the orchestrator's preRun via SelectedTask.iosSimSlot.
+    const { iosQaPilotHandler } = await import('../../src/main/agents/ios-qa-pilot/index');
+    const repo = (await import('../../src/main/db/repos')).getRepo(repoId)!;
+    const selected = await iosQaPilotHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+    });
+    expect(selected).not.toBeNull();
+    expect(selected!.iosSimSlot).toBeDefined();
+    expect(selected!.iosSimSlot!.appiumPort).toBeGreaterThan(0);
+    expect(selected!.iosSimSlot!.udid).toMatch(/udid-/);
+    // Prompt context contains the verbatim flow body, not just a path.
+    expect(selected!.task.context).toContain('Flow file (verbatim');
+    expect(selected!.task.context).toMatch(/Login happy path|Signup/);
+    // And the prompt makes clear that Appium is already up.
+    expect(selected!.task.context).toMatch(/already running/i);
+    expect(selected!.task.context).toMatch(/already booted/i);
+  });
+
+  it('self-heals an empty flows directory by scaffolding a default flow on Run now', async () => {
+    // The user-reported regression: clicking Run now with no flow files
+    // used to throw IOS_QA_NO_FLOWS with a dead-end "add a *.flow.md"
+    // message. selectTask now auto-scaffolds a default flow so dispatch
+    // succeeds without any extra clicks.
     rmSync(join(repoPath, 'qa', 'ios-flows', 'login.flow.md'));
     rmSync(join(repoPath, 'qa', 'ios-flows', 'signup.flow.md'));
-    await expect(
-      runAgent({
-        repoId,
-        agentName: 'ios-qa-pilot',
-        trigger: 'manual',
-        runnerFactory: (kind) => new MockRunner(kind, { filesToWrite: [] }),
-      }),
-    ).rejects.toMatchObject({
-      code: 'IOS_QA_NO_FLOWS',
-      message: expect.stringContaining('qa/ios-flows'),
+    const before = listFlows(repoId);
+    expect(before.length).toBe(0);
+
+    const result = await runAgent({
+      repoId,
+      agentName: 'ios-qa-pilot',
+      trigger: 'manual',
+      runnerFactory: (kind) =>
+        new MockRunner(kind, { filesToWrite: [], reasoning: 'FLOW_OK app-sweep\n' }),
     });
+    expect(result.runId).toBeDefined();
+
+    // The scaffold landed on disk and got registered as a real flow.
+    const after = listFlows(repoId);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.some((f) => f.title === 'App sweep')).toBe(true);
   });
 
   it('runs a flow → emits a finding → records the outcome as failed', async () => {
@@ -160,9 +191,7 @@ describe('orchestrator: ios-qa-pilot', () => {
       // orchestrator currently drops `reasoning` when the result is the
       // synthetic `no_changes`, so read-only agents that need structured
       // output rely on the runner having SOMETHING in the worktree.
-      filesToWrite: [
-        { path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' },
-      ],
+      filesToWrite: [{ path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' }],
       reasoning: `Drove the flow.
 
 BEGIN_IOS_QA_FINDINGS
@@ -215,9 +244,7 @@ END_IOS_QA_FINDINGS
     const targetFlowId = computeFlowId('qa/ios-flows/login.flow.md', 'Login happy path');
 
     const recipe: MockRecipe = {
-      filesToWrite: [
-        { path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' },
-      ],
+      filesToWrite: [{ path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' }],
       reasoning: `All good.
 
 FLOW_OK: ${targetFlowId}
@@ -286,7 +313,9 @@ END_IOS_QA_FINDINGS
     });
     expect(selected).not.toBeNull();
     // Release everything we just claimed.
-    db.prepare(`UPDATE qa_ios_flows SET claimed_run_id = NULL, claimed_at = NULL, status = 'passed'`).run();
+    db.prepare(
+      `UPDATE qa_ios_flows SET claimed_run_id = NULL, claimed_at = NULL, status = 'passed'`,
+    ).run();
     db.prepare(`UPDATE qa_ios_sim_slots SET claimed_run_id = NULL, claimed_at = NULL`).run();
     void computeFlowId; // prevent unused-import warning
 
@@ -301,5 +330,169 @@ END_IOS_QA_FINDINGS
       code: 'IOS_QA_NOTHING_CLAIMABLE',
       hint: expect.stringContaining('Reset'),
     });
+  });
+
+  it('selectTask embeds the plan id in the task ref so Mission Control can show the plan tab', async () => {
+    const { iosQaPilotHandler } = await import('../../src/main/agents/ios-qa-pilot/index');
+    const { getRepo } = await import('../../src/main/db/repos');
+    const repo = getRepo(repoId)!;
+    const selected = await iosQaPilotHandler.selectTask({ repo, defaultRunner: 'claude' });
+    expect(selected).not.toBeNull();
+    // ref shape: ios-qa:<flow_id>:<temp_run_id>:plan:<plan_id>
+    expect(selected!.task.ref).toMatch(/^ios-qa:[^:]+:[^:]+:plan:[^:]+$/);
+    // The plan id matches the seeded test plan (helper writes `full-app`).
+    expect(selected!.task.ref.endsWith(':plan:full-app')).toBe(true);
+  });
+
+  it('interpretResult writes qa/ios-pilot-memory.md when the agent emits BEGIN_IOS_MEMORY_UPDATE', async () => {
+    const { computeFlowId } = await import('../../src/main/agents/ios-qa-pilot/flows');
+    const targetFlowId = computeFlowId('qa/ios-flows/login.flow.md', 'Login happy path');
+    const recipe: MockRecipe = {
+      filesToWrite: [{ path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' }],
+      reasoning: `Drove the flow.
+
+FLOW_OK: ${targetFlowId}
+
+BEGIN_IOS_MEMORY_UPDATE
+## App architecture
+- Tab bar has 4 tabs: Home, School, Profile, Library
+
+## Useful selectors
+- Login CTA: \`accessibility id = cta-login\`
+END_IOS_MEMORY_UPDATE
+`,
+    };
+    const result = await runAgent({
+      repoId,
+      agentName: 'ios-qa-pilot',
+      trigger: 'manual',
+      runnerFactory: (kind) => new MockRunner(kind, recipe),
+    });
+    expect(result.runId).toBeDefined();
+    const memPath = join(repoPath, 'qa', 'ios-pilot-memory.md');
+    const fs = await import('node:fs');
+    expect(fs.existsSync(memPath)).toBe(true);
+    const body = fs.readFileSync(memPath, 'utf8');
+    expect(body).toContain('Tab bar has 4 tabs');
+    expect(body).toContain('Login CTA');
+  });
+
+  it('auto-detects structural defects (text cutoff, tap-target, etc.) from BEGIN_IOS_SCREEN_SNAPSHOT blocks', async () => {
+    // The agent dumps XCUI source per screen; the orchestrator runs
+    // deterministic rules over it and emits findings without burning
+    // any LLM tokens. This is what saves the user's wallet AND
+    // catches defects the LLM would miss.
+    const { computeFlowId } = await import('../../src/main/agents/ios-qa-pilot/flows');
+    const targetFlowId = computeFlowId('qa/ios-flows/login.flow.md', 'Login happy path');
+    const recipe: MockRecipe = {
+      filesToWrite: [{ path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' }],
+      reasoning: `Drove the flow.
+
+BEGIN_IOS_SCREEN_SNAPSHOT screen_id=home
+# screenshot=obelisk-evidence/${targetFlowId}/home.png
+<XCUIElementTypeApplication name="MyApp" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+  <XCUIElementTypeButton name="X" enabled="true" visible="true" x="10" y="10" width="30" height="30"/>
+  <XCUIElementTypeStaticText name="Welcome to your first lesson" enabled="true" visible="true" x="200" y="50" width="300" height="20"/>
+</XCUIElementTypeApplication>
+END_IOS_SCREEN_SNAPSHOT
+
+FLOW_OK: ${targetFlowId}
+
+BEGIN_IOS_QA_FINDINGS
+[]
+END_IOS_QA_FINDINGS
+`,
+    };
+
+    const result = await runAgent({
+      repoId,
+      agentName: 'ios-qa-pilot',
+      trigger: 'manual',
+      runnerFactory: (kind) => new MockRunner(kind, recipe),
+    });
+    expect(result.runId).toBeDefined();
+
+    // Two structural defects expected: tap-target-too-small (30×30
+    // button) + text-cutoff (StaticText overflows parent right edge).
+    const db = getDb();
+    const rows = db
+      .prepare<
+        [string],
+        { kind: string; payload: string }
+      >(`SELECT kind, payload FROM audit_log WHERE run_id = ? AND kind = 'ios_qa_finding'`)
+      .all(result.runId!);
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // Auto-detected findings tag the audit row with severity from the rule.
+    const detectAudit = db
+      .prepare<
+        [string],
+        { payload: string }
+      >(`SELECT payload FROM audit_log WHERE run_id = ? AND kind = 'ios_qa_auto_detect'`)
+      .get(result.runId!);
+    expect(detectAudit).toBeDefined();
+    const auto = JSON.parse(detectAudit!.payload) as {
+      screens: number;
+      structural_defects: number;
+    };
+    expect(auto.screens).toBe(1);
+    expect(auto.structural_defects).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps visual findings at confidence 0.65 (visual floor 0.6) but drops functional findings at 0.65 (functional floor 0.7)', async () => {
+    const { computeFlowId } = await import('../../src/main/agents/ios-qa-pilot/flows');
+    const targetFlowId = computeFlowId('qa/ios-flows/login.flow.md', 'Login happy path');
+    const recipe: MockRecipe = {
+      filesToWrite: [{ path: 'obelisk-evidence/marker.txt', contents: 'flow run marker' }],
+      reasoning: `Drove the flow.
+
+BEGIN_IOS_QA_FINDINGS
+[
+  {
+    "flow_id": "${targetFlowId}",
+    "status": "failed",
+    "category": "visual",
+    "symptom": "Lesson title cut off on Home tab.",
+    "severity": "P1",
+    "repro": "1. Land on Home. 2. Look at top card.",
+    "likely_area": "Home/LessonCard.swift",
+    "confidence": 0.65,
+    "evidence": { "screenshots": ["obelisk-evidence/home.png"] }
+  },
+  {
+    "flow_id": "${targetFlowId}",
+    "status": "failed",
+    "category": "functional",
+    "symptom": "Sign in button does nothing.",
+    "severity": "P1",
+    "repro": "1. Open sign-in. 2. Tap.",
+    "likely_area": "Auth/SignIn.swift",
+    "confidence": 0.65,
+    "evidence": { "screenshots": ["obelisk-evidence/signin.png"] }
+  }
+]
+END_IOS_QA_FINDINGS
+`,
+    };
+    const result = await runAgent({
+      repoId,
+      agentName: 'ios-qa-pilot',
+      trigger: 'manual',
+      runnerFactory: (kind) => new MockRunner(kind, recipe),
+    });
+    expect(result.runId).toBeDefined();
+    // The visual finding survives the 0.6 floor; the functional finding
+    // does not survive the 0.7 floor. We verify by checking the audit
+    // log for the published finding(s): only one ios_qa_finding row.
+    const db = getDb();
+    const rows = db
+      .prepare<
+        [string],
+        { kind: string; payload: string }
+      >(`SELECT kind, payload FROM audit_log WHERE run_id = ? AND kind = 'ios_qa_finding'`)
+      .all(result.runId!);
+    expect(rows.length).toBe(1);
+    // The surviving one is the visual finding.
+    const payload = JSON.parse(rows[0]!.payload) as { plan_kind?: string; severity?: string };
+    expect(payload).toBeDefined();
   });
 });

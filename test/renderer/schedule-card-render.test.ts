@@ -15,9 +15,8 @@ beforeAll(() => {
 
 describe('SchedulePresetCard renders without crashing', () => {
   it('renders for an agent with no schedule (default-cron)', async () => {
-    const { SchedulePresetCard } = await import(
-      '../../src/renderer/screens/agents/SchedulePresetCard'
-    );
+    const { SchedulePresetCard } =
+      await import('../../src/renderer/screens/agents/SchedulePresetCard');
     const agent: Agent = {
       id: 'a1',
       repoId: 'r1',
@@ -50,9 +49,8 @@ describe('SchedulePresetCard renders without crashing', () => {
   });
 
   it('renders for an agent with a cron schedule (auto-opens Custom)', async () => {
-    const { SchedulePresetCard } = await import(
-      '../../src/renderer/screens/agents/SchedulePresetCard'
-    );
+    const { SchedulePresetCard } =
+      await import('../../src/renderer/screens/agents/SchedulePresetCard');
     const agent: Agent = {
       id: 'a2',
       repoId: 'r1',
@@ -84,9 +82,8 @@ describe('SchedulePresetCard renders without crashing', () => {
   });
 
   it('renders for an agent with a recurring "hourly" preset', async () => {
-    const { SchedulePresetCard } = await import(
-      '../../src/renderer/screens/agents/SchedulePresetCard'
-    );
+    const { SchedulePresetCard } =
+      await import('../../src/renderer/screens/agents/SchedulePresetCard');
     const agent: Agent = {
       id: 'a3',
       repoId: 'r1',

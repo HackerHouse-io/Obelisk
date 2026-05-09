@@ -13,6 +13,9 @@ export function setDbPathForTesting(absolutePath: string): void {
     db = null;
   }
   overridePath = absolutePath;
+  // The audit module caches "system sentinel exists" between calls; that
+  // cache stops being valid as soon as we swap to a fresh DB file.
+  void import('../logger/audit').then((m) => m._resetSystemSentinelCacheForTesting());
 }
 
 function resolveUserDataDir(): string {

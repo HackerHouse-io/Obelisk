@@ -38,7 +38,9 @@ describe('heuristic plan walker', () => {
       scope: 'whole-app',
     });
 
-    const sections = blocks.filter((b) => b.kind === 'section').map((b) => (b as { title: string }).title);
+    const sections = blocks
+      .filter((b) => b.kind === 'section')
+      .map((b) => (b as { title: string }).title);
     const cases = blocks.filter((b) => b.kind === 'case').length;
 
     // Smoke + at least 4 feature sections
@@ -62,7 +64,9 @@ describe('heuristic plan walker', () => {
       scope: 'whole-app',
     });
 
-    const sections = blocks.filter((b) => b.kind === 'section').map((b) => (b as { title: string }).title);
+    const sections = blocks
+      .filter((b) => b.kind === 'section')
+      .map((b) => (b as { title: string }).title);
     expect(sections).toContain('Checkout');
     expect(sections).toContain('Profile');
     expect(sections).toContain('Dashboard');
@@ -86,7 +90,9 @@ describe('heuristic plan walker', () => {
       agentName: 'qa-hunter',
       scope: 'whole-app',
     });
-    const sections = blocks.filter((b) => b.kind === 'section').map((b) => (b as { title: string }).title);
+    const sections = blocks
+      .filter((b) => b.kind === 'section')
+      .map((b) => (b as { title: string }).title);
     expect(sections).toContain('Authentication');
     expect(sections).toContain('Billing flow');
     expect(sections).not.toContain('Installation');
@@ -99,7 +105,9 @@ describe('heuristic plan walker', () => {
       agentName: 'qa-hunter',
       scope: 'whole-app',
     });
-    const sections = blocks.filter((b) => b.kind === 'section').map((b) => (b as { title: string }).title);
+    const sections = blocks
+      .filter((b) => b.kind === 'section')
+      .map((b) => (b as { title: string }).title);
     expect(sections).toEqual(['Smoke', 'Core flows']);
   });
 
@@ -110,7 +118,9 @@ describe('heuristic plan walker', () => {
       scope: 'feature',
       featureName: 'checkout',
     });
-    const sections = blocks.filter((b) => b.kind === 'section').map((b) => (b as { title: string }).title);
+    const sections = blocks
+      .filter((b) => b.kind === 'section')
+      .map((b) => (b as { title: string }).title);
     expect(sections.length).toBe(2);
     expect(sections[0]).toMatch(/Checkout/);
     expect(sections[1]).toMatch(/edge cases/i);

@@ -1,7 +1,11 @@
 import { ulid } from 'ulid';
-import { claimNextBacklogItem, unlockBacklogItem } from '../../db/backlog';
+import { claimNextBacklogItem, unlockBacklogItem, deleteBacklogGhIssue } from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
-import { fetchIssueAuthor } from '../lib/fetch-issue-author';
+import { fetchIssueContext } from '../lib/fetch-issue-author';
+import { postClaimSignal } from '../lib/claim-on-github';
+import { getAuthedLogin } from '../../auth/token-store';
+import { OBELISK_LABELS } from '../../publisher/labels';
+import { appendAudit } from '../../logger/audit';
 import { registerArtifactFromPath } from '../lib/register-artifact';
 import type {
   AgentHandler,
@@ -34,11 +38,40 @@ export const featureBuilderHandler: AgentHandler = {
       tried.add(item.id);
 
       if (item.githubIssue) {
-        const author = await fetchIssueAuthor(input.repo.githubFullName, item.githubIssue);
-        if (author) {
+        const ctx = await fetchIssueContext(input.repo.githubFullName, item.githubIssue);
+        if (!ctx) {
+          unlockBacklogItem(item.id);
+          deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+          continue;
+        }
+        if (ctx.state === 'closed' || ctx.locked) {
+          unlockBacklogItem(item.id);
+          deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+          continue;
+        }
+        // Cross-installation guard — see bug-fixer for the rationale.
+        const authedLogin = await getAuthedLogin().catch(() => null);
+        if (
+          ctx.labels.includes(OBELISK_LABELS.inProgress) &&
+          authedLogin &&
+          ctx.assignees.includes(authedLogin)
+        ) {
+          appendAudit({
+            runId: 'system',
+            kind: 'cross_install_skipped',
+            payload: {
+              source: `issue#${item.githubIssue}`,
+              login: authedLogin,
+              assignees: ctx.assignees,
+            },
+          });
+          unlockBacklogItem(item.id);
+          continue;
+        }
+        if (ctx.author) {
           const allow = checkActorAllowlist({
             repoId: input.repo.id,
-            login: author,
+            login: ctx.author,
             source: `issue#${item.githubIssue}`,
           });
           if (!allow.ok) {
@@ -46,6 +79,12 @@ export const featureBuilderHandler: AgentHandler = {
             continue;
           }
         }
+
+        await postClaimSignal({
+          repo: input.repo,
+          issueNumber: item.githubIssue,
+          source: `issue#${item.githubIssue}`,
+        });
       }
 
       return {
