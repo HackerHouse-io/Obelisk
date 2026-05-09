@@ -58,6 +58,7 @@ export const featureBuilderHandler: AgentHandler = {
     const tried = new Set<string>();
     let closed = 0;
     let locked = 0;
+    let triggerGone = 0;
     let crossInstall = 0;
     let allowlistDenied = 0;
 
@@ -87,6 +88,16 @@ export const featureBuilderHandler: AgentHandler = {
           unlockBacklogItem(item.id);
           deleteBacklogGhIssue(input.repo.id, item.githubIssue);
           locked += 1;
+          continue;
+        }
+        // Trigger-label-gone guard — see bug-fixer for the rationale.
+        // The publisher removes `obelisk:feature` after opening a PR; a
+        // stale backlog row that survives that removal must not be picked
+        // again on a back-to-back Run-now click.
+        if (!ctx.labels.includes(OBELISK_LABELS.feature)) {
+          unlockBacklogItem(item.id);
+          deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+          triggerGone += 1;
           continue;
         }
         // Cross-installation guard — see bug-fixer for the rationale.
@@ -165,6 +176,8 @@ export const featureBuilderHandler: AgentHandler = {
     const reasons: string[] = [];
     if (closed > 0) reasons.push(`${closed} closed`);
     if (locked > 0) reasons.push(`${locked} locked`);
+    if (triggerGone > 0)
+      reasons.push(`${triggerGone} no longer labeled \`obelisk:feature\` (PR already opened?)`);
     if (crossInstall > 0) reasons.push(`${crossInstall} claimed by another install`);
     if (allowlistDenied > 0) reasons.push(`${allowlistDenied} not on allowlist`);
     throw new ObeliskError(

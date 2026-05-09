@@ -23,7 +23,7 @@ export interface IssueContext {
   locked: boolean;
   /** Lowercased GitHub logins assigned to the issue. Used by the cross-installation guard. */
   assignees: string[];
-  /** Label names present on the issue. */
+  /** Lowercased label names present on the issue — matches OBELISK_LABELS values directly. */
   labels: string[];
 }
 
@@ -55,6 +55,7 @@ export async function fetchIssueContext(
       .filter((s): s is string => typeof s === 'string' && s.length > 0),
     labels: (resp.data.labels ?? [])
       .map((l) => (typeof l === 'string' ? l : (l?.name ?? '')))
+      .map((s) => s.toLowerCase())
       .filter((s) => s.length > 0),
   };
 }

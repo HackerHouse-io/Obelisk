@@ -194,12 +194,14 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
         // opened against it:
         //   - Add `obelisk:in-progress` (idempotent — usually already
         //     applied at claim time).
-        //   - REMOVE `obelisk:fix` so a sibling bug-fixer doesn't
-        //     re-claim the same issue from the next backlog sync. The
-        //     PR's `Fixes #N` line is what closes the loop now; the
-        //     trigger label has done its job. If the user reopens the
-        //     issue / closes the PR unmerged, they can re-apply
-        //     `obelisk:fix` to retry.
+        //   - REMOVE the trigger label (`obelisk:fix` / `obelisk:feature`)
+        //     so a sibling agent doesn't re-claim the same issue from the
+        //     next backlog sync. The PR's `Fixes #N` line closes the loop
+        //     now; the trigger label has done its job. If the user reopens
+        //     the issue / closes the PR unmerged, they can re-apply the
+        //     trigger label to retry. We attempt removal of BOTH possible
+        //     trigger labels — 404s are silently ignored, so the unused
+        //     label call is free.
         if (input.sourceIssueNumber) {
           await gh.issues
             .addLabels({
@@ -209,15 +211,17 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
               labels: [OBELISK_LABELS.inProgress],
             })
             .catch(() => undefined);
-          await gh.issues
-            .removeLabel({
-              owner,
-              repo: repoName,
-              issue_number: input.sourceIssueNumber,
-              name: OBELISK_LABELS.fix,
-            })
-            // 404 here means the label wasn't on the issue — fine.
-            .catch(() => undefined);
+          for (const labelName of [OBELISK_LABELS.fix, OBELISK_LABELS.feature]) {
+            await gh.issues
+              .removeLabel({
+                owner,
+                repo: repoName,
+                issue_number: input.sourceIssueNumber,
+                name: labelName,
+              })
+              // 404 here means the label wasn't on the issue — fine.
+              .catch(() => undefined);
+          }
         }
       }
 

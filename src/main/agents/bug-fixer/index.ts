@@ -86,6 +86,7 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   const tried = new Set<string>();
   let closed = 0;
   let locked = 0;
+  let triggerGone = 0;
   let crossInstall = 0;
   let allowlistDenied = 0;
 
@@ -124,6 +125,20 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
       unlockBacklogItem(item.id);
       deleteBacklogGhIssue(input.repo.id, item.githubIssue);
       locked += 1;
+      continue;
+    }
+
+    // Trigger-label-gone guard. The publisher removes `obelisk:fix` from
+    // the issue right after opening a PR (so the next sync doesn't
+    // re-enroll it). If the local backlog row outlived that label
+    // removal — e.g. a previous run finished moments ago and the periodic
+    // reaper hasn't fired yet, or a user manually unenrolled the issue —
+    // this row is stale. Drop it so a back-to-back Run-now click can't
+    // re-pick the same issue and produce a duplicate PR.
+    if (!ctx.labels.includes(OBELISK_LABELS.fix)) {
+      unlockBacklogItem(item.id);
+      deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+      triggerGone += 1;
       continue;
     }
 
@@ -211,6 +226,8 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   const reasons: string[] = [];
   if (closed > 0) reasons.push(`${closed} closed`);
   if (locked > 0) reasons.push(`${locked} locked`);
+  if (triggerGone > 0)
+    reasons.push(`${triggerGone} no longer labeled \`obelisk:fix\` (PR already opened?)`);
   if (crossInstall > 0) reasons.push(`${crossInstall} already claimed by another Obelisk install`);
   if (allowlistDenied > 0)
     reasons.push(`${allowlistDenied} authored by users not on the allowlist`);

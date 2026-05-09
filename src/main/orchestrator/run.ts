@@ -6,7 +6,7 @@ import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Repo } from '../../shared/types';
 import { getRepo } from '../db/repos';
 import { listAgentsForRepo, getAgent, updateAgent } from '../db/agents';
-import { lockBacklogItem, unlockBacklogItem } from '../db/backlog';
+import { lockBacklogItem, unlockBacklogItem, deleteBacklogGhIssue } from '../db/backlog';
 import { attachRunToPrReviewClaim, releasePrReviewClaim } from '../db/pr-review-claims';
 import { createRun, transitionRun, getRun } from '../db/runs';
 import { insertPreview } from '../db/previews';
@@ -628,6 +628,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
 
     if (published.length === 0) {
       throw new Error(failures[0] ?? 'publish failed for every plan');
+    }
+
+    // If we shipped a PR linked to a GitHub issue, drop the backlog row
+    // immediately. Otherwise a sibling Run-now click can re-pick the
+    // same issue between PR creation and the next backlog sweep
+    // (~2 min cadence) — the publisher removes `obelisk:fix` from the
+    // live issue, but the local row sticks around until the reaper
+    // notices. The unlock below is required because deleteBacklogGhIssue
+    // skips `in_progress_run` rows by design; the finally-block unlock
+    // becomes a harmless no-op for an already-deleted row.
+    if (
+      selected.task.githubNumber &&
+      selected.backlogItem &&
+      published.some((r) => r.kind === 'pr')
+    ) {
+      unlockBacklogItem(selected.backlogItem.id);
+      deleteBacklogGhIssue(repo.id, selected.task.githubNumber);
     }
 
     const outputSummary = describeOutcomes(published);
