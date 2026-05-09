@@ -4,7 +4,6 @@ import {
   listBacklogGhIssueNumbers,
   deleteBacklogGhIssue,
 } from '../db/backlog';
-import { getSetting, setSetting } from '../db/settings';
 import { getGithub } from '../github/client';
 import { OBELISK_LABELS } from '../publisher/labels';
 import { broadcast } from '../ipc/bus';
@@ -18,7 +17,6 @@ import type { Repo } from '../../shared/types';
  */
 const inFlightSync = new Set<string>();
 
-const ETAG_KEY = 'backlog_sync_etag' as const;
 const PER_PAGE = 50;
 
 /**
@@ -75,8 +73,12 @@ async function syncRepo(repo: Repo): Promise<void> {
   const [owner, name] = repo.githubFullName.split('/');
   if (!owner || !name) return;
 
-  const prevEtag = getSetting<string>(`repo:${repo.id}`, ETAG_KEY);
-
+  // No `if-none-match` ETag caching. Octokit's 304 path throws and gives
+  // us no body — which means our reaper has no `livePresent` set to
+  // diff against, and any backlog row that closed BETWEEN the last
+  // sync and now stays orphaned forever (we'd keep getting 304s on the
+  // same cached ETag). At ~12 syncs/hour per repo this is 0.24% of the
+  // 5000/hr GitHub quota — far cheaper than the bug it prevents.
   let response: Awaited<ReturnType<typeof gh.issues.listForRepo>>;
   try {
     response = await gh.issues.listForRepo({
@@ -86,11 +88,8 @@ async function syncRepo(repo: Repo): Promise<void> {
       per_page: PER_PAGE,
       sort: 'updated',
       direction: 'desc',
-      ...(prevEtag ? { headers: { 'if-none-match': prevEtag } } : {}),
     });
   } catch (e) {
-    const status = (e as { status?: number }).status;
-    if (status === 304) return; // unchanged since last sync
     appendAudit({
       runId: 'system',
       kind: 'backlog_sync_failed',
@@ -101,9 +100,6 @@ async function syncRepo(repo: Repo): Promise<void> {
     });
     return;
   }
-
-  const newEtag = response.headers['etag'] ?? response.headers['ETag'];
-  if (newEtag) setSetting(`repo:${repo.id}`, ETAG_KEY, newEtag);
 
   let upserted = 0;
   const livePresent = new Set<number>();
