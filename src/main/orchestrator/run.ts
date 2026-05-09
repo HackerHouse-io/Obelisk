@@ -29,6 +29,7 @@ import { simpleGit } from 'simple-git';
 import { saveArtifact } from '../evidence/artifact-store';
 import { checkEvidence } from '../evidence/check';
 import { renderPrBody } from '../evidence/pr-body';
+import { parseBugFixReport } from '../agents/bug-fixer';
 import { publish, clearClaimSignals } from '../publisher';
 import type { RepoSummary, Permissions } from '../prompt-compiler';
 
@@ -582,6 +583,18 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       try {
         if (plan.kind === 'pr') {
           plan.head = worktreeHandle.branch;
+          // Bug-fixer runs are required to emit a structured
+          // BEGIN_BUG_FIX_REPORT block at the end of their reasoning;
+          // when present it powers the PR body's Root cause / Fix /
+          // Test evidence sections instead of the LLM monologue. Falls
+          // back to the legacy reasoning dump when the block is missing
+          // (e.g. the agent stopped early with REPRO_FAILED).
+          const bugFixReport =
+            input.agentName === 'bug-fixer' ? parseBugFixReport(ok.reasoning) : null;
+          const commits = await readCommitsOnBranch(
+            worktreeHandle.worktreePath,
+            repo.defaultBranch,
+          ).catch(() => [] as { sha: string; subject: string }[]);
           plan.body = renderPrBody({
             agentName: input.agentName,
             runId: run.id,
@@ -589,6 +602,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
             summary: oneLine(ok.reasoning),
             reasoning: ok.reasoning,
             evidence,
+            bugFixReport,
+            commits,
           });
         }
         const result = await publish({
@@ -691,6 +706,35 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
   }
+}
+
+/**
+ * Read the commits the runner produced on its branch (everything ahead
+ * of the repo's default branch, oldest-first). Used by `renderPrBody`
+ * to surface the commit list in the PR description so reviewers can
+ * scan what got committed without expanding the diff.
+ */
+async function readCommitsOnBranch(
+  worktreePath: string,
+  defaultBranch: string,
+): Promise<{ sha: string; subject: string }[]> {
+  const git = simpleGit(worktreePath);
+  // %h = abbreviated sha, %s = subject; tab-separated so subjects with
+  // spaces stay intact.
+  const out = await git.raw([
+    'log',
+    `${defaultBranch}..HEAD`,
+    '--pretty=format:%H%x09%s',
+    '--reverse',
+  ]);
+  return out
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [sha, ...rest] = line.split('\t');
+      return { sha: sha ?? '', subject: rest.join('\t') };
+    });
 }
 
 /**

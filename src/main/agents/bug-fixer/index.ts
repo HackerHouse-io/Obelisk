@@ -273,6 +273,112 @@ function prefixWithFix(subject: string): string {
   return `fix: ${subject}`;
 }
 
+/* ---------- structured-report parsing ---------- */
+
+const BUG_FIX_REPORT_RE = /BEGIN_BUG_FIX_REPORT\s*([\s\S]*?)\s*END_BUG_FIX_REPORT/;
+
+export interface BugFixTestCase {
+  name: string;
+  asserts: string;
+}
+
+export interface BugFixTestPlan {
+  new_tests_file?: string;
+  cases?: BugFixTestCase[];
+  manual_verification?: string;
+}
+
+export interface BugFixReport {
+  summary: string;
+  root_cause: string;
+  /** 1–4 imperative bullets describing what changed. */
+  fix: string[];
+  /** Optional structured test plan — present for any code-touching fix. */
+  test_plan?: BugFixTestPlan;
+  /** Optional reviewer-actionable notes (merge resolution, incidental cleanup). */
+  notes?: string[];
+}
+
+/**
+ * Pull the agent's structured report out of the runner's reasoning blob.
+ * Returns null when the block is missing or malformed; the caller falls
+ * back to the legacy reasoning-dump body shape.
+ */
+export function parseBugFixReport(reasoning: string): BugFixReport | null {
+  const match = reasoning.match(BUG_FIX_REPORT_RE);
+  if (!match) return null;
+  try {
+    const parsed: unknown = JSON.parse(match[1]!.trim());
+    return normalizeBugFixReport(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBugFixReport(v: unknown): BugFixReport | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o['summary'] !== 'string') return null;
+  if (typeof o['root_cause'] !== 'string') return null;
+  if (!Array.isArray(o['fix'])) return null;
+  const fix = (o['fix'] as unknown[]).filter((s): s is string => typeof s === 'string');
+  if (fix.length === 0) return null;
+
+  const out: BugFixReport = {
+    summary: o['summary'],
+    root_cause: o['root_cause'],
+    fix,
+  };
+
+  // Optional test_plan — accept partial shapes (cases-only, manual-only, etc.).
+  if (o['test_plan'] && typeof o['test_plan'] === 'object') {
+    const tp = o['test_plan'] as Record<string, unknown>;
+    const plan: BugFixTestPlan = {};
+    if (typeof tp['new_tests_file'] === 'string' && tp['new_tests_file'].length > 0) {
+      plan.new_tests_file = tp['new_tests_file'];
+    }
+    if (Array.isArray(tp['cases'])) {
+      const cases = (tp['cases'] as unknown[])
+        .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+        .map((c) => ({
+          name: typeof c['name'] === 'string' ? c['name'] : '',
+          asserts: typeof c['asserts'] === 'string' ? c['asserts'] : '',
+        }))
+        .filter((c) => c.name.length > 0);
+      if (cases.length > 0) plan.cases = cases;
+    }
+    if (
+      typeof tp['manual_verification'] === 'string' &&
+      tp['manual_verification'].trim().length > 0
+    ) {
+      plan.manual_verification = tp['manual_verification'].trim();
+    }
+    if (Object.keys(plan).length > 0) out.test_plan = plan;
+  }
+
+  if (Array.isArray(o['notes'])) {
+    const notes = (o['notes'] as unknown[])
+      .filter((s): s is string => typeof s === 'string')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (notes.length > 0) out.notes = notes;
+  }
+
+  return out;
+}
+
+/**
+ * Strip `issue#` prefix from the orchestrator's task ref, returning the
+ * raw issue number. Used by the PR-body renderer to emit `Fixes #N.`
+ * which auto-closes the GitHub issue when the PR merges.
+ */
+export function issueNumberFromTaskRef(taskRef: string): number | null {
+  const match = taskRef.match(/^issue#(\d+)$/);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Cut to maxLen at a word boundary when possible, then append a single ellipsis. */
 function truncateForPrTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;

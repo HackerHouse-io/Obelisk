@@ -190,16 +190,34 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
         prNumber = created.data.number;
         htmlUrl = created.data.html_url;
 
-        // Apply in-progress label to the source issue, if any. Resume
-        // publishes never re-apply: the original run already did, and the
-        // label survives on the issue across multiple commits.
+        // Update the source issue's labels to reflect that a PR has been
+        // opened against it:
+        //   - Add `obelisk:in-progress` (idempotent — usually already
+        //     applied at claim time).
+        //   - REMOVE `obelisk:fix` so a sibling bug-fixer doesn't
+        //     re-claim the same issue from the next backlog sync. The
+        //     PR's `Fixes #N` line is what closes the loop now; the
+        //     trigger label has done its job. If the user reopens the
+        //     issue / closes the PR unmerged, they can re-apply
+        //     `obelisk:fix` to retry.
         if (input.sourceIssueNumber) {
-          await gh.issues.addLabels({
-            owner,
-            repo: repoName,
-            issue_number: input.sourceIssueNumber,
-            labels: [OBELISK_LABELS.inProgress],
-          });
+          await gh.issues
+            .addLabels({
+              owner,
+              repo: repoName,
+              issue_number: input.sourceIssueNumber,
+              labels: [OBELISK_LABELS.inProgress],
+            })
+            .catch(() => undefined);
+          await gh.issues
+            .removeLabel({
+              owner,
+              repo: repoName,
+              issue_number: input.sourceIssueNumber,
+              name: OBELISK_LABELS.fix,
+            })
+            // 404 here means the label wasn't on the issue — fine.
+            .catch(() => undefined);
         }
       }
 

@@ -18,6 +18,14 @@ export interface CreateWorktreeInput {
 export interface WorktreeHandle {
   worktreePath: string;
   branch: string;
+  /**
+   * Where the new branch was forked from. `origin` means we successfully
+   * fetched + branched off `origin/<baseBranch>` (the right behaviour);
+   * `local` means the fetch failed and we fell back to the local ref.
+   * Callers can audit / warn when basedOn === 'local' so a stale-base
+   * PR isn't silent.
+   */
+  basedOn?: 'origin' | 'local';
 }
 
 /**
@@ -41,17 +49,31 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
   const branch = `obelisk/${input.runId}`;
   const git = simpleGit(input.repoPath);
 
-  // Make sure the base branch is fetched so we have a current ref to
-  // branch off of. Errors from `fetch` are non-fatal here — local-only
-  // repos and detached HEADs both work, but we surface the error in the
-  // hint if branch creation later fails.
-  await git.fetch().catch(() => undefined);
+  // We branch off `origin/<baseBranch>`, NOT the local ref, because the
+  // user's local `main` is often days behind the remote — branching off
+  // it produced PRs with merge conflicts before this fix even hit the
+  // first commit. Fetch the remote ref synchronously, fall back to the
+  // local ref only if the fetch errors (no network, missing remote).
+  let base = input.baseBranch;
+  let usedOrigin = false;
+  try {
+    await git.fetch('origin', input.baseBranch);
+    // Verify origin/<baseBranch> actually exists locally now. simple-git
+    // returns void on success; we test the ref directly.
+    await git.raw(['rev-parse', '--verify', `origin/${input.baseBranch}`]);
+    base = `origin/${input.baseBranch}`;
+    usedOrigin = true;
+  } catch {
+    // No remote / no network / detached HEAD — fall through to the local
+    // base. Worktree creation still succeeds; the run may produce a
+    // stale PR but at least it doesn't fail at this step.
+  }
 
   // `git worktree add -b <new-branch> <path> <base>` creates the new
   // branch from <base> and checks it out into the new worktree.
-  await git.raw(['worktree', 'add', '-b', branch, dir, input.baseBranch]);
+  await git.raw(['worktree', 'add', '-b', branch, dir, base]);
 
-  return { worktreePath: dir, branch };
+  return { worktreePath: dir, branch, basedOn: usedOrigin ? 'origin' : 'local' };
 }
 
 export interface AttachWorktreeInput {
