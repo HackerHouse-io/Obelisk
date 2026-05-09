@@ -677,17 +677,44 @@ body {
 }
 
 .sidebar-avatar {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: linear-gradient(135deg, oklch(70% 0.14 320), oklch(60% 0.16 250));
-  color: white;
-  font-size: 10px;
-  font-weight: 700;
+  /* GitHub-black core with a subtle brand gradient ring so the mark
+     reads as a polished status badge, not a flat icon. */
+  background: radial-gradient(circle at 30% 30%, #2a2f37 0%, #161b22 60%, #0d1117 100%);
+  color: #f0f6fc;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-shadow:
+    0 0 0 1px rgba(240, 246, 252, 0.08) inset,
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 0 0 2px rgba(120, 86, 255, 0.18);
+  transition:
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+.sidebar-avatar:hover {
+  box-shadow:
+    0 0 0 1px rgba(240, 246, 252, 0.12) inset,
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    0 0 0 2px rgba(120, 86, 255, 0.34);
+  transform: translateY(-0.5px);
+}
+.sidebar-avatar svg {
+  display: block;
+}
+/* Signed-out state: same shape, muted so it reads as "no account". */
+.sidebar-avatar-muted {
+  background: var(--bg-2);
+  color: var(--t-3);
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+.sidebar-avatar-muted:hover {
+  box-shadow: 0 0 0 1px var(--line) inset;
+  transform: none;
 }
 
 .sidebar-user-info {

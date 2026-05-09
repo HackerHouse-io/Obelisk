@@ -745,6 +745,20 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
   const [runStarting, setRunStarting] = useState(false);
   const [runError, setRunError] = useState<{ message: string; hint?: string } | null>(null);
 
+  // Pre-flight: agents that produce patches (bug-fixer, feature-builder)
+  // need the repo in `prs` or `automerge` mode — otherwise the publisher
+  // rejects every commit/push. Don't even let the user click Run now if
+  // we know the run would fail at publish.
+  const ownerRepo = useStore((s) => s.repos.find((r) => r.id === agent.repoId));
+  const producesPatchAgent = agent.name === 'bug-fixer' || agent.name === 'feature-builder';
+  const modeBlocksRun =
+    producesPatchAgent && ownerRepo
+      ? ownerRepo.mode !== 'prs' && ownerRepo.mode !== 'automerge'
+      : false;
+  const modeBlockHint = modeBlocksRun
+    ? `${meta.label} opens PRs, but this repo is in safety mode "${ownerRepo?.mode}". Switch to "Fix & build" or higher in Settings to enable Run now.`
+    : null;
+
   useEffect(() => {
     setRenameValue(agent.displayName);
   }, [agent.id, agent.displayName]);
@@ -895,10 +909,13 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
             type="button"
             className={`btn primary${runStarting ? ' is-starting' : ''}`}
             onClick={runNow}
-            disabled={runStarting}
+            disabled={runStarting || modeBlocksRun}
             aria-busy={runStarting}
             data-testid={`agent-run-now-${agent.name}`}
-            title={runStarting ? `Starting ${agent.displayName}…` : `Run ${agent.displayName} now`}
+            title={
+              modeBlockHint ??
+              (runStarting ? `Starting ${agent.displayName}…` : `Run ${agent.displayName} now`)
+            }
           >
             {runStarting ? (
               <>
@@ -916,6 +933,20 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
           </button>
         </div>
       </div>
+
+      {modeBlockHint && !runError ? (
+        <div
+          className="plan-editor-banner plan-editor-banner-warn"
+          role="status"
+          data-testid="agent-mode-blocked"
+        >
+          <Icon.AlertTri size={12} />
+          <div>
+            <div className="plan-editor-banner-title">Run now is disabled in this safety mode</div>
+            <div className="plan-editor-banner-body">{modeBlockHint}</div>
+          </div>
+        </div>
+      ) : null}
 
       {runError ? (
         <div

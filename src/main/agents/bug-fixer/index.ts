@@ -35,11 +35,17 @@ export const bugFixerHandler: AgentHandler = {
   },
 
   interpretResult(input: InterpretResultInput): PublishPlan {
-    const { task, runResult, repo } = input;
-    const summary = oneLine(runResult.reasoning) || `Fix ${task.ref}`;
+    const { task, repo } = input;
+    // The PR title is derived from the GitHub issue title (already on
+    // `task.context` from selectTask's wrap()). Earlier versions tried
+    // `oneLine(runResult.reasoning)` — but Claude Code's stream-of-
+    // consciousness output has no early newlines, so `oneLine` returned
+    // the entire monologue and produced PR titles hundreds of words
+    // long. The issue title is the user's own short, factual sentence;
+    // it's the right thing to ship.
     return {
       kind: 'pr',
-      title: prefixWithFix(summary),
+      title: buildPrTitle(task.context, task.ref),
       // Body is filled in by the orchestrator using evidence/pr-body.ts
       body: '',
       head: '', // filled in by orchestrator (= worktree branch)
@@ -234,11 +240,45 @@ function wrap(item: NonNullable<ReturnType<typeof getBacklogItem>>): SelectedTas
   };
 }
 
-function oneLine(text: string): string {
-  return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
+/** Conventional-commit cap so the PR title stays readable in the GitHub UI. */
+const MAX_PR_TITLE_LENGTH = 72;
+
+/**
+ * Build a sane `fix: <subject>` PR title from the GitHub issue title.
+ * Strips common bracketed prefixes (e.g. `[bug]`, `[BUG]`), truncates
+ * to MAX_PR_TITLE_LENGTH characters, and falls back to the task ref if
+ * the issue title is empty.
+ *
+ * Exported for unit testing — the title is the most-visible artifact a
+ * Bug Fixer ships, so its derivation needs explicit assertions.
+ */
+export function buildPrTitle(issueTitle: string | undefined, taskRef: string): string {
+  const subject = sanitizeIssueTitle(issueTitle ?? '') || `Fix ${taskRef}`;
+  return prefixWithFix(truncateForPrTitle(subject, MAX_PR_TITLE_LENGTH));
+}
+
+function sanitizeIssueTitle(raw: string): string {
+  return (
+    raw
+      .replace(/\r?\n/g, ' ')
+      // Strip leading "[bug]" / "[BUG]" / "[Feature]" bracketed prefixes
+      // (any number of them). They duplicate the `fix:` prefix we add.
+      .replace(/^(\s*\[[^\]]+\]\s*)+/g, '')
+      .trim()
+  );
 }
 
 function prefixWithFix(subject: string): string {
   if (/^fix\b/i.test(subject)) return subject;
   return `fix: ${subject}`;
+}
+
+/** Cut to maxLen at a word boundary when possible, then append a single ellipsis. */
+function truncateForPrTitle(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const head = text.slice(0, maxLen - 1);
+  const lastSpace = head.lastIndexOf(' ');
+  // Keep at least 24 chars even if there's no good word break.
+  const cut = lastSpace > 24 ? head.slice(0, lastSpace) : head;
+  return `${cut.trimEnd()}…`;
 }

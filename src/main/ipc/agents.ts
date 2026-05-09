@@ -56,6 +56,17 @@ export async function handleAgentsRun(
   }
   await ensureRunnerAvailable();
 
+  // Pre-flight: refuse to dispatch a run that's guaranteed to fail at
+  // publish. Bug Fixer / Feature Builder produce patches; the publisher
+  // needs commit + push + open_pr permissions, which the `observe` and
+  // `issues` safety modes block. Without this check, the LLM runs for
+  // minutes (~$$ tokens) and gets rejected at the very end with
+  // MODE_TOO_LOW. Better to fail-fast here with an actionable hint.
+  const handler = getAgentHandler(agent.name);
+  const repo = getRepo(agent.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${agent.repoId} not found`);
+  assertModeAllowsAgent(repo, handler, agent.displayName);
+
   // runAgent drives the entire run synchronously — selectTask, createRun,
   // CLI spawn, publish — and that takes anywhere from seconds to minutes.
   // The IPC must NOT wait for that whole journey, or the renderer's "Run
@@ -110,6 +121,25 @@ export async function handleAgentsRun(
       },
     );
   });
+}
+
+/**
+ * Throw MODE_TOO_LOW when the repo's safety mode can't satisfy the
+ * publish actions a producesPatch agent will need (commit / push /
+ * open_pr). Pure function — exported for unit testing.
+ */
+export function assertModeAllowsAgent(
+  repo: { mode: import('../../shared/types').SafetyMode; githubFullName: string },
+  handler: { producesPatch: boolean },
+  agentDisplayName: string,
+): void {
+  if (!handler.producesPatch) return;
+  if (repo.mode === 'prs' || repo.mode === 'automerge') return;
+  throw new ObeliskError(
+    'MODE_TOO_LOW',
+    `${agentDisplayName} produces pull requests, but ${repo.githubFullName} is in safety mode "${repo.mode}".`,
+    `Open Settings → Safety mode and switch this repo to "Fix & build" (PRs allowed) or higher before running ${agentDisplayName}.`,
+  );
 }
 
 async function ensureRunnerAvailable(): Promise<RunnerKind> {

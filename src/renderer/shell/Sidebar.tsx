@@ -97,8 +97,12 @@ export function Sidebar(): ReactElement {
       ) : null}
 
       <div className="sidebar-user">
-        <div className="sidebar-avatar">
-          {auth.signedIn && auth.login ? auth.login.slice(0, 2).toUpperCase() : '–'}
+        <div
+          className={`sidebar-avatar${auth.signedIn ? '' : ' sidebar-avatar-muted'}`}
+          aria-hidden="true"
+          title={auth.signedIn ? `Signed in to GitHub as ${auth.login}` : 'Not signed in'}
+        >
+          <Icon.GitHub size={13} />
         </div>
         <div className="sidebar-user-info">
           <div className="sidebar-user-name truncate">
