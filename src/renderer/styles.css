@@ -1560,39 +1560,335 @@ body {
   }
 }
 
-.mc-audit-row {
-  display: grid;
-  grid-template-columns: 64px 78px 1fr;
-  gap: 10px;
-  font-size: 11.5px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--line-soft);
-}
-.mc-audit-row:last-child {
-  border-bottom: 0;
-}
-.mc-audit-row .mc-audit-time {
+.mc-activity-toggle {
+  margin-left: auto;
+  font: inherit;
+  font-size: 10.5px;
   color: var(--t-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-1);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.mc-activity-toggle:hover {
+  color: var(--t-1);
+  border-color: var(--line);
+}
+.mc-activity-toggle[aria-pressed='true'] {
+  color: var(--t-1);
+  background: var(--bg-3);
+  border-color: var(--line);
+}
+
+/*
+ * Activity panel — Goose-inspired stack of cards.
+ *
+ * Each entry is one of: a session/result PILL (compact one-liner), a
+ * THINKING block (borderless prose with optional clamp), or a TOOL CARD
+ * (bordered, rounded, chevron-toggled accordion). No timeline rail, no
+ * giant colored dots, no internal scrollbars on tool output — the panel
+ * itself is the only scroll surface.
+ */
+.mc-act-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+/* ---------- Pills (session start, run complete, status) ---------- */
+
+.mc-act-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  color: var(--t-2);
+  border-radius: var(--r-1);
+}
+.mc-act-pill-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+.mc-act-pill-time {
   font-family: var(--mono);
   font-size: 10.5px;
+  color: var(--t-3);
 }
-.mc-audit-row .mc-audit-kind {
+.mc-act-pill-text {
+  color: var(--t-1);
+  font-weight: 500;
+}
+.mc-act-pill-meta {
+  color: var(--t-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mc-act-pill.is-result.tone-ok .mc-act-pill-text {
+  color: var(--ok);
+}
+.mc-act-pill.is-result.tone-bad .mc-act-pill-text {
+  color: var(--bad);
+}
+
+.mc-act-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--t-3);
+}
+
+/* ---------- Thinking (borderless prose) ---------- */
+
+.mc-act-thinking {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 10px;
+  padding: 6px 6px 8px;
+}
+.mc-act-thinking-time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--t-3);
+  padding-top: 2px;
+}
+.mc-act-thinking-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.mc-act-thinking-text {
+  font-family: var(--ui);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--t-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mc-act-thinking-text.is-clamped {
+  position: relative;
+}
+.mc-act-thinking-text.is-clamped::after {
+  content: '';
+  display: block;
+  height: 1.6em;
+  margin-top: -1.6em;
+  background: linear-gradient(180deg, transparent, var(--bg-2));
+  pointer-events: none;
+}
+.mc-act-link {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--info);
+  cursor: pointer;
+}
+.mc-act-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Tool cards (the centerpiece) ---------- */
+
+.mc-act-tool {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-2);
+  background: transparent;
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+.mc-act-tool:hover {
+  border-color: var(--line);
+}
+.mc-act-tool.is-expanded {
+  border-color: var(--line);
+}
+.mc-act-tool.tone-bad {
+  border-color: color-mix(in oklab, var(--bad) 35%, var(--line));
+}
+
+.mc-act-tool-head {
+  display: grid;
+  grid-template-columns: 18px 56px minmax(0, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.mc-act-tool-head:hover {
+  background: var(--bg-3);
+}
+.mc-act-tool-head:focus-visible {
+  outline: 1px solid var(--info);
+  outline-offset: -1px;
+}
+.mc-act-tool-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.mc-act-pip {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--bg-2);
+  background: var(--t-3);
+}
+.mc-act-pip.tone-ok {
+  background: var(--ok);
+}
+.mc-act-pip.tone-bad {
+  background: var(--bad);
+}
+.mc-act-pip.tone-pending {
+  background: var(--warn);
+  animation: mcActPipPulse 1.4s ease-in-out infinite;
+}
+@keyframes mcActPipPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.mc-act-tool-time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--t-3);
+}
+.mc-act-tool-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.mc-act-tool-verb {
+  color: var(--t-1);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.mc-act-tool-target {
   color: var(--t-2);
   font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mc-act-tool-meta {
+  color: var(--t-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  text-align: right;
+}
+.mc-act-tool-meta.is-bad {
+  color: var(--bad);
+}
+.mc-act-tool-meta.is-pending {
+  color: var(--warn);
+  font-style: italic;
+}
+
+.mc-act-tool-body {
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg-1);
+}
+.mc-act-tool-section + .mc-act-tool-section {
+  border-top: 1px solid var(--line-soft);
+}
+.mc-act-tool-section-label {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--t-3);
+}
+.mc-act-tool-section-body {
+  padding: 0 10px 10px;
+}
+.mc-act-tool-section.is-bad .mc-act-tool-section-label {
+  color: var(--bad);
+}
+
+.mc-act-pre {
+  margin: 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--t-1);
+  background: transparent;
+  border: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.mc-act-empty {
+  font-size: 11px;
+  color: var(--t-3);
+  font-style: italic;
+}
+
+/* ---------- Raw lines (showAll only) ---------- */
+
+.mc-act-raw-line {
+  display: grid;
+  grid-template-columns: 56px 56px 1fr;
+  gap: 8px;
+  padding: 2px 4px;
+  font-family: var(--mono);
   font-size: 10.5px;
+  color: var(--t-2);
+}
+.mc-act-raw-time {
+  color: var(--t-3);
+}
+.mc-act-raw-stream {
+  color: var(--t-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.mc-audit-row .mc-audit-msg {
-  color: var(--t-1);
-  word-break: break-word;
+.mc-act-raw-stream.is-stderr {
+  color: var(--bad);
 }
-.mc-audit-row .mc-audit-msg pre {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: 10.5px;
+.mc-act-raw-text {
+  color: var(--t-1);
   white-space: pre-wrap;
-  color: var(--t-2);
+  word-break: break-word;
 }
 
 .mc-evidence-section {

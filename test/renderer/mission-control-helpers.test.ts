@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildActivityRows,
   countByState,
   derivePerCaseState,
 } from '../../src/renderer/screens/mission-control-helpers';
-import type { AuditLine, PreviewedFinding, RunState, TestPlan } from '../../src/shared/types';
+import type {
+  AgentEvent,
+  AuditLine,
+  PreviewedFinding,
+  RunState,
+  TestPlan,
+} from '../../src/shared/types';
 
 function makePlan(caseIds: string[]): TestPlan {
   return {
@@ -141,5 +148,234 @@ describe('derivePerCaseState', () => {
     const c = counts(plan, log, 'running');
     expect(c.passed).toBe(1);
     expect(c.running).toBe(0);
+  });
+});
+
+function audit(id: number, kind: string, payload: unknown, at = '2026-05-08T00:00:00Z'): AuditLine {
+  return { id, runId: 'r1', at, kind, payload } as AuditLine;
+}
+
+function event(e: AgentEvent): unknown {
+  return e;
+}
+
+describe('buildActivityRows', () => {
+  it('pairs a tool_call with its tool_result by toolUseId into one tool row', () => {
+    const lines: AuditLine[] = [
+      audit(
+        1,
+        'agent_event',
+        event({
+          type: 'tool_call',
+          toolUseId: 'toolu_1',
+          name: 'Read',
+          input: { file_path: '/a' },
+        }),
+      ),
+      audit(
+        2,
+        'agent_event',
+        event({ type: 'tool_result', toolUseId: 'toolu_1', ok: true, content: 'hello' }),
+      ),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'tool') throw new Error('expected tool row');
+    expect(rows[0].name).toBe('Read');
+    expect(rows[0].result?.content).toBe('hello');
+    expect(rows[0].result?.ok).toBe(true);
+  });
+
+  it('hides status events by default and reveals them with showAll', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'agent_event', event({ type: 'session_init', model: 'm' })),
+      audit(2, 'agent_event', event({ type: 'status', subtype: 'system:status', raw: {} })),
+    ];
+    expect(buildActivityRows(lines, false).map((r) => r.kind)).toEqual(['sessionInit']);
+    expect(buildActivityRows(lines, true).map((r) => r.kind).sort()).toEqual([
+      'sessionInit',
+      'status',
+    ]);
+  });
+
+  it('drops legacy [system:status] / [user] / [rate_limit_event] placeholders by default', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', '[system:status]'),
+      audit(2, 'stdout', '[user]'),
+      audit(3, 'stdout', '[rate_limit_event]'),
+      audit(4, 'stdout', 'real prose line'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'thinking') throw new Error('expected thinking row');
+    expect(rows[0].text).toBe('real prose line');
+  });
+
+  it('coalesces consecutive prose stdout lines into a single thinking row', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'first thought', '2026-05-08T00:00:00Z'),
+      audit(2, 'stdout', 'second thought', '2026-05-08T00:00:01Z'),
+      audit(3, 'stdout', 'third thought', '2026-05-08T00:00:02Z'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'thinking') throw new Error('expected thinking row');
+    expect(rows[0].text).toBe('first thought\nsecond thought\nthird thought');
+    expect(rows[0].at).toBe('2026-05-08T00:00:00Z');
+  });
+
+  it('starts a new thinking row when a structured event interrupts the run', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'thinking before tool', '2026-05-08T00:00:00Z'),
+      audit(
+        2,
+        'agent_event',
+        event({ type: 'tool_call', toolUseId: 't', name: 'Read', input: { file_path: '/a' } }),
+        '2026-05-08T00:00:01Z',
+      ),
+      audit(
+        3,
+        'agent_event',
+        event({ type: 'tool_result', toolUseId: 't', ok: true, content: 'ok' }),
+        '2026-05-08T00:00:02Z',
+      ),
+      audit(4, 'stdout', 'thinking after tool', '2026-05-08T00:00:03Z'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    // Reverse-chrono: post-tool thinking, paired tool, pre-tool thinking
+    expect(rows.map((r) => r.kind)).toEqual(['thinking', 'tool', 'thinking']);
+    if (rows[0].kind !== 'thinking') throw new Error('expected thinking first');
+    expect(rows[0].text).toBe('thinking after tool');
+    if (rows[2].kind !== 'thinking') throw new Error('expected thinking last');
+    expect(rows[2].text).toBe('thinking before tool');
+  });
+
+  it('routes stderr to its own raw row and never bundles it with thinking', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'prose'),
+      audit(2, 'stderr', 'oops'),
+      audit(3, 'stdout', 'more prose'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    const stderr = rows.find((r) => r.kind === 'raw');
+    expect(stderr).toBeDefined();
+    if (stderr?.kind !== 'raw') throw new Error('expected raw stderr row');
+    expect(stderr.stream).toBe('stderr');
+    expect(stderr.text).toBe('oops');
+  });
+
+  it('showAll renders one raw row per stdout line — no coalescing', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'a'),
+      audit(2, 'stdout', 'b'),
+      audit(3, 'stdout', 'c'),
+    ];
+    const rows = buildActivityRows(lines, true);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.kind === 'raw')).toBe(true);
+  });
+
+  it('renders an unmatched tool_result as a standalone tool row', () => {
+    const lines: AuditLine[] = [
+      audit(
+        1,
+        'agent_event',
+        event({ type: 'tool_result', toolUseId: 'orphan', ok: true, content: '' }),
+      ),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'tool') throw new Error('expected tool row');
+    expect(rows[0].result?.content).toBe('');
+  });
+
+  it('reverses output so newest row is first', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'agent_event', event({ type: 'session_init' }), '2026-05-08T00:00:00Z'),
+      audit(2, 'agent_event', event({ type: 'thinking', text: 'a' }), '2026-05-08T00:00:01Z'),
+      audit(3, 'agent_event', event({ type: 'result', ok: true }), '2026-05-08T00:00:02Z'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows.map((r) => r.kind)).toEqual(['result', 'thinking', 'sessionInit']);
+  });
+
+  it('skips empty stdout lines', () => {
+    const lines: AuditLine[] = [audit(1, 'stdout', ''), audit(2, 'stdout', 'real')];
+    const rows = buildActivityRows(lines, false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'thinking') throw new Error('expected thinking row');
+    expect(rows[0].text).toBe('real');
+  });
+
+  it('upgrades old runs by re-parsing stdout JSON lines into structured rows', () => {
+    // A pre-restructure run persisted each Claude Code stream-json line
+    // as `kind:'stdout', payload:<verbatim JSON>`. The renderer should
+    // re-classify them so the activity panel still surfaces tool calls
+    // and results for old runs.
+    const lines: AuditLine[] = [
+      audit(
+        1,
+        'stdout',
+        JSON.stringify({
+          type: 'system',
+          subtype: 'init',
+          model: 'claude-sonnet-4-7',
+          cwd: '/repo',
+          tools: ['Read', 'Edit'],
+        }),
+      ),
+      audit(
+        2,
+        'stdout',
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'Looking at the file.' },
+              { type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: '/a.swift' } },
+            ],
+          },
+        }),
+      ),
+      audit(
+        3,
+        'stdout',
+        JSON.stringify({
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'tu1', content: 'file contents', is_error: false },
+            ],
+          },
+        }),
+      ),
+      audit(
+        4,
+        'stdout',
+        JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 1000, num_turns: 1 }),
+      ),
+    ];
+    const rows = buildActivityRows(lines, false);
+    // Reverse-chrono: result, tool (paired), thinking, sessionInit
+    expect(rows.map((r) => r.kind)).toEqual(['result', 'tool', 'thinking', 'sessionInit']);
+    const tool = rows.find((r) => r.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('expected tool row');
+    expect(tool.name).toBe('Read');
+    expect(tool.result?.content).toBe('file contents');
+  });
+
+  it('falls back to thinking when an old-run stdout line is non-JSON prose', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'warning: cli not signed in'),
+      audit(
+        2,
+        'stdout',
+        JSON.stringify({ type: 'system', subtype: 'init', model: 'm' }),
+      ),
+      audit(3, 'stdout', 'a plain prose line after init'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    // Reverse-chrono: thinking (last prose), sessionInit, thinking (first prose)
+    expect(rows.map((r) => r.kind)).toEqual(['thinking', 'sessionInit', 'thinking']);
   });
 });

@@ -40,10 +40,8 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
       onText: (line) => {
         opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: line });
       },
-      onMeta: (summary) => {
-        // Single-line audit row so users can see the run is alive even
-        // before the model has produced its first text delta.
-        opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: summary });
+      onEvent: (event) => {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'agent_event', payload: event });
       },
     });
     const wrappedOnAudit = (line: AuditLine): void => {

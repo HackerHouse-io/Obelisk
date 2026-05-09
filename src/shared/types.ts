@@ -161,9 +161,42 @@ export interface AuditLine {
   id: number;
   runId: string;
   at: ISO;
+  /**
+   * Discriminator for the payload shape. Common values:
+   * - `agent_event` — payload is an {@link AgentEvent} (Claude Code structured stream).
+   * - `stdout` / `stderr` — payload is a raw string line (Codex, plain text fallback).
+   * - `state` — orchestrator stage transition.
+   * - `case_progress`, `reasoning`, `evidence_check` — orchestrator markers.
+   */
   kind: string;
   payload: unknown;
 }
+
+/**
+ * Structured event extracted from Claude Code's `--output-format stream-json`.
+ * Stored as the payload on an {@link AuditLine} with `kind: 'agent_event'`,
+ * letting Mission Control render a step-based timeline instead of raw JSONL.
+ */
+export type AgentEvent =
+  | { type: 'session_init'; model?: string; cwd?: string; tools?: string[]; sessionId?: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'tool_call'; toolUseId: string; name: string; input: unknown }
+  | {
+      type: 'tool_result';
+      toolUseId: string;
+      ok: boolean;
+      content: string;
+      isError?: boolean;
+    }
+  | { type: 'status'; subtype?: string; raw: unknown }
+  | {
+      type: 'result';
+      ok: boolean;
+      durationMs?: number;
+      turns?: number;
+      costUsd?: number;
+      text?: string;
+    };
 
 export interface BacklogItem {
   id: string;

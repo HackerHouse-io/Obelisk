@@ -1,41 +1,32 @@
 /**
  * Parse Claude Code's `--output-format stream-json --include-partial-messages`
- * output into plain text events the rest of the orchestrator can consume.
+ * output into events the rest of the orchestrator can consume.
  *
- * Each line on stdout is one JSON event. The shapes we care about (others
- * are ignored — they're system/init/result metadata):
+ * The parser produces two kinds of output:
  *
- *   1. Streaming partial text — fires while the model is generating, BEFORE
- *      the assistant turn completes. This is the path that lets CASE_*
- *      markers reach Mission Control live.
+ * 1. **Plain text** via `onText`, used by:
+ *    - The case-progress tracker (line-based BEGIN/END marker matcher).
+ *    - The reasoning buffer that feeds BEGIN_FINDINGS extraction.
+ *    Sourced from streaming `text_delta` events; falls back to the final
+ *    `assistant.message.content[].text` blocks when the runtime doesn't
+ *    honour `--include-partial-messages` (older claude versions).
  *
- *      `{ type: "stream_event",
- *         event: { type: "content_block_delta",
- *                  delta: { type: "text_delta", text: "…" } } }`
+ * 2. **Structured agent events** via `onEvent`, surfaced in Mission Control's
+ *    Activity timeline. Each event is one user-visible step (tool call, tool
+ *    result, session init, final result). Tool-use IDs let the renderer pair
+ *    a `tool_call` with its matching `tool_result`.
  *
- *   2. Final assistant message — fires once the assistant turn completes
- *      with the full text. Used as fallback when `--include-partial-messages`
- *      isn't honoured (older claude versions) so the run's reasoning still
- *      contains BEGIN_FINDINGS.
- *
- *      `{ type: "assistant",
- *         message: { content: [{ type: "text", text: "…" }, …] } }`
- *
- * The parser is line-based and stateful: it accumulates fragments until it
- * sees a newline, then emits the completed line. Callers feed each stdout
- * line in (already split by spawn.ts), and receive synthesised "stdout"
- * audit lines back via the onText callback.
+ * Anything we can't classify falls through as `{type:'status'}` so it is
+ * persisted but hidden by default — never lost, never rendered as noise.
  */
+
+import type { AgentEvent } from '../../shared/types';
 
 export interface ClaudeStreamParserOpts {
   /** Fired for every completed line of extracted assistant text. */
   onText: (line: string) => void;
-  /**
-   * Fired for non-text events (system/result/error) so callers can surface
-   * them in the audit log without being lost. The string is a short
-   * single-line summary, never JSON.
-   */
-  onMeta?: (summary: string) => void;
+  /** Fired for each structured agent event extracted from the stream. */
+  onEvent?: (event: AgentEvent) => void;
 }
 
 export class ClaudeStreamParser {
@@ -89,9 +80,10 @@ export class ClaudeStreamParser {
   private consumeEvent(event: unknown): void {
     if (!event || typeof event !== 'object') return;
     const obj = event as Record<string, unknown>;
+    const type = obj['type'];
 
     // Path 1 — streaming text deltas.
-    if (obj['type'] === 'stream_event') {
+    if (type === 'stream_event') {
       const inner = obj['event'] as Record<string, unknown> | undefined;
       if (inner && inner['type'] === 'content_block_delta') {
         const delta = inner['delta'] as Record<string, unknown> | undefined;
@@ -102,31 +94,108 @@ export class ClaudeStreamParser {
       return;
     }
 
-    // Path 2 — final assistant message. Only contributes to the fallback
-    // buffer; streaming deltas (when present) are the source of truth.
-    if (obj['type'] === 'assistant') {
+    // Path 2 — final assistant message. Walks content blocks: text feeds
+    // the fallback reasoning buffer; tool_use blocks become structured
+    // tool_call events.
+    if (type === 'assistant') {
       const message = obj['message'] as Record<string, unknown> | undefined;
       const content = message?.['content'];
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c && typeof c === 'object') {
-            const part = c as Record<string, unknown>;
-            if (part['type'] === 'text' && typeof part['text'] === 'string') {
-              this.finalText.push(part['text']);
-            }
-          }
+      if (!Array.isArray(content)) return;
+      let assistantText = '';
+      for (const c of content) {
+        if (!c || typeof c !== 'object') continue;
+        const part = c as Record<string, unknown>;
+        if (part['type'] === 'text' && typeof part['text'] === 'string') {
+          this.finalText.push(part['text']);
+          assistantText += (assistantText ? '\n' : '') + part['text'];
+        } else if (part['type'] === 'tool_use') {
+          this.emit({
+            type: 'tool_call',
+            toolUseId: stringField(part, 'id') ?? '',
+            name: stringField(part, 'name') ?? 'tool',
+            input: part['input'] ?? {},
+          });
         }
+      }
+      // Surface a `thinking` event when the assistant turn carried text
+      // but no streaming deltas reached us — older claude versions, or
+      // when text is short enough that the final-message path arrives
+      // first. Avoids duplicating the assistant turn that already streamed.
+      if (!this.sawDeltas && assistantText.length > 0) {
+        this.emit({ type: 'thinking', text: assistantText });
       }
       return;
     }
 
-    // Tool-use events / system init / per-result metadata — surface a
-    // short summary so the audit log isn't a wall of empty space when no
-    // text has streamed yet.
-    if (typeof obj['type'] === 'string') {
-      const subtype = typeof obj['subtype'] === 'string' ? `:${obj['subtype'] as string}` : '';
-      this.opts.onMeta?.(`[${obj['type'] as string}${subtype}]`);
+    // Path 3 — user turn from claude (i.e. the model's tool_result reply
+    // that closes a tool call). Carries `tool_result` blocks.
+    if (type === 'user') {
+      const message = obj['message'] as Record<string, unknown> | undefined;
+      const content = message?.['content'];
+      if (!Array.isArray(content)) return;
+      for (const c of content) {
+        if (!c || typeof c !== 'object') continue;
+        const part = c as Record<string, unknown>;
+        if (part['type'] !== 'tool_result') continue;
+        const isError = part['is_error'] === true;
+        this.emit({
+          type: 'tool_result',
+          toolUseId: stringField(part, 'tool_use_id') ?? '',
+          ok: !isError,
+          isError,
+          content: stringifyToolResultContent(part['content']),
+        });
+      }
+      return;
     }
+
+    // Path 4 — session init metadata.
+    if (type === 'system' && obj['subtype'] === 'init') {
+      const event: AgentEvent = { type: 'session_init' };
+      const model = stringField(obj, 'model');
+      if (model) event.model = model;
+      const cwd = stringField(obj, 'cwd');
+      if (cwd) event.cwd = cwd;
+      const sessionId = stringField(obj, 'session_id');
+      if (sessionId) event.sessionId = sessionId;
+      const tools = obj['tools'];
+      if (Array.isArray(tools)) {
+        event.tools = tools.filter((t): t is string => typeof t === 'string');
+      }
+      this.emit(event);
+      return;
+    }
+
+    // Path 5 — final result envelope.
+    if (type === 'result') {
+      const subtype = stringField(obj, 'subtype');
+      const ok = subtype !== 'error_max_turns' && subtype !== 'error_during_execution';
+      const event: AgentEvent = { type: 'result', ok };
+      if (typeof obj['duration_ms'] === 'number') event.durationMs = obj['duration_ms'] as number;
+      if (typeof obj['num_turns'] === 'number') event.turns = obj['num_turns'] as number;
+      if (typeof obj['total_cost_usd'] === 'number') {
+        event.costUsd = obj['total_cost_usd'] as number;
+      }
+      const text = stringField(obj, 'result');
+      if (text) event.text = text;
+      this.emit(event);
+      return;
+    }
+
+    // Path 6 — anything we don't recognise (system:status heartbeats,
+    // future event types). Persisted as a status event so nothing is lost,
+    // but the renderer hides these unless the user toggles "Show all".
+    if (typeof type === 'string') {
+      const subtype = stringField(obj, 'subtype');
+      const event: AgentEvent = { type: 'status', raw: obj };
+      if (subtype) event.subtype = `${type}:${subtype}`;
+      else event.subtype = type;
+      this.emit(event);
+    }
+  }
+
+  private emit(event: AgentEvent): void {
+    this.opts.onEvent?.(event);
   }
 
   private appendDelta(text: string): void {
@@ -140,5 +209,38 @@ export class ClaudeStreamParser {
       if (completed.length > 0) this.opts.onText(completed);
       idx = this.pending.indexOf('\n');
     }
+  }
+}
+
+function stringField(obj: Record<string, unknown>, key: string): string | undefined {
+  const v = obj[key];
+  return typeof v === 'string' ? v : undefined;
+}
+
+/**
+ * tool_result `content` is either a plain string or an array of content
+ * blocks (text / image). Flatten to a single string for the audit log;
+ * the renderer can wrap or truncate as needed.
+ */
+function stringifyToolResultContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const c of content) {
+      if (!c || typeof c !== 'object') continue;
+      const part = c as Record<string, unknown>;
+      if (part['type'] === 'text' && typeof part['text'] === 'string') {
+        parts.push(part['text']);
+      } else if (part['type'] === 'image') {
+        parts.push('[image]');
+      }
+    }
+    return parts.join('\n');
+  }
+  if (content == null) return '';
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
   }
 }

@@ -18,6 +18,7 @@ import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
 import { labelForAgent } from '../format';
 import type {
   Agent,
+  AgentEvent,
   AuditLine,
   CaseProgressState,
   EvidenceItem,
@@ -29,7 +30,12 @@ import type {
 } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
 import { parsePlanIdFromTaskRef } from '../../shared/task-refs';
-import { countByState, derivePerCaseState } from './mission-control-helpers';
+import {
+  buildActivityRows,
+  countByState,
+  derivePerCaseState,
+  type ActivityRow as ActivityRowData,
+} from './mission-control-helpers';
 
 // Re-export so test files importing from this module path keep working.
 export { parsePlanIdFromTaskRef };
@@ -738,13 +744,13 @@ function runStateHelp(state: RunState): string {
     case 'done':
       return 'Done — the run completed successfully.';
     case 'failed':
-      return 'Failed — see the error code and audit log.';
+      return 'Failed — see the error code and activity timeline.';
     case 'cancelled':
       return 'Cancelled — you stopped this run.';
   }
 }
 
-type Tab = 'plan' | 'findings' | 'audit' | 'evidence' | 'reasoning' | 'files';
+type Tab = 'plan' | 'findings' | 'activity' | 'evidence' | 'reasoning' | 'files';
 
 function RunDrawer({
   run,
@@ -759,7 +765,7 @@ function RunDrawer({
   onDelete: (runId: string) => void;
   onCancel: (runId: string) => void;
 }): ReactElement {
-  const [tab, setTab] = useState<Tab>('audit');
+  const [tab, setTab] = useState<Tab>('activity');
   const [details, setDetails] = useState<{
     auditLog: AuditLine[];
     evidence: EvidenceItem[];
@@ -828,14 +834,14 @@ function RunDrawer({
     if (!run) return;
     if (tabSetForRun.current === run.id) return;
     tabSetForRun.current = run.id;
-    // Failed runs go straight to audit so the stderr/stdout of the broken
+    // Failed runs go straight to activity so the runner output of the broken
     // CLI invocation is the first thing the user sees — no clicking around
     // a "plan" tab to find the diagnostic. For other states, prefer:
-    //   Plan > Findings (if terminal) > Audit.
-    if (run.state === 'failed') setTab('audit');
+    //   Plan > Findings (if terminal) > Activity.
+    if (run.state === 'failed') setTab('activity');
     else if (plan) setTab('plan');
     else if (hasFindings && isTerminal) setTab('findings');
-    else setTab('audit');
+    else setTab('activity');
   }, [run, plan, hasFindings, isTerminal]);
 
   async function dismissFinding(f: PreviewedFinding): Promise<void> {
@@ -945,7 +951,7 @@ function RunDrawer({
         {[
           ...(plan ? (['plan'] as Tab[]) : []),
           ...(hasFindings ? (['findings'] as Tab[]) : []),
-          ...(['audit', 'evidence', 'reasoning', 'files'] as Tab[]),
+          ...(['activity', 'evidence', 'reasoning', 'files'] as Tab[]),
         ].map((t) => (
           <button
             key={t}
@@ -973,7 +979,7 @@ function RunDrawer({
         {tab === 'findings' && (
           <FindingsTab findings={findings} onOpen={setModalFinding} onDismiss={dismissFinding} />
         )}
-        {tab === 'audit' && <AuditTab lines={details?.auditLog ?? []} runState={run.state} />}
+        {tab === 'activity' && <ActivityTab lines={details?.auditLog ?? []} runState={run.state} />}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
         {tab === 'reasoning' && <ReasoningTab lines={details?.auditLog ?? []} />}
         {tab === 'files' && <FilesTab evidence={details?.evidence ?? []} />}
@@ -1203,42 +1209,433 @@ function FindingsTab({
   );
 }
 
-function AuditTab({ lines, runState }: { lines: AuditLine[]; runState: RunState }): ReactElement {
+/**
+ * Activity panel — a Goose-style stack of expandable cards.
+ *
+ * Each tool call is a bordered card whose chevron reveals input + output;
+ * thinking turns render as borderless prose; session start / final result
+ * collapse into compact one-line pills. There is no rail and no internal
+ * scroll on the content — the panel itself scrolls.
+ *
+ * For runs that pre-date the structured event format the renderer falls
+ * back to re-parsing each persisted stdout line as a stream-json event so
+ * old runs surface tool calls and results too.
+ */
+function ActivityTab({
+  lines,
+  runState,
+}: {
+  lines: AuditLine[];
+  runState: RunState;
+}): ReactElement {
   const isLive = runState === 'queued' || runState === 'running' || runState === 'publishing';
-  // Newest-first ordering. New events land at row 1 — no scrolling needed
-  // to see "what just happened", which is the question users open this tab
-  // to answer. Chronological order pushed the latest line off-screen as a
-  // run streamed and required auto-scroll to compensate; reverse-chrono is
-  // also the right default for terminal runs because the result/error/
-  // final state is the most-relevant line and lands on top.
-  const ordered = useMemo(() => [...lines].reverse(), [lines]);
+  const [showAll, setShowAll] = useState(false);
+
+  const rows = useMemo(() => buildActivityRows(lines, showAll), [lines, showAll]);
 
   return (
     <div className="mc-audit-wrap">
       <div className="mc-audit-header">
         {isLive ? <LivePill /> : <span className="mc-audit-status-idle">Settled</span>}
         <span className="mc-audit-count">
-          {lines.length} {lines.length === 1 ? 'entry' : 'entries'}
+          {rows.length} {rows.length === 1 ? 'step' : 'steps'}
         </span>
+        <button
+          type="button"
+          className="mc-activity-toggle"
+          onClick={() => setShowAll((v) => !v)}
+          aria-pressed={showAll}
+          title={
+            showAll
+              ? 'Hide low-signal status pings'
+              : 'Show every event including heartbeats and legacy log lines'
+          }
+        >
+          {showAll ? 'hide noise' : 'show all'}
+        </button>
         <span className="mc-audit-order" title="Most recent at the top">
           newest first
         </span>
       </div>
-      {lines.length === 0 ? (
-        <Empty>{isLive ? 'Waiting for the runner’s first output…' : 'No audit entries yet.'}</Empty>
+      {rows.length === 0 ? (
+        <Empty>{isLive ? 'Waiting for the runner’s first output…' : 'No activity yet.'}</Empty>
       ) : (
-        <div className="col gap-1">
-          {ordered.map((l) => (
-            <div key={l.id} className="mc-audit-row">
-              <span className="mc-audit-time">{shortTime(l.at)}</span>
-              <span className="mc-audit-kind">{l.kind}</span>
-              <div className="mc-audit-msg">{describePayload(l.payload)}</div>
-            </div>
+        <div className="mc-act-stack">
+          {rows.map((row) => (
+            <ActivityRow key={row.key} row={row} />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+function ActivityRow({ row }: { row: ActivityRowData }): ReactElement | null {
+  switch (row.kind) {
+    case 'sessionInit':
+      return <SessionLine row={row} />;
+    case 'thinking':
+      return <ThinkingCard row={row} />;
+    case 'tool':
+      return <ToolCard row={row} />;
+    case 'result':
+      return <ResultLine row={row} />;
+    case 'status':
+      return <StatusLine row={row} />;
+    case 'raw':
+      return <RawLine row={row} />;
+  }
+}
+
+/**
+ * Session start as a single line — model + cwd in muted text. Goose-style
+ * compact one-liner; no border, no chevron.
+ */
+function SessionLine({
+  row,
+}: {
+  row: Extract<ActivityRowData, { kind: 'sessionInit' }>;
+}): ReactElement {
+  const bits: string[] = [];
+  if (row.model) bits.push(row.model);
+  if (typeof row.toolCount === 'number') bits.push(`${row.toolCount} tools`);
+  if (row.cwd) bits.push(shortPath(row.cwd));
+  return (
+    <div className="mc-act-pill" role="listitem">
+      <span className="mc-act-pill-icon" aria-hidden="true">
+        <Icon.Sparkles size={11} color="var(--t-3)" />
+      </span>
+      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
+      <span className="mc-act-pill-text">Session started</span>
+      {bits.length > 0 ? <span className="mc-act-pill-meta">{bits.join(' · ')}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Final-result envelope as a one-liner with run stats.
+ */
+function ResultLine({ row }: { row: Extract<ActivityRowData, { kind: 'result' }> }): ReactElement {
+  const bits: string[] = [];
+  if (typeof row.turns === 'number') bits.push(`${row.turns} turns`);
+  if (typeof row.durationMs === 'number') bits.push(formatDuration(row.durationMs));
+  if (typeof row.costUsd === 'number') bits.push(`$${row.costUsd.toFixed(2)}`);
+  return (
+    <div className={`mc-act-pill is-result ${row.ok ? 'tone-ok' : 'tone-bad'}`} role="listitem">
+      <span className="mc-act-pill-icon" aria-hidden="true">
+        {row.ok ? (
+          <Icon.Check size={11} color="var(--ok)" />
+        ) : (
+          <Icon.Close size={11} color="var(--bad)" />
+        )}
+      </span>
+      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
+      <span className="mc-act-pill-text">{row.ok ? 'Run complete' : 'Run failed'}</span>
+      {bits.length > 0 ? <span className="mc-act-pill-meta">{bits.join(' · ')}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Thinking turn — assistant prose. Borderless, sans-serif. If the text is
+ * longer than ~6 lines it clamps with a "Show more" toggle so a long
+ * reasoning dump doesn't push every other step off-screen.
+ */
+function ThinkingCard({
+  row,
+}: {
+  row: Extract<ActivityRowData, { kind: 'thinking' }>;
+}): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const lines = row.text.split('\n');
+  const isLong = lines.length > 6 || row.text.length > 600;
+  const visible = !isLong || expanded ? row.text : lines.slice(0, 6).join('\n');
+  return (
+    <div className="mc-act-thinking" role="listitem">
+      <span className="mc-act-thinking-time">{shortTime(row.at)}</span>
+      <div className="mc-act-thinking-body">
+        <div className={`mc-act-thinking-text${expanded || !isLong ? '' : ' is-clamped'}`}>
+          {visible}
+        </div>
+        {isLong ? (
+          <button
+            type="button"
+            className="mc-act-link"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+          >
+            {expanded ? 'Show less' : `Show more (${lines.length} lines)`}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Tool call as a Goose-style bordered card. Header has the tool icon
+ * (with a status pip overlaid in the corner), a one-line description, and
+ * a chevron that rotates on expand. Body shows input args followed by the
+ * tool result, separated by a thin border.
+ *
+ * Result content flows freely — no max-height, no inner scroll. The
+ * Activity panel itself is the only scroll surface.
+ */
+function ToolCard({ row }: { row: Extract<ActivityRowData, { kind: 'tool' }> }): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const desc = describeToolCall(row.name, row.input);
+  const status: ToolStatus = row.result ? (row.result.ok ? 'ok' : 'bad') : 'pending';
+  return (
+    <div className={`mc-act-tool tone-${status}${expanded ? ' is-expanded' : ''}`} role="listitem">
+      <button
+        type="button"
+        className="mc-act-tool-head"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="mc-act-tool-icon" aria-hidden="true">
+          {desc.icon}
+          <span className={`mc-act-pip tone-${status}`} />
+        </span>
+        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
+        <span className="mc-act-tool-title">
+          <span className="mc-act-tool-verb">{desc.verb}</span>
+          {desc.target ? <span className="mc-act-tool-target">{desc.target}</span> : null}
+        </span>
+        {row.result && row.result.ok ? (
+          <span className="mc-act-tool-meta">{compactResultMeta(row.result.content)}</span>
+        ) : null}
+        {row.result && !row.result.ok ? (
+          <span className="mc-act-tool-meta is-bad">
+            {previewText(firstNonEmpty(row.result.content) || 'error', 50)}
+          </span>
+        ) : null}
+        {!row.result ? <span className="mc-act-tool-meta is-pending">running…</span> : null}
+        <Icon.Chevron
+          size={11}
+          color="var(--t-3)"
+          style={{
+            marginLeft: 4,
+            transform: expanded ? 'rotate(90deg)' : undefined,
+            transition: 'transform .12s ease',
+          }}
+        />
+      </button>
+      {expanded ? (
+        <div className="mc-act-tool-body">
+          <ToolSection
+            label={describeInputLabel(row.name)}
+            body={renderInput(row.name, row.input)}
+          />
+          {row.result ? (
+            <ToolSection
+              label={row.result.ok ? 'Output' : 'Error'}
+              tone={row.result.ok ? undefined : 'bad'}
+              body={
+                row.result.content.length === 0 ? (
+                  <span className="mc-act-empty">(no output)</span>
+                ) : (
+                  <pre className="mc-act-pre">{row.result.content}</pre>
+                )
+              }
+            />
+          ) : (
+            <ToolSection label="Output" body={<span className="mc-act-empty">running…</span>} />
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type ToolStatus = 'ok' | 'bad' | 'pending';
+
+function ToolSection({
+  label,
+  body,
+  tone,
+}: {
+  label: string;
+  body: ReactNode;
+  tone?: 'bad';
+}): ReactElement {
+  return (
+    <section className={`mc-act-tool-section${tone === 'bad' ? ' is-bad' : ''}`}>
+      <div className="mc-act-tool-section-label">{label}</div>
+      <div className="mc-act-tool-section-body">{body}</div>
+    </section>
+  );
+}
+
+/**
+ * Status events (heartbeats etc.) as a tiny one-liner. Only rendered when
+ * the user toggles "show all".
+ */
+function StatusLine({ row }: { row: Extract<ActivityRowData, { kind: 'status' }> }): ReactElement {
+  return (
+    <div className="mc-act-status-line" role="listitem">
+      <Icon.Dot size={11} color="var(--t-3)" />
+      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
+      <span className="mc-act-pill-text">{row.subtype}</span>
+    </div>
+  );
+}
+
+/**
+ * One persisted log line, untouched. Used only when "show all" is on so
+ * power users can see the raw stream beneath the structured rendering.
+ */
+function RawLine({ row }: { row: Extract<ActivityRowData, { kind: 'raw' }> }): ReactElement {
+  return (
+    <div className={`mc-act-raw-line is-${row.stream}`} role="listitem">
+      <span className="mc-act-raw-time">{shortTime(row.at)}</span>
+      <span className={`mc-act-raw-stream is-${row.stream}`}>{row.stream}</span>
+      <span className="mc-act-raw-text">{row.text}</span>
+    </div>
+  );
+}
+
+interface ToolDescriptor {
+  icon: ReactNode;
+  verb: string;
+  target: string | null;
+}
+
+function describeToolCall(name: string, input: unknown): ToolDescriptor {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const path = stringOf(i['file_path']) ?? stringOf(i['path']);
+  switch (name) {
+    case 'Read':
+      return {
+        icon: <Icon.Doc size={12} color="var(--t-2)" />,
+        verb: 'reading',
+        target: path ? shortPath(path) : null,
+      };
+    case 'Edit':
+      return {
+        icon: <Icon.Code size={12} color="var(--t-2)" />,
+        verb: 'editing',
+        target: path ? shortPath(path) : null,
+      };
+    case 'MultiEdit':
+      return {
+        icon: <Icon.Code size={12} color="var(--t-2)" />,
+        verb: 'editing',
+        target: path ? shortPath(path) : null,
+      };
+    case 'Write':
+      return {
+        icon: <Icon.Code size={12} color="var(--t-2)" />,
+        verb: 'writing',
+        target: path ? shortPath(path) : null,
+      };
+    case 'Bash': {
+      const cmd = stringOf(i['command']);
+      return {
+        icon: <Icon.Terminal size={12} color="var(--t-2)" />,
+        verb: 'running',
+        target: cmd ? previewText(cmd, 60) : null,
+      };
+    }
+    case 'Grep':
+    case 'Glob':
+    case 'Search': {
+      const q = stringOf(i['pattern']) ?? stringOf(i['query']);
+      return {
+        icon: <Icon.Search size={12} color="var(--t-2)" />,
+        verb: 'searching',
+        target: q ?? null,
+      };
+    }
+    case 'TodoWrite':
+      return {
+        icon: <Icon.Filter size={12} color="var(--t-2)" />,
+        verb: 'updating plan',
+        target: null,
+      };
+    case 'Task':
+      return {
+        icon: <Icon.Agents size={12} color="var(--t-2)" />,
+        verb: 'sub-agent',
+        target: stringOf(i['description']) ?? null,
+      };
+    case 'WebFetch':
+    case 'WebSearch':
+      return {
+        icon: <Icon.Search size={12} color="var(--t-2)" />,
+        verb: 'web',
+        target: stringOf(i['url']) ?? stringOf(i['query']) ?? null,
+      };
+    default:
+      return {
+        icon: <Icon.Sliders size={12} color="var(--t-2)" />,
+        verb: name || 'tool',
+        target: null,
+      };
+  }
+}
+
+function describeInputLabel(name: string): string {
+  if (name === 'Bash') return 'Command';
+  if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'MultiEdit')
+    return 'Arguments';
+  return 'Input';
+}
+
+function renderInput(name: string, input: unknown): ReactNode {
+  if (name === 'Bash') {
+    const i = (input ?? {}) as Record<string, unknown>;
+    const cmd = stringOf(i['command']) ?? '';
+    return <pre className="mc-act-pre">{cmd}</pre>;
+  }
+  return <pre className="mc-act-pre">{prettyJson(input)}</pre>;
+}
+
+function compactResultMeta(content: string): string {
+  if (content.length === 0) return 'empty';
+  const lineCount = content.split('\n').length;
+  if (lineCount === 1) return previewText(content, 60);
+  return `${lineCount} lines`;
+}
+
+function firstNonEmpty(text: string): string {
+  for (const l of text.split('\n')) {
+    if (l.trim().length > 0) return l;
+  }
+  return text;
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function previewText(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= max) return collapsed;
+  return collapsed.slice(0, max - 1) + '…';
+}
+
+function shortPath(p: string): string {
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 2) return p;
+  return '…/' + parts.slice(-2).join('/');
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}m ${s}s`;
+}
+
+function stringOf(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
 function LivePill(): ReactElement {
@@ -1305,12 +1702,6 @@ function FilesTab({ evidence }: { evidence: EvidenceItem[] }): ReactElement {
 
 function Empty({ children }: { children: ReactNode }): ReactElement {
   return <div className="mc-empty">{children}</div>;
-}
-
-function describePayload(payload: unknown): ReactNode {
-  if (payload == null) return '';
-  if (typeof payload === 'string') return payload;
-  return <pre className="mc-pre-payload">{JSON.stringify(payload, null, 2)}</pre>;
 }
 
 function shortTime(iso: string): string {
