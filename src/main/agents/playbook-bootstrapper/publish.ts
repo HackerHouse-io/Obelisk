@@ -22,7 +22,7 @@ import { bootstrapPlaybook, type PlaybookFile } from './index';
  *   can preview them without touching the repo.
  * - Higher modes: write the files to a new branch in the local clone,
  *   commit with the standard attribution + [obelisk:playbook-bootstrapper]
- *   subject, push, and open a draft PR.
+ *   subject, push, and open a PR (ready for review).
  */
 export interface BootstrapPublishOutput {
   mode: 'preview' | 'pr';
@@ -89,7 +89,7 @@ export async function bootstrapAndPublish(repo: Repo): Promise<BootstrapPublishO
     body: renderPrBody(result.framework, result.criticalFlows.length),
     head: branch,
     base: repo.defaultBranch,
-    draft: true,
+    draft: false,
   });
   await gh.issues
     .addLabels({

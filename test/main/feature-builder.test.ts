@@ -93,7 +93,7 @@ describe('featureBuilderHandler.interpretResult', () => {
     };
   }
 
-  it('emits [spec comment, plan comment, draft PR] for an issue-driven feature', async () => {
+  it('emits [spec comment, plan comment, ready-for-review PR] for an issue-driven feature', async () => {
     const stdout = `Reasoning…
 BEGIN_FEATURE_OUTPUT
 {

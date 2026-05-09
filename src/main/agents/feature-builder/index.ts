@@ -230,7 +230,6 @@ export const featureBuilderHandler: AgentHandler = {
       body: out.pr_summary,
       head: '',
       base: input.repo.defaultBranch,
-      draft: true,
     });
 
     return plans;

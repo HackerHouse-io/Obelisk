@@ -60,14 +60,14 @@ const SAFETY_OPTIONS: {
   },
   {
     mode: 'prs',
-    title: 'Open draft PRs',
-    sub: '+ Bug Fixer and Feature Builder open draft PRs with full Evidence Pack. Human still merges.',
-    chips: ['+ open draft PRs', '+ Evidence Pack required'],
+    title: 'Open PRs',
+    sub: '+ Bug Fixer and Feature Builder open PRs ready for review with full Evidence Pack. Human still merges.',
+    chips: ['+ open PRs', '+ Evidence Pack required'],
   },
   {
     mode: 'automerge',
     title: 'Auto-merge safe fixes',
-    sub: '+ Obelisk may merge a green draft PR that carries the obelisk:automerge label.',
+    sub: '+ Obelisk may merge a green PR that carries the obelisk:automerge label.',
     chips: ['+ auto-merge labeled PRs'],
   },
 ];

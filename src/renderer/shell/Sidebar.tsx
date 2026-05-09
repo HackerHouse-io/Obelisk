@@ -24,7 +24,7 @@ const NAV: NavRow[] = [
 const SAFETY_LEVELS = [
   { name: 'Observe only', sub: 'Dry run · no writes' },
   { name: 'File issues', sub: 'Issues + Playbook PR' },
-  { name: 'Fix & build', sub: 'Draft PRs allowed' },
+  { name: 'Fix & build', sub: 'PRs opened for review' },
   { name: 'Auto-merge', sub: 'Safe fixes auto-merge' },
 ] as const;
 

@@ -50,7 +50,6 @@ export const bugFixerHandler: AgentHandler = {
       body: '',
       head: '', // filled in by orchestrator (= worktree branch)
       base: repo.defaultBranch,
-      draft: true,
     };
   },
 };

@@ -185,7 +185,7 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
           body: input.plan.body,
           head: input.plan.head,
           base: input.plan.base,
-          draft: input.plan.draft,
+          draft: false,
         });
         prNumber = created.data.number;
         htmlUrl = created.data.html_url;

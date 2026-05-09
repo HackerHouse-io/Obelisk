@@ -190,7 +190,7 @@ export interface InterpretResultInput {
 }
 
 export type PublishPlan =
-  | { kind: 'pr'; title: string; body: string; head: string; base: string; draft: true }
+  | { kind: 'pr'; title: string; body: string; head: string; base: string }
   | { kind: 'issue'; title: string; body: string; labels: string[] }
   | { kind: 'comment'; issueNumber: number; body: string }
   | {

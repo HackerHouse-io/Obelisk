@@ -1572,7 +1572,7 @@ function PermissionsCard({
     { key: 'readCode', label: 'Read code' },
     { key: 'runTests', label: 'Run tests' },
     { key: 'createIssues', label: 'Create issues' },
-    { key: 'draftPrs', label: 'Open draft PRs' },
+    { key: 'draftPrs', label: 'Open PRs' },
     { key: 'merge', label: 'Merge', locked: true },
   ];
   return (

@@ -13,7 +13,11 @@ import type {
 const SAFETY_OPTIONS: { mode: SafetyMode; title: string; sub: string }[] = [
   { mode: 'observe', title: 'Observe only', sub: 'Read code, run tests, crawl. No GitHub writes.' },
   { mode: 'issues', title: 'File issues', sub: '+ create issues, commit qa/ via PR.' },
-  { mode: 'prs', title: 'Open draft PRs', sub: '+ Bug Fixer / Feature Builder open draft PRs.' },
+  {
+    mode: 'prs',
+    title: 'Open PRs',
+    sub: '+ Bug Fixer / Feature Builder open PRs ready for review.',
+  },
   {
     mode: 'automerge',
     title: 'Auto-merge safe fixes',

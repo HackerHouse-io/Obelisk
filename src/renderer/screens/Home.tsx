@@ -863,7 +863,7 @@ function agentRunStatus(agent: Agent, mode: SafetyMode): AgentRunStatus {
         tone: 'warn',
         dotColor: 'var(--warn)',
         description:
-          'Runs on schedule and opens draft PRs you review before merging. Issue-only agents still file issues.',
+          'Runs on schedule and opens PRs ready for your review and merge. Issue-only agents still file issues.',
       };
     case 'automerge':
       return {
