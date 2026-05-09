@@ -61,11 +61,21 @@ export function spawnAgentCli(opts: SpawnOpts): Promise<SpawnResult> {
       opts.abort.addEventListener('abort', abortHandler, { once: true });
     }
 
+    // Per-stream pending buffer so a logical line that arrives in multiple
+    // OS pipe chunks is reassembled before we emit it. Without this, huge
+    // stream-json events (a tool_result with file contents) get split
+    // mid-line by Node's pipe scheduler, persist as multiple corrupt
+    // JSON fragments, and the renderer can't re-classify them.
+    let stdoutPending = '';
+    let stderrPending = '';
     if (child.stdout) {
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
         stdout += chunk;
-        for (const line of chunk.split(/\r?\n/)) {
+        stdoutPending += chunk;
+        const parts = stdoutPending.split(/\r?\n/);
+        stdoutPending = parts.pop() ?? '';
+        for (const line of parts) {
           if (line.length === 0) continue;
           opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: line });
         }
@@ -75,7 +85,10 @@ export function spawnAgentCli(opts: SpawnOpts): Promise<SpawnResult> {
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk: string) => {
         stderr += chunk;
-        for (const line of chunk.split(/\r?\n/)) {
+        stderrPending += chunk;
+        const parts = stderrPending.split(/\r?\n/);
+        stderrPending = parts.pop() ?? '';
+        for (const line of parts) {
           if (line.length === 0) continue;
           if (isRunnerSetupNoise(line)) continue;
           opts.onAudit({ at: new Date().toISOString(), kind: 'stderr', payload: line });
@@ -96,6 +109,16 @@ export function spawnAgentCli(opts: SpawnOpts): Promise<SpawnResult> {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       opts.abort.removeEventListener('abort', abortHandler);
+      // Drain any partial trailing line that arrived without a final
+      // newline so the reassembled JSON event isn't lost.
+      if (stdoutPending.length > 0) {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: stdoutPending });
+        stdoutPending = '';
+      }
+      if (stderrPending.length > 0 && !isRunnerSetupNoise(stderrPending)) {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'stderr', payload: stderrPending });
+        stderrPending = '';
+      }
       resolve({ exitCode: code, signal, stdout, stderr, timedOut });
     });
   });

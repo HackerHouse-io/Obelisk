@@ -1278,6 +1278,8 @@ function ActivityRow({ row }: { row: ActivityRowData }): ReactElement | null {
       return <ThinkingCard row={row} />;
     case 'tool':
       return <ToolCard row={row} />;
+    case 'event':
+      return <EventCard row={row} />;
     case 'result':
       return <ResultLine row={row} />;
     case 'status':
@@ -1341,33 +1343,119 @@ function ResultLine({ row }: { row: Extract<ActivityRowData, { kind: 'result' }>
  * longer than ~6 lines it clamps with a "Show more" toggle so a long
  * reasoning dump doesn't push every other step off-screen.
  */
+/**
+ * Thinking turn — renders with the same card chrome as ToolCard so the
+ * timeline reads as a uniform stack. Short turns (≤2 lines, ≤160 chars)
+ * are expanded by default since there's nothing to hide; longer turns
+ * collapse so a giant reasoning dump doesn't push everything else off
+ * the screen. Body is sans-serif prose, not monospace — this is the
+ * model's voice, not code.
+ */
 function ThinkingCard({
   row,
 }: {
   row: Extract<ActivityRowData, { kind: 'thinking' }>;
 }): ReactElement {
-  const [expanded, setExpanded] = useState(false);
   const lines = row.text.split('\n');
-  const isLong = lines.length > 6 || row.text.length > 600;
-  const visible = !isLong || expanded ? row.text : lines.slice(0, 6).join('\n');
+  const lineCount = lines.length;
+  const charCount = row.text.length;
+  const short = lineCount <= 2 && charCount <= 160;
+  const [expanded, setExpanded] = useState(short);
+  const firstLine = lines.find((l) => l.trim().length > 0)?.trim() ?? '';
   return (
-    <div className="mc-act-thinking" role="listitem">
-      <span className="mc-act-thinking-time">{shortTime(row.at)}</span>
-      <div className="mc-act-thinking-body">
-        <div className={`mc-act-thinking-text${expanded || !isLong ? '' : ' is-clamped'}`}>
-          {visible}
+    <div className={`mc-act-tool tone-muted${expanded ? ' is-expanded' : ''}`} role="listitem">
+      <button
+        type="button"
+        className="mc-act-tool-head"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="mc-act-tool-icon" aria-hidden="true">
+          <Icon.Spark size={12} color="var(--t-2)" />
+          <span className="mc-act-pip tone-info" />
+        </span>
+        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
+        <span className="mc-act-tool-title">
+          <span className="mc-act-tool-verb">thinking</span>
+          {firstLine ? (
+            <span className="mc-act-tool-target is-prose">{previewText(firstLine, 70)}</span>
+          ) : null}
+        </span>
+        {lineCount > 1 ? (
+          <span className="mc-act-tool-meta">{lineCount} lines</span>
+        ) : (
+          <span className="mc-act-tool-meta" />
+        )}
+        <Icon.Chevron
+          size={11}
+          color="var(--t-3)"
+          style={{
+            marginLeft: 4,
+            transform: expanded ? 'rotate(90deg)' : undefined,
+            transition: 'transform .12s ease',
+          }}
+        />
+      </button>
+      {expanded ? (
+        <div className="mc-act-tool-body">
+          <div className="mc-act-tool-section">
+            <div className="mc-act-tool-section-body">
+              <div className="mc-act-prose">{row.text}</div>
+            </div>
+          </div>
         </div>
-        {isLong ? (
-          <button
-            type="button"
-            className="mc-act-link"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-          >
-            {expanded ? 'Show less' : `Show more (${lines.length} lines)`}
-          </button>
-        ) : null}
-      </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Old-run stdout line that looks like a stream-json event but didn't
+ * fully parse (typically a giant `tool_result` whose chunks were split
+ * by the runner pipe before our buffer fix landed). Renders as a card so
+ * the user can collapse it; body shows the raw JSON-ish text.
+ */
+function EventCard({ row }: { row: Extract<ActivityRowData, { kind: 'event' }> }): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const lineCount = row.content.split('\n').length;
+  const meta = lineCount === 1 ? `${row.content.length} chars` : `${lineCount} lines`;
+  return (
+    <div className={`mc-act-tool tone-muted${expanded ? ' is-expanded' : ''}`} role="listitem">
+      <button
+        type="button"
+        className="mc-act-tool-head"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="mc-act-tool-icon" aria-hidden="true">
+          <Icon.Sliders size={12} color="var(--t-2)" />
+          <span className="mc-act-pip tone-pending" />
+        </span>
+        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
+        <span className="mc-act-tool-title">
+          <span className="mc-act-tool-verb">{row.subtype}</span>
+          <span className="mc-act-tool-target">unparseable</span>
+        </span>
+        <span className="mc-act-tool-meta">{meta}</span>
+        <Icon.Chevron
+          size={11}
+          color="var(--t-3)"
+          style={{
+            marginLeft: 4,
+            transform: expanded ? 'rotate(90deg)' : undefined,
+            transition: 'transform .12s ease',
+          }}
+        />
+      </button>
+      {expanded ? (
+        <div className="mc-act-tool-body">
+          <div className="mc-act-tool-section">
+            <div className="mc-act-tool-section-body">
+              <pre className="mc-act-pre">{row.content}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

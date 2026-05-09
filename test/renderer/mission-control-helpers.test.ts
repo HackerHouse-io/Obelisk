@@ -192,10 +192,11 @@ describe('buildActivityRows', () => {
       audit(2, 'agent_event', event({ type: 'status', subtype: 'system:status', raw: {} })),
     ];
     expect(buildActivityRows(lines, false).map((r) => r.kind)).toEqual(['sessionInit']);
-    expect(buildActivityRows(lines, true).map((r) => r.kind).sort()).toEqual([
-      'sessionInit',
-      'status',
-    ]);
+    expect(
+      buildActivityRows(lines, true)
+        .map((r) => r.kind)
+        .sort(),
+    ).toEqual(['sessionInit', 'status']);
   });
 
   it('drops legacy [system:status] / [user] / [rate_limit_event] placeholders by default', () => {
@@ -344,7 +345,12 @@ describe('buildActivityRows', () => {
           type: 'user',
           message: {
             content: [
-              { type: 'tool_result', tool_use_id: 'tu1', content: 'file contents', is_error: false },
+              {
+                type: 'tool_result',
+                tool_use_id: 'tu1',
+                content: 'file contents',
+                is_error: false,
+              },
             ],
           },
         }),
@@ -367,15 +373,34 @@ describe('buildActivityRows', () => {
   it('falls back to thinking when an old-run stdout line is non-JSON prose', () => {
     const lines: AuditLine[] = [
       audit(1, 'stdout', 'warning: cli not signed in'),
-      audit(
-        2,
-        'stdout',
-        JSON.stringify({ type: 'system', subtype: 'init', model: 'm' }),
-      ),
+      audit(2, 'stdout', JSON.stringify({ type: 'system', subtype: 'init', model: 'm' })),
       audit(3, 'stdout', 'a plain prose line after init'),
     ];
     const rows = buildActivityRows(lines, false);
     // Reverse-chrono: thinking (last prose), sessionInit, thinking (first prose)
     expect(rows.map((r) => r.kind)).toEqual(['thinking', 'sessionInit', 'thinking']);
+  });
+
+  it("emits an event row (collapsible card) when a JSON event is truncated and won't parse", () => {
+    // Reproduces the screenshot bug: a tool_result whose content exceeds
+    // the OS pipe chunk size was split mid-line by the old unbuffered
+    // spawn handler. The fragment looks like a stream-json event but
+    // can't be parsed — the renderer should still surface it as a card.
+    const truncated =
+      '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_x","type":"tool_result","content":"/path/to/very/long/file...';
+    const rows = buildActivityRows([audit(1, 'stdout', truncated)], false);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'event') throw new Error('expected event row');
+    expect(rows[0].subtype).toBe('user:tool_result');
+    expect(rows[0].content).toBe(truncated);
+  });
+
+  it('does not flag plain prose as an event row even if it contains a brace', () => {
+    const lines: AuditLine[] = [
+      audit(1, 'stdout', 'I will use the {brackets} carefully'),
+      audit(2, 'stdout', '{ this is also prose, no quoted type field'),
+    ];
+    const rows = buildActivityRows(lines, false);
+    expect(rows.map((r) => r.kind)).toEqual(['thinking']);
   });
 });

@@ -151,6 +151,13 @@ export type ActivityRow =
       raw: unknown;
     }
   | {
+      kind: 'event';
+      key: string;
+      at: string;
+      subtype: string;
+      content: string;
+    }
+  | {
       kind: 'raw';
       key: string;
       at: string;
@@ -327,6 +334,23 @@ export function buildActivityRows(lines: AuditLine[], showAll: boolean): Activit
         continue;
       }
 
+      // Looks like a stream-json event but didn't fully parse — typically
+      // a giant `tool_result` whose chunks were split mid-line by an
+      // unbuffered runner pipe. Surface as an `event` row so the user
+      // gets a collapsible card instead of a wall of escaped text.
+      const partialKind = looksLikeStreamEvent(trimmed);
+      if (partialKind) {
+        flushThinking();
+        out.push({
+          kind: 'event',
+          key: `ev${l.id}`,
+          at: l.at,
+          subtype: partialKind,
+          content: text,
+        });
+        continue;
+      }
+
       // Genuine prose (assistant text deltas, claude warnings, codex
       // output) — feed the thinking accumulator.
       if (l.kind === 'stderr') {
@@ -493,6 +517,31 @@ function classifyStreamLine(line: string): AgentEvent[] | null {
   }
 
   return null;
+}
+
+/**
+ * Cheap regex peek: does this line LOOK like a stream-json event we'd
+ * normally parse? Used as a fallback when JSON.parse fails on a partial
+ * line so we still surface it as a structured (collapsible) row instead
+ * of dumping raw text into a thinking card.
+ *
+ * Returns the event "subtype" (e.g. `user:tool_result`, `assistant`,
+ * `system:init`) or null when the line isn't event-shaped.
+ */
+function looksLikeStreamEvent(line: string): string | null {
+  if (line.length < 2 || line[0] !== '{') return null;
+  const typeMatch = /^\{\s*"type"\s*:\s*"([\w_]+)"/.exec(line);
+  const type = typeMatch?.[1];
+  if (!type) return null;
+  if (type === 'user' && /"type"\s*:\s*"tool_result"/.test(line)) return 'user:tool_result';
+  if (type === 'user') return 'user';
+  if (type === 'assistant') return 'assistant';
+  if (type === 'system') {
+    const sub = /"subtype"\s*:\s*"([\w_]+)"/.exec(line)?.[1];
+    return sub ? `system:${sub}` : 'system';
+  }
+  if (type === 'result') return 'result';
+  return type;
 }
 
 function stringifyToolResult(content: unknown): string {
