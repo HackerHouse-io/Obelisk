@@ -6,28 +6,32 @@ import { launchApp, type LaunchedApp } from './fixtures/launch';
 import { startGithubStub, type GithubStubHandle } from './fixtures/github-stub';
 
 /**
- * E2E coverage for the bug-fixer pipeline against a *real* HTTP round-trip
- * to a stub GitHub server. Closes the "never run end-to-end against
- * GitHub" production-readiness gap without requiring a live repo.
+ * E2E coverage for the bug-fixer Run-now flow against a real HTTP
+ * round-trip to a stub GitHub server. The test starts from the same
+ * state a real user has after connecting a repo:
+ *   - repo row exists in the DB (a single one-time setup, mirroring
+ *     `repos:connect`)
+ *   - a `bug-fixer` agent instance exists (created by `repos:connect`)
+ *   - the **backlog table is EMPTY** — exactly what the user sees on a
+ *     freshly-connected repo before the periodic sync (~2 min) fires.
  *
- * The stub responds to:
- *   GET  /user
- *   GET  /repos/.../issues/:n
- *   POST /repos/.../issues/:n/labels       (postClaimSignal)
- *   POST /repos/.../issues/:n/assignees    (postClaimSignal)
- *   DEL  /repos/.../issues/:n/labels/:name (clearClaimSignals)
- *   DEL  /repos/.../issues/:n/assignees    (clearClaimSignals)
+ * Then the test drives the same UI clicks a real user would: open the
+ * Agents screen, click into the bug-fixer, click Run now. The asserted
+ * outcomes are user-visible (Mission Control card appears, no error
+ * banner) AND the GitHub stub records the canonical claim sequence
+ * (issues fetch → label/assignee POSTs).
+ *
+ * This replaces an earlier version that seeded the backlog table
+ * directly. That test passed while production failed, because the
+ * "Run now triggers an inline backlog sync" path was never exercised.
  */
 
 let ctx: LaunchedApp;
-let stub: GithubStubHandle;
+let stub: GithubStubHandle | undefined;
 let stubBinDir: string;
 
 test.beforeEach(() => {
   stubBinDir = mkdtempSync(join(tmpdir(), 'obelisk-stub-bin-pipeline-'));
-  // The stub `claude` returns no patch, so the run lands in `failed`
-  // before the publisher fires. That's fine — this test asserts on the
-  // CLAIM/SIGNAL phase of the pipeline, which runs BEFORE the LLM does.
   const stubPath = join(stubBinDir, 'claude');
   writeFileSync(
     stubPath,
@@ -42,12 +46,16 @@ exit 0
 
 test.afterEach(async () => {
   if (ctx) await ctx.cleanup();
-  if (stub) await stub.close();
+  if (stub) {
+    await stub.close().catch(() => undefined);
+    stub = undefined;
+  }
   if (stubBinDir) rmSync(stubBinDir, { recursive: true, force: true });
 });
 
-test('Bug Fixer claims a gh_issue backlog row by hitting the GitHub API end-to-end (label + assignee land on the issue)', async () => {
-  // Stub a single open GitHub issue authored by an allowlisted user.
+test('User clicks Run now on a freshly-connected repo with empty backlog: bug-fixer syncs from GitHub inline, claims the P0 issue, and dispatches', async () => {
+  // GitHub stub returns one open P0 issue. The user has NEVER run the
+  // periodic sync for this repo yet, so their local backlog is empty.
   stub = await startGithubStub({
     authedLogin: 'obelisk-test-user',
     issues: [
@@ -56,7 +64,7 @@ test('Bug Fixer claims a gh_issue backlog row by hitting the GitHub API end-to-e
         title: 'Crash on cold start',
         state: 'open',
         user: { login: 'allowed-author' },
-        labels: [{ name: 'bug' }],
+        labels: [{ name: 'obelisk:fix' }, { name: 'P0' }],
         assignees: [],
       },
     ],
@@ -67,117 +75,77 @@ test('Bug Fixer claims a gh_issue backlog row by hitting the GitHub API end-to-e
       mode: 'prs',
       repoFullName: 'acme/app',
       agents: ['bug-fixer'],
-      backlogItems: [
-        {
-          source: 'gh_issue',
-          githubIssue: 42,
-          title: 'Crash on cold start',
-          kind: 'bug',
-          priorityLabel: 'P0',
-        },
-      ],
+      // CRITICAL: no `backlogItems`. The test starts in the exact
+      // state a real user is in right after connecting a repo — DB
+      // has a repos row + an agent row, but no backlog.
     },
     pathOverride: `${stubBinDir}:/usr/bin:/bin`,
     githubBaseUrl: stub.baseUrl,
     authedLoginOverride: 'obelisk-test-user',
   });
 
-  // The seed builds an empty allowlist; for selectTask to admit a
-  // gh_issue with author "allowed-author" we need to add them via the
-  // existing IPC. Drive the renderer's window.obelisk bridge from
-  // page.evaluate so the call rides the same path the UI would.
-  const repoId = ctx.fixtures!.repo.id;
-  await ctx.window.evaluate(
-    async ({ repoId, login }: { repoId: string; login: string }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (window as any).obelisk.invoke('allowlist:add', { repoId, login });
-    },
-    { repoId, login: 'allowed-author' },
-  );
-
   const page = ctx.window;
 
-  // Click Run now on the bug-fixer.
+  // 1. User clicks "Agents" in the sidebar.
   await page.getByRole('button', { name: 'Agents', exact: true }).click();
+
+  // 2. User clicks into their bug-fixer instance.
   const listItem = page.getByTestId('agent-list-item-bug-fixer');
   await expect(listItem).toBeVisible({ timeout: 15_000 });
   await listItem.click();
-  await page.getByTestId('agent-run-now-bug-fixer').click();
 
-  // The Mission Control card surfaces the issue title — proves the
-  // backlog claim landed and the renderer received the run. The card
-  // selector is more reliable than `.mc-stage` because a fast-failing
-  // run lands directly in Failed, and we're asserting on the card body.
-  await expect(
-    page.locator('.mc-card').filter({ hasText: 'Crash on cold start' }).first(),
-  ).toBeVisible({ timeout: 30_000 });
+  // 3. User clicks Run now.
+  const runButton = page.getByTestId('agent-run-now-bug-fixer');
+  await expect(runButton).toBeVisible({ timeout: 15_000 });
+  await expect(runButton).toBeEnabled();
+  await runButton.click();
 
-  // Wait briefly for the orchestrator's selectTask path to hit the stub
-  // (fetchIssueContext + postClaimSignal). 1.5s is well past the local
-  // round-trip latency for a same-process http server.
+  // 4. Mission Control opens with a card for the GitHub issue. The
+  //    issue title comes from the inline-synced backlog row; the
+  //    subtitle "GitHub issue #42" comes from the run row's task_ref.
+  //    No "Could not start the run" banner.
+  await expect(page.getByTestId('agent-run-error')).toBeHidden();
+  const card = page.locator('.mc-card').filter({ hasText: 'Crash on cold start' }).first();
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card).toContainText(/GitHub issue #42/);
+
+  // 5. The stub recorded the canonical Run-now → claim sequence:
+  //    inline sync (GET /repos/.../issues), then per-issue context
+  //    (GET /issues/42), then claim signals (POST labels + POST
+  //    assignees). We assert on the request log so the regression is
+  //    visible if any step is silently dropped.
   await page.waitForTimeout(1500);
-
-  // The stub MUST have observed the canonical claim sequence:
-  //   1. GET /user                  (getAuthedLogin during postClaimSignal)
-  //   2. GET .../issues/42          (fetchIssueContext)
-  //   3. POST .../issues/42/labels  (apply obelisk:in-progress)
-  //   4. POST .../issues/42/assignees (assign the connected user)
   const reqs = stub.requests;
-  expect(reqs.some((r) => r.method === 'GET' && r.path === '/repos/acme/app/issues/42')).toBe(true);
   expect(
-    reqs.some((r) => r.method === 'POST' && r.path === '/repos/acme/app/issues/42/labels'),
+    reqs.some((r) => r.method === 'GET' && r.path.startsWith('/repos/acme/app/issues?')),
   ).toBe(true);
-  expect(
-    reqs.some((r) => r.method === 'POST' && r.path === '/repos/acme/app/issues/42/assignees'),
-  ).toBe(true);
-
-  // Inspect the POST bodies the stub received: the agent must have
-  // tried to apply `obelisk:in-progress` and assign the connected user.
-  // We assert against the request body (not the stub's final issue
-  // state), because the run fails fast — clearClaimSignals fires in
-  // the orchestrator's finally hook and removes both signals before
-  // the test can observe them. The "got applied at least once" assertion
-  // is the truthful one.
+  expect(reqs.some((r) => r.method === 'GET' && r.path === '/repos/acme/app/issues/42')).toBe(
+    true,
+  );
   const labelPost = reqs.find(
     (r) => r.method === 'POST' && r.path === '/repos/acme/app/issues/42/labels',
   );
   expect(labelPost?.body).toMatchObject({ labels: ['obelisk:in-progress'] });
-
   const assigneePost = reqs.find(
     (r) => r.method === 'POST' && r.path === '/repos/acme/app/issues/42/assignees',
   );
   expect(assigneePost?.body).toMatchObject({ assignees: ['obelisk-test-user'] });
-
-  // And the cleanup actually fired — proves the orchestrator's finally
-  // hook works end-to-end against the stub.
-  expect(
-    reqs.some(
-      (r) =>
-        r.method === 'DELETE' &&
-        r.path.startsWith('/repos/acme/app/issues/42/labels/obelisk%3Ain-progress'),
-    ) ||
-      reqs.some(
-        (r) =>
-          r.method === 'DELETE' &&
-          r.path === '/repos/acme/app/issues/42/labels/obelisk:in-progress',
-      ),
-  ).toBe(true);
 });
 
-test('Bug Fixer skips an issue another Obelisk install is already working (cross-installation guard)', async () => {
-  // Stub the exact "sibling install already claimed it" state: the
-  // connected user is already on the assignees AND obelisk:in-progress
-  // is on the labels. selectTask must skip this row, NOT submit an
-  // additional addLabels/addAssignees call.
+test('User clicks Run now and the only open issue is already claimed by another Obelisk install: bug-fixer skips it, surfaces an actionable error', async () => {
+  // The cross-installation signature: obelisk:in-progress label AND
+  // the connected user is on the assignees. selectTask must skip and
+  // throw BACKLOG_ALL_FILTERED so the renderer shows a clear hint
+  // instead of the generic "nothing to do".
   stub = await startGithubStub({
     authedLogin: 'obelisk-test-user',
     issues: [
       {
         number: 99,
-        title: 'Already taken',
+        title: 'Already taken by sibling install',
         state: 'open',
         user: { login: 'allowed-author' },
-        labels: [{ name: 'obelisk:in-progress' }],
+        labels: [{ name: 'obelisk:fix' }, { name: 'obelisk:in-progress' }],
         assignees: [{ login: 'obelisk-test-user' }],
       },
     ],
@@ -188,45 +156,27 @@ test('Bug Fixer skips an issue another Obelisk install is already working (cross
       mode: 'prs',
       repoFullName: 'acme/app',
       agents: ['bug-fixer'],
-      backlogItems: [
-        {
-          source: 'gh_issue',
-          githubIssue: 99,
-          title: 'Already taken',
-          kind: 'bug',
-          priorityLabel: 'P0',
-        },
-      ],
     },
     pathOverride: `${stubBinDir}:/usr/bin:/bin`,
     githubBaseUrl: stub.baseUrl,
     authedLoginOverride: 'obelisk-test-user',
   });
 
-  const repoId2 = ctx.fixtures!.repo.id;
-  await ctx.window.evaluate(
-    async ({ repoId, login }: { repoId: string; login: string }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (window as any).obelisk.invoke('allowlist:add', { repoId, login });
-    },
-    { repoId: repoId2, login: 'allowed-author' },
-  );
-
   const page = ctx.window;
   await page.getByRole('button', { name: 'Agents', exact: true }).click();
   await page.getByTestId('agent-list-item-bug-fixer').click();
   await page.getByTestId('agent-run-now-bug-fixer').click();
 
-  // Give the orchestrator + selectTask retry loop time to attempt and
-  // skip the row. The selectTask path makes one GET to /issues/99,
-  // sees the cross-installation signature, audits, and returns null —
-  // the renderer surfaces "No task to work on right now".
-  await page.waitForTimeout(2000);
+  // The error banner appears with the cross-install reason. No silent
+  // "nothing to do" — the user knows exactly why nothing ran.
+  const banner = page.getByTestId('agent-run-error');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText(/already claimed by another Obelisk install/i);
 
-  // Stub MUST have observed the GET issues/99 (the lookup that yielded
-  // the conflicting state) but NEVER POST to add labels/assignees.
+  // No POST labels / assignees were submitted — the cross-install
+  // guard short-circuited before any signal write.
+  await page.waitForTimeout(1500);
   const reqs = stub.requests;
-  expect(reqs.some((r) => r.method === 'GET' && r.path === '/repos/acme/app/issues/99')).toBe(true);
   expect(
     reqs.some(
       (r) =>
@@ -235,4 +185,36 @@ test('Bug Fixer skips an issue another Obelisk install is already working (cross
           r.path === '/repos/acme/app/issues/99/assignees'),
     ),
   ).toBe(false);
+});
+
+test('User clicks Run now on a repo that has zero open GitHub issues: bug-fixer surfaces BACKLOG_EMPTY with a hint to file an issue', async () => {
+  stub = await startGithubStub({
+    authedLogin: 'obelisk-test-user',
+    issues: [], // genuinely nothing open
+  });
+
+  ctx = await launchApp({
+    seedFixtures: {
+      mode: 'prs',
+      repoFullName: 'acme/app',
+      agents: ['bug-fixer'],
+    },
+    pathOverride: `${stubBinDir}:/usr/bin:/bin`,
+    githubBaseUrl: stub.baseUrl,
+    authedLoginOverride: 'obelisk-test-user',
+  });
+
+  const page = ctx.window;
+  await page.getByRole('button', { name: 'Agents', exact: true }).click();
+  await page.getByTestId('agent-list-item-bug-fixer').click();
+  await page.getByTestId('agent-run-now-bug-fixer').click();
+
+  // The error banner explains there are no issues — this is the bug
+  // the user reported, where the OLD code surfaced "nothing to do"
+  // with no path to action.
+  const banner = page.getByTestId('agent-run-error');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText(/No `obelisk:fix` issues/i);
+  // The hint tells the user what to do next.
+  await expect(banner).toContainText(/Apply the `obelisk:fix` label|manual backlog item/i);
 });

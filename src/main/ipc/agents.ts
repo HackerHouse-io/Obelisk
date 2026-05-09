@@ -90,7 +90,9 @@ export async function handleAgentsRun(
         // selectTask returned null (or some other path that completed
         // without ever firing onStarted, e.g. a same-agent-already-running
         // error). Surface as NOT_FOUND so the renderer can show a useful
-        // message instead of a stuck spinner.
+        // message instead of a stuck spinner. Bug-fixer / feature-builder
+        // throw categorized ObeliskErrors instead of returning null, so
+        // those land in the err-branch below with their own code+hint.
         settle(() =>
           result.runId
             ? resolve({ runId: result.runId, taskRef: null, taskContext: null })
@@ -100,10 +102,10 @@ export async function handleAgentsRun(
         );
       },
       (err) => {
-        // Pre-onStarted failure (e.g. createRun threw on a duplicate
-        // task_ref). Reject so the renderer surfaces an error banner.
-        // Errors after onStarted are logged by the orchestrator's own
-        // failure-classification path and do not affect this promise.
+        // Pre-onStarted failure: ObeliskErrors (e.g. BACKLOG_EMPTY,
+        // BACKLOG_ALL_FILTERED, RUN_ACTIVE) flow through unchanged so
+        // the renderer can show their actionable hint. Anything else is
+        // wrapped as INTERNAL by the IPC bridge.
         settle(() => reject(err));
       },
     );

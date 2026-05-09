@@ -31,8 +31,6 @@ import { checkEvidence } from '../evidence/check';
 import { renderPrBody } from '../evidence/pr-body';
 import { publish, clearClaimSignals } from '../publisher';
 import type { RepoSummary, Permissions } from '../prompt-compiler';
-import { checkPatchScope } from '../agents/lib/scope-guard';
-import { getSetting } from '../db/settings';
 
 export interface RunAgentInput {
   repoId: string;
@@ -137,6 +135,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     : await handler.selectTask({
         repo,
         defaultRunner: repoDefaultRunner,
+        trigger: input.trigger,
         taskId: input.taskId,
         ...(agentRow ? { agentId: agentRow.id } : {}),
       });
@@ -441,35 +440,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
 
     if (handler.producesPatch) {
-      // Server-side scope guard for code-writing agents. The bug-fixer
-      // prompt asks the LLM to keep diffs small, but prompts aren't
-      // enforceable — an LLM that "helpfully" touches 30 files will, and
-      // those PRs are exactly what creates merge-conflict storms when
-      // many bug-fixers run in parallel. The guard rejects oversized or
-      // blacklisted patches before publish.
-      if (input.agentName === 'bug-fixer' || input.agentName === 'feature-builder') {
-        const cap = readScopeCap(repo.id);
-        const scope = checkPatchScope(ok.patch.filesChanged, { maxFiles: cap });
-        if (!scope.ok) {
-          appendAudit({
-            runId: run.id,
-            kind: 'scope_too_wide',
-            payload: {
-              reason: scope.reason,
-              offending: scope.offending,
-              max: cap,
-            },
-          });
-          transitionRun(run.id, 'failed', {
-            errorCode: 'SCOPE_TOO_WIDE',
-            outputSummary: scope.detail.slice(0, 500),
-            runnerUsed: runResult.runnerUsed,
-            fallbackUsed: runResult.fallbackUsed,
-          });
-          return { runId: run.id, finalState: 'failed', reason: 'SCOPE_TOO_WIDE' };
-        }
-      }
-
       saveArtifact({
         runId: run.id,
         repoId: repo.id,
@@ -721,15 +691,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
   }
-}
-
-const DEFAULT_SCOPE_CAP = 5;
-
-/** Per-repo override read from settings; falls back to DEFAULT_SCOPE_CAP. */
-function readScopeCap(repoId: string): number {
-  const v = getSetting<number>(`repo:${repoId}`, 'bug_fixer_max_files');
-  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
-  return DEFAULT_SCOPE_CAP;
 }
 
 /**

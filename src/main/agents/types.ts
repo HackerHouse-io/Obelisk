@@ -99,6 +99,14 @@ export interface SelectTaskInput {
   /** The default runner for this repo. */
   defaultRunner: RunnerKind;
   /**
+   * What kicked off this run — `manual` means a user explicitly clicked
+   * Run now, `schedule` is cron, `webhook` / `cloud` are remote triggers.
+   * The bug-fixer uses this to decide whether to (a) run an inline
+   * backlog sync when the local table is empty, and (b) bypass the
+   * actor allowlist (manual = the user is vouching for the action).
+   */
+  trigger: 'schedule' | 'manual' | 'webhook' | 'cloud';
+  /**
    * Optional hint passed through from `agents:run`'s `taskId`. Agents can
    * use this to bias their task selection — e.g. iOS QA Pilot interprets
    * `flow:<flow_id>` to claim a specific flow. Unrecognised hints are

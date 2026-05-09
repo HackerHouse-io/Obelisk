@@ -114,7 +114,7 @@ describe('orchestrator: multi-instance bug-fixer', () => {
     expect(ids.length).toBe(2);
   });
 
-  it('three Bug Fixers vs two backlog items: third returns "nothing to do"', async () => {
+  it('three Bug Fixers vs two backlog items: third throws BACKLOG_ALL_FILTERED', async () => {
     const repo = createRepo({
       githubFullName: 'test/three',
       localPath: repoPath,
@@ -136,7 +136,7 @@ describe('orchestrator: multi-instance bug-fixer', () => {
     };
     const factory = (k: 'claude' | 'codex'): MockRunner => new MockRunner(k, recipe);
 
-    const results = await Promise.all([
+    const results = await Promise.allSettled([
       runAgent({
         repoId: repo.id,
         agentName: 'bug-fixer',
@@ -160,10 +160,14 @@ describe('orchestrator: multi-instance bug-fixer', () => {
       }),
     ]);
 
-    // Exactly one result should be the "nothing to do" sentinel (empty runId).
-    const nothingToDo = results.filter((r) => r.runId === '');
-    const ranSomething = results.filter((r) => r.runId !== '');
-    expect(nothingToDo.length).toBe(1);
-    expect(ranSomething.length).toBe(2);
+    // Two should fulfill (each got its own backlog row); the third
+    // throws BACKLOG_ALL_FILTERED with an actionable hint instead of
+    // the old null/sentinel return.
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled.length).toBe(2);
+    expect(rejected.length).toBe(1);
+    const err = (rejected[0] as PromiseRejectedResult).reason as { code?: string };
+    expect(err.code).toBe('BACKLOG_ALL_FILTERED');
   });
 });

@@ -4,6 +4,7 @@ import {
   unlockBacklogItem,
   deleteBacklogGhIssue,
   getBacklogItem,
+  listBacklog,
 } from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
@@ -11,6 +12,8 @@ import { postClaimSignal } from '../lib/claim-on-github';
 import { getAuthedLogin } from '../../auth/token-store';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
+import { syncBacklogForRepo } from '../../scheduler/backlog-sync';
+import { ObeliskError } from '../../../shared/errors';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -49,18 +52,45 @@ export const bugFixerHandler: AgentHandler = {
 /* ---------- internals ---------- */
 
 async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTask | null> {
+  // Make the FIRST Run-now click work even if the periodic backlog sync
+  // (every ~2 min) hasn't fired since the user connected the repo. Skip
+  // the inline sync for scheduled triggers — the cron tick already runs
+  // sync alongside dispatch, so doing it again wastes API quota.
+  if (input.trigger === 'manual') {
+    const haveBugs = listBacklog(input.repo.id).some(
+      (b) => b.kind === 'bug' && b.inProgressRun === null,
+    );
+    if (!haveBugs) {
+      await syncBacklogForRepo(input.repo.id).catch((e: unknown) => {
+        appendAudit({
+          runId: 'system',
+          kind: 'inline_backlog_sync_failed',
+          payload: {
+            repo: input.repo.githubFullName,
+            error: e instanceof Error ? e.message : String(e),
+          },
+        });
+      });
+    }
+  }
+
   // Atomic claim — guarantees two parallel Bug Fixers pick different rows.
   // The placeholder token holds the lock until the orchestrator attaches the
   // real run id post-createRun.
   const placeholder = `pending:${ulid()}`;
   const tried = new Set<string>();
+  let closed = 0;
+  let locked = 0;
+  let crossInstall = 0;
+  let allowlistDenied = 0;
+
   for (let attempts = 0; attempts < 32; attempts++) {
     const item = claimNextBacklogItem(input.repo.id, 'bug', placeholder);
-    if (!item) return null;
+    if (!item) break;
     if (tried.has(item.id)) {
       // Defensive: the same item came back, something's off — release and stop.
       unlockBacklogItem(item.id);
-      return null;
+      break;
     }
     tried.add(item.id);
 
@@ -79,12 +109,16 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
       deleteBacklogGhIssue(input.repo.id, item.githubIssue);
       continue;
     }
-    if (ctx.state === 'closed' || ctx.locked) {
-      // The issue was closed or locked since the last sync. Drop the row
-      // before releasing — this is the only place the bug-fixer learns the
-      // issue is done.
+    if (ctx.state === 'closed') {
       unlockBacklogItem(item.id);
       deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+      closed += 1;
+      continue;
+    }
+    if (ctx.locked) {
+      unlockBacklogItem(item.id);
+      deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+      locked += 1;
       continue;
     }
 
@@ -110,18 +144,33 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
         },
       });
       unlockBacklogItem(item.id);
+      crossInstall += 1;
       continue;
     }
 
     if (ctx.author) {
-      const allow = checkActorAllowlist({
-        repoId: input.repo.id,
-        login: ctx.author,
-        source: `issue#${item.githubIssue}`,
-      });
-      if (!allow.ok) {
-        unlockBacklogItem(item.id);
-        continue;
+      // Manual trigger = the user explicitly clicked Run now → they're
+      // vouching for the action. Skip the allowlist gate but log it so
+      // there's still a paper trail. Scheduled / webhook triggers always
+      // pay the gate's cost (it's the primary defense against drive-by
+      // prompt-injection on public repos).
+      if (input.trigger === 'manual') {
+        appendAudit({
+          runId: 'system',
+          kind: 'actor_skipped_manual_override',
+          payload: { source: `issue#${item.githubIssue}`, login: ctx.author },
+        });
+      } else {
+        const allow = checkActorAllowlist({
+          repoId: input.repo.id,
+          login: ctx.author,
+          source: `issue#${item.githubIssue}`,
+        });
+        if (!allow.ok) {
+          unlockBacklogItem(item.id);
+          allowlistDenied += 1;
+          continue;
+        }
       }
     }
 
@@ -135,7 +184,41 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
 
     return wrap(item);
   }
-  return null;
+
+  // Categorized empty-state errors are surfaced through to the renderer
+  // when the user explicitly clicked Run now — they want a clear
+  // explanation. Scheduled / webhook triggers fall back to a quiet null
+  // (the orchestrator converts that to the "nothing to do" sentinel) so
+  // the cron tick doesn't spam scheduler_error rows every minute on a
+  // genuinely-empty backlog.
+  const totalBugs = listBacklog(input.repo.id).filter((b) => b.kind === 'bug').length;
+  if (tried.size === 0 && totalBugs === 0) {
+    if (input.trigger !== 'manual') return null;
+    throw new ObeliskError(
+      'BACKLOG_EMPTY',
+      'No `obelisk:fix` issues found for this repo.',
+      'Apply the `obelisk:fix` label to a GitHub issue (and optionally `P0` / `P1` / `P2` for priority), or add a manual backlog item from the Backlog screen.',
+    );
+  }
+
+  if (input.trigger !== 'manual') return null;
+
+  const reasons: string[] = [];
+  if (closed > 0) reasons.push(`${closed} closed`);
+  if (locked > 0) reasons.push(`${locked} locked`);
+  if (crossInstall > 0) reasons.push(`${crossInstall} already claimed by another Obelisk install`);
+  if (allowlistDenied > 0)
+    reasons.push(`${allowlistDenied} authored by users not on the allowlist`);
+  throw new ObeliskError(
+    'BACKLOG_ALL_FILTERED',
+    reasons.length > 0
+      ? `All ${tried.size} candidate issue${tried.size === 1 ? '' : 's'} ` +
+          `${tried.size === 1 ? 'was' : 'were'} filtered out: ${reasons.join(', ')}.`
+      : 'No claimable issue right now.',
+    allowlistDenied > 0
+      ? 'Add the issue authors via the Allowlist settings.'
+      : 'Try again after a sync cycle, or file a manual backlog item.',
+  );
 }
 
 function wrap(item: NonNullable<ReturnType<typeof getBacklogItem>>): SelectedTask {

@@ -6,8 +6,8 @@ const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Aggregate the last 7 days of bug-fixer + feature-builder activity into a
  * single panel-shaped payload. Joins `audit_log` (rebases, retries,
- * scope_too_wide blocks, escalations, cross-install skips) with `runs`
- * (PRs published, runs failed, scope-rejected runs).
+ * escalations, cross-install skips) with `runs` (PRs published,
+ * runs failed).
  *
  * Cheap (a handful of indexed counts), so the renderer can call it on
  * mount + on each `run.transition` bus event without paging.
@@ -77,7 +77,6 @@ export async function handleBugFixerHealth(
     prsOpened,
     runsDone: runsByState('done'),
     runsFailed: runsByState('failed'),
-    scopeTooWide: auditCount('scope_too_wide'),
     rebaseSuccess: auditCountByOutcome('pr_rebase_attempt', 'success'),
     rebaseConflict: auditCountByOutcome('pr_rebase_attempt', 'conflict'),
     rebaseError: auditCountByOutcome('pr_rebase_attempt', 'error'),

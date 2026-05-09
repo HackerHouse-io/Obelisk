@@ -40,7 +40,8 @@ export const ERROR_CODES = [
   'IOS_QA_POOL_FULL',
   'IOS_QA_APPIUM_FAILED',
   'IOS_QA_BUILD_FAILED',
-  'SCOPE_TOO_WIDE',
+  'BACKLOG_EMPTY',
+  'BACKLOG_ALL_FILTERED',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -135,6 +135,7 @@ describe('orchestrator: ios-qa-pilot', () => {
     const selected = await iosQaPilotHandler.selectTask({
       repo,
       defaultRunner: 'claude',
+      trigger: 'manual',
     });
     expect(selected).not.toBeNull();
     expect(selected!.iosSimSlot).toBeDefined();
@@ -310,6 +311,7 @@ END_IOS_QA_FINDINGS
     const selected = await iosQaPilotHandler.selectTask({
       repo,
       defaultRunner: 'claude',
+      trigger: 'manual',
     });
     expect(selected).not.toBeNull();
     // Release everything we just claimed.
@@ -336,7 +338,11 @@ END_IOS_QA_FINDINGS
     const { iosQaPilotHandler } = await import('../../src/main/agents/ios-qa-pilot/index');
     const { getRepo } = await import('../../src/main/db/repos');
     const repo = getRepo(repoId)!;
-    const selected = await iosQaPilotHandler.selectTask({ repo, defaultRunner: 'claude' });
+    const selected = await iosQaPilotHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+      trigger: 'manual',
+    });
     expect(selected).not.toBeNull();
     // ref shape: ios-qa:<flow_id>:<temp_run_id>:plan:<plan_id>
     expect(selected!.task.ref).toMatch(/^ios-qa:[^:]+:[^:]+:plan:[^:]+$/);

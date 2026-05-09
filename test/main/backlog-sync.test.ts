@@ -55,16 +55,23 @@ describe('derivePriority', () => {
 });
 
 describe('deriveKind', () => {
-  it('returns feature when enhancement label is present', () => {
-    expect(deriveKind(['enhancement'])).toBe('feature');
+  it('returns "bug" when obelisk:fix is the trigger label', () => {
+    expect(deriveKind(['obelisk:fix'])).toBe('bug');
+    expect(deriveKind(['P0', 'obelisk:fix', 'needs-triage'])).toBe('bug');
   });
-  it('matches namespaced feature labels', () => {
-    expect(deriveKind(['type/feature'])).toBe('feature');
-    expect(deriveKind(['kind:feature'])).toBe('feature');
+
+  it('returns "feature" when obelisk:feature is the trigger label', () => {
+    expect(deriveKind(['obelisk:feature'])).toBe('feature');
   });
-  it('defaults to bug when no signal present', () => {
-    expect(deriveKind(['bug', 'P0'])).toBe('bug');
-    expect(deriveKind([])).toBe('bug');
+
+  it('feature wins when both trigger labels are present (larger scope wins)', () => {
+    expect(deriveKind(['obelisk:fix', 'obelisk:feature'])).toBe('feature');
+  });
+
+  it('returns null when neither trigger label is present — sync skips these issues', () => {
+    expect(deriveKind([])).toBeNull();
+    expect(deriveKind(['bug', 'P0', 'enhancement', 'feature'])).toBeNull();
+    expect(deriveKind(['needs-triage'])).toBeNull();
   });
 });
 

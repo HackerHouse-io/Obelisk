@@ -144,8 +144,6 @@ export interface BugFixerHealth {
   prsOpened: number;
   runsDone: number;
   runsFailed: number;
-  /** Runs aborted by the server-side scope guard (>5 files, lockfile, etc.). */
-  scopeTooWide: number;
   rebaseSuccess: number;
   rebaseConflict: number;
   rebaseError: number;
@@ -423,9 +421,9 @@ export interface IpcMap {
   'repos:bugFixerSettings': {
     req: {
       repoId: string;
-      patch?: { mergeQueueEnabled?: boolean; cap?: number; maxFiles?: number };
+      patch?: { mergeQueueEnabled?: boolean; cap?: number };
     };
-    res: { mergeQueueEnabled: boolean; cap: number; maxFiles: number };
+    res: { mergeQueueEnabled: boolean; cap: number };
   };
   'repos:pickFolder': { req: void; res: { path: string | null } };
   'repos:listGitHubRepos': {

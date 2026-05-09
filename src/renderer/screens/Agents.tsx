@@ -1274,12 +1274,6 @@ function BugFixerHealthCard({ repoId }: { repoId: string }): ReactElement {
           testId="health-runs-failed"
         />
         <HealthMetric
-          label="Scope blocked"
-          value={data.scopeTooWide}
-          tone={data.scopeTooWide > 0 ? 'warn' : 'neutral'}
-          testId="health-scope-blocked"
-        />
-        <HealthMetric
           label="Rebases ok / conflict"
           value={`${data.rebaseSuccess} / ${data.rebaseConflict}`}
           tone={data.rebaseConflict > 0 ? 'warn' : 'neutral'}

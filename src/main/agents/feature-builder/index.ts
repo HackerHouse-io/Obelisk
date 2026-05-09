@@ -1,11 +1,18 @@
 import { ulid } from 'ulid';
-import { claimNextBacklogItem, unlockBacklogItem, deleteBacklogGhIssue } from '../../db/backlog';
+import {
+  claimNextBacklogItem,
+  unlockBacklogItem,
+  deleteBacklogGhIssue,
+  listBacklog,
+} from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
 import { postClaimSignal } from '../lib/claim-on-github';
 import { getAuthedLogin } from '../../auth/token-store';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
+import { syncBacklogForRepo } from '../../scheduler/backlog-sync';
+import { ObeliskError } from '../../../shared/errors';
 import { registerArtifactFromPath } from '../lib/register-artifact';
 import type {
   AgentHandler,
@@ -25,15 +32,41 @@ export const featureBuilderHandler: AgentHandler = {
   producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
+    // Inline backlog sync for manual triggers when the local table has
+    // no claimable feature rows. Mirrors the bug-fixer fix for the same
+    // "Run now → nothing to do" failure mode.
+    if (input.trigger === 'manual') {
+      const haveFeatures = listBacklog(input.repo.id).some(
+        (b) => b.kind === 'feature' && b.inProgressRun === null,
+      );
+      if (!haveFeatures) {
+        await syncBacklogForRepo(input.repo.id).catch((e: unknown) => {
+          appendAudit({
+            runId: 'system',
+            kind: 'inline_backlog_sync_failed',
+            payload: {
+              repo: input.repo.githubFullName,
+              error: e instanceof Error ? e.message : String(e),
+            },
+          });
+        });
+      }
+    }
+
     // Atomic claim so two parallel instances pick different feature rows.
     const placeholder = `pending:${ulid()}`;
     const tried = new Set<string>();
+    let closed = 0;
+    let locked = 0;
+    let crossInstall = 0;
+    let allowlistDenied = 0;
+
     for (let attempts = 0; attempts < 32; attempts++) {
       const item = claimNextBacklogItem(input.repo.id, 'feature', placeholder);
-      if (!item) return null;
+      if (!item) break;
       if (tried.has(item.id)) {
         unlockBacklogItem(item.id);
-        return null;
+        break;
       }
       tried.add(item.id);
 
@@ -44,9 +77,16 @@ export const featureBuilderHandler: AgentHandler = {
           deleteBacklogGhIssue(input.repo.id, item.githubIssue);
           continue;
         }
-        if (ctx.state === 'closed' || ctx.locked) {
+        if (ctx.state === 'closed') {
           unlockBacklogItem(item.id);
           deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+          closed += 1;
+          continue;
+        }
+        if (ctx.locked) {
+          unlockBacklogItem(item.id);
+          deleteBacklogGhIssue(input.repo.id, item.githubIssue);
+          locked += 1;
           continue;
         }
         // Cross-installation guard — see bug-fixer for the rationale.
@@ -66,17 +106,27 @@ export const featureBuilderHandler: AgentHandler = {
             },
           });
           unlockBacklogItem(item.id);
+          crossInstall += 1;
           continue;
         }
         if (ctx.author) {
-          const allow = checkActorAllowlist({
-            repoId: input.repo.id,
-            login: ctx.author,
-            source: `issue#${item.githubIssue}`,
-          });
-          if (!allow.ok) {
-            unlockBacklogItem(item.id);
-            continue;
+          if (input.trigger === 'manual') {
+            appendAudit({
+              runId: 'system',
+              kind: 'actor_skipped_manual_override',
+              payload: { source: `issue#${item.githubIssue}`, login: ctx.author },
+            });
+          } else {
+            const allow = checkActorAllowlist({
+              repoId: input.repo.id,
+              login: ctx.author,
+              source: `issue#${item.githubIssue}`,
+            });
+            if (!allow.ok) {
+              unlockBacklogItem(item.id);
+              allowlistDenied += 1;
+              continue;
+            }
           }
         }
 
@@ -98,7 +148,35 @@ export const featureBuilderHandler: AgentHandler = {
         runnerOverride: item.runnerOverride,
       };
     }
-    return null;
+
+    // Same categorized-error path as bug-fixer: only throw on manual
+    // triggers (so the user gets an actionable hint); return null on
+    // scheduled triggers so cron stays quiet on an empty backlog.
+    const totalFeatures = listBacklog(input.repo.id).filter((b) => b.kind === 'feature').length;
+    if (tried.size === 0 && totalFeatures === 0) {
+      if (input.trigger !== 'manual') return null;
+      throw new ObeliskError(
+        'BACKLOG_EMPTY',
+        'No `obelisk:feature` issues found for this repo.',
+        'Apply the `obelisk:feature` label to a GitHub issue, or add a manual backlog item from the Backlog screen.',
+      );
+    }
+    if (input.trigger !== 'manual') return null;
+    const reasons: string[] = [];
+    if (closed > 0) reasons.push(`${closed} closed`);
+    if (locked > 0) reasons.push(`${locked} locked`);
+    if (crossInstall > 0) reasons.push(`${crossInstall} claimed by another install`);
+    if (allowlistDenied > 0) reasons.push(`${allowlistDenied} not on allowlist`);
+    throw new ObeliskError(
+      'BACKLOG_ALL_FILTERED',
+      reasons.length > 0
+        ? `All ${tried.size} candidate feature${tried.size === 1 ? '' : 's'} ` +
+            `${tried.size === 1 ? 'was' : 'were'} filtered: ${reasons.join(', ')}.`
+        : 'No claimable feature request right now.',
+      allowlistDenied > 0
+        ? 'Add the issue authors via the Allowlist settings.'
+        : 'Try again after a sync cycle, or file a manual backlog item.',
+    );
   },
 
   async interpretResult(input: InterpretResultInput): Promise<PublishPlan[]> {

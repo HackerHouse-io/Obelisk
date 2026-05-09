@@ -43,7 +43,6 @@ describe('handleBugFixerHealth', () => {
       prsOpened: 0,
       runsDone: 0,
       runsFailed: 0,
-      scopeTooWide: 0,
       rebaseSuccess: 0,
       rebaseConflict: 0,
       rebaseError: 0,

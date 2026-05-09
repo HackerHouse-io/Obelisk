@@ -1234,6 +1234,19 @@ body {
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
+.mc-card-subtitle a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+.mc-card-subtitle a:hover,
+.mc-card-subtitle a:focus-visible {
+  color: var(--t-1);
+  border-bottom-color: var(--t-3);
+}
 
 .mc-card-foot {
   display: flex;

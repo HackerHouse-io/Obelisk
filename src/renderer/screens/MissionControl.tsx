@@ -715,8 +715,10 @@ const ERROR_CODE_HELP: Partial<Record<ErrorCode, string>> = {
     'The repo safety mode blocks this action (e.g. trying to open a PR while in Observe).',
   AGENT_BUSY: 'Another instance of this agent is already running for this repo.',
   RUN_ACTIVE: 'This run is still active and can’t be modified yet.',
-  SCOPE_TOO_WIDE:
-    'The patch touched too many files (or a lockfile / generated file). Split the work or raise the per-repo `bug_fixer_max_files` setting.',
+  BACKLOG_EMPTY:
+    'No issues with the `obelisk:fix` (bug-fixer) or `obelisk:feature` (feature-builder) label. Apply one to a GitHub issue, or add a manual backlog item.',
+  BACKLOG_ALL_FILTERED:
+    'Every candidate issue was filtered out (closed, locked, claimed elsewhere, or not on the actor allowlist).',
 };
 
 function errorCodeHelp(code: string): string {

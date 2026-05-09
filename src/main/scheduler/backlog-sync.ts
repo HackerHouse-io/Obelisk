@@ -1,5 +1,4 @@
 import { listRepos } from '../db/repos';
-import { listAllowlist } from '../db/allowlist';
 import { upsertBacklogFromGithub } from '../db/backlog';
 import { getSetting, setSetting } from '../db/settings';
 import { getGithub } from '../github/client';
@@ -36,13 +35,42 @@ export async function backlogSyncSweep(): Promise<void> {
   }
 }
 
+/**
+ * Sync one repo synchronously. Used by Run-now (`bug-fixer.selectTask`)
+ * when the local backlog is empty: we'd rather pay one round-trip to
+ * GitHub than tell the user "nothing to do" while real issues exist.
+ *
+ * Coalesces with the periodic sweep via `inFlightSync` — if a sweep is
+ * already running for this repo, we await its in-flight promise instead
+ * of starting a second one.
+ */
+const liveSyncs = new Map<string, Promise<void>>();
+export async function syncBacklogForRepo(repoId: string): Promise<void> {
+  const existing = liveSyncs.get(repoId);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const repo = listRepos().find((r) => r.id === repoId);
+  if (!repo) return;
+
+  const promise = syncRepo(repo);
+  liveSyncs.set(repoId, promise);
+  inFlightSync.add(repoId);
+  try {
+    await promise;
+  } finally {
+    liveSyncs.delete(repoId);
+    inFlightSync.delete(repoId);
+  }
+}
+
 async function syncRepo(repo: Repo): Promise<void> {
   const gh = await getGithub();
   if (!gh) return;
   const [owner, name] = repo.githubFullName.split('/');
   if (!owner || !name) return;
 
-  const allowlist = new Set(listAllowlist(repo.id).map((e) => e.login.toLowerCase()));
   const prevEtag = getSetting<string>(`repo:${repo.id}`, ETAG_KEY);
 
   let response: Awaited<ReturnType<typeof gh.issues.listForRepo>>;
@@ -79,20 +107,33 @@ async function syncRepo(repo: Repo): Promise<void> {
     if (issue.draft) continue;
     if (issue.locked) continue;
 
-    // Skip already-claimed issues — applying the in-progress label is the
-    // claim signal; if we re-ingest, the periodic sync would otherwise
-    // overwrite priority/title in a way that confuses the running agent.
+    // We DO ingest issues that already have `obelisk:in-progress`. The
+    // cross-installation guard at `selectTask` is the right place to
+    // detect "sibling install is on it" — gating at sync time would
+    // make those issues invisible to our backlog, including the right
+    // panel of Mission Control. The in-flight lock on backlog rows
+    // (claimed by our own runs) keeps periodic re-ingestion harmless.
     const labelNames = issue.labels.map((l) => (typeof l === 'string' ? l : (l.name ?? '')));
-    if (labelNames.includes(OBELISK_LABELS.inProgress)) continue;
 
-    const author = issue.user?.login?.toLowerCase();
-    if (!author || !allowlist.has(author)) continue;
+    // The bug-fixer only acts on issues labeled `obelisk:fix`, the
+    // feature-builder only on `obelisk:feature`. Issues without either
+    // are explicit-opt-in territory and we leave them alone — the user
+    // has to apply the label to a GitHub issue to enroll it.
+    const kind = deriveKind(labelNames);
+    if (kind === null) continue;
+
+    // We deliberately do NOT filter by the actor allowlist here. The
+    // allowlist gate lives at `selectTask` (and is overridden by the
+    // manual trigger), so the backlog reflects every labelled issue
+    // the user might want to act on. Filtering at sync time would mean
+    // a Run-now bypass on a non-allowlisted author can't see the issue
+    // at all — the bug the user reported on HackerHouse-io/WealthLab.
 
     upsertBacklogFromGithub({
       repoId: repo.id,
       githubIssue: issue.number,
       title: issue.title,
-      kind: deriveKind(labelNames),
+      kind,
       priorityLabel: derivePriority(labelNames),
     });
     upserted += 1;
@@ -119,16 +160,28 @@ export function derivePriority(labels: string[]): 'P0' | 'P1' | 'P2' | null {
 }
 
 /**
- * Map issue labels to bug vs feature. `enhancement` and `feature` count as
- * features; everything else (including no label at all) defaults to bug.
+ * Map issue labels to the Obelisk-trigger kind, or null when neither
+ * trigger label is present. The bug-fixer's mission line in
+ * `agents/bug-fixer.md` is "Take one obelisk:fix issue …" — we honor
+ * that contract literally so a user has explicit, label-based control
+ * over which issues Obelisk acts on.
+ *
+ *   `obelisk:fix`     → bug-fixer
+ *   `obelisk:feature` → feature-builder
+ *   anything else     → null (skip)
  */
-export function deriveKind(labels: string[]): 'bug' | 'feature' {
+export function deriveKind(labels: string[]): 'bug' | 'feature' | null {
+  let hasFix = false;
+  let hasFeature = false;
   for (const raw of labels) {
     const label = raw.toLowerCase();
-    if (label === 'enhancement' || label === 'feature') return 'feature';
-    if (label === 'feat' || label.endsWith('/feature') || label.endsWith(':feature')) {
-      return 'feature';
-    }
+    if (label === OBELISK_LABELS.fix) hasFix = true;
+    if (label === OBELISK_LABELS.feature) hasFeature = true;
   }
-  return 'bug';
+  // Both labels present is treated as a feature (the larger scope wins).
+  // Surfacing this as ambiguous would block the user; defaulting to
+  // feature-builder lets them downgrade by removing the label.
+  if (hasFeature) return 'feature';
+  if (hasFix) return 'bug';
+  return null;
 }

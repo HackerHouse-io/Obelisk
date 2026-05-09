@@ -133,6 +133,20 @@ export async function handleReposConnect(
     console.warn(`[obelisk] playbook bootstrap failed for ${repo.githubFullName}:`, e);
   });
 
+  // Eagerly populate the backlog so the user's first Run-now click on
+  // Bug Fixer / Feature Builder finds something to claim. Without this
+  // they'd see "BACKLOG_EMPTY" until the periodic sweep fires (~2 min
+  // after boot). Fire-and-forget — the bug-fixer's selectTask also
+  // syncs inline as a fallback.
+  void import('../scheduler/backlog-sync').then((m) =>
+    m.syncBacklogForRepo(repo.id).catch((e: unknown) => {
+      console.warn(
+        `[obelisk] eager backlog sync failed for ${repo.githubFullName}:`,
+        e instanceof Error ? e.message : String(e),
+      );
+    }),
+  );
+
   return repo;
 }
 
@@ -145,9 +159,10 @@ export async function handleReposSetMode(
 }
 
 /**
- * Read or update the per-repo bug-fixer / feature-builder knobs. Each
- * field has a sensible default that matches the rest of the codebase
- * (cap=3, maxFiles=5, mergeQueueEnabled=false).
+ * Read or update the per-repo bug-fixer / feature-builder knobs. The
+ * concurrency cap and merge-queue toggle are real product settings;
+ * we do NOT gate the agent's diff (no file-count cap, no path
+ * blacklist) — Claude Code / Codex decides what to touch.
  */
 export async function handleReposBugFixerSettings(
   payload: IpcMap['repos:bugFixerSettings']['req'],
@@ -164,15 +179,11 @@ export async function handleReposBugFixerSettings(
     if (payload.patch.cap !== undefined) {
       setSetting(scope, 'bug_fixer_cap', payload.patch.cap);
     }
-    if (payload.patch.maxFiles !== undefined) {
-      setSetting(scope, 'bug_fixer_max_files', payload.patch.maxFiles);
-    }
   }
 
   return {
     mergeQueueEnabled: getSetting<boolean>(scope, 'merge_queue_enabled') ?? false,
     cap: getSetting<number>(scope, 'bug_fixer_cap') ?? 3,
-    maxFiles: getSetting<number>(scope, 'bug_fixer_max_files') ?? 5,
   };
 }
 
