@@ -568,19 +568,32 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     });
     const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
 
-    // Observe-mode preview path comes first so QA agents that produced zero
-    // findings still get a friendly "Plan executed; no findings." summary
-    // (the generic noop-summary below would otherwise win and confuse users).
-    if (handler.skipsEvidenceGate && repo.mode === 'observe') {
+    // Preview path comes first so QA agents that produced zero findings
+    // still get a friendly "Plan executed; no findings." summary (the
+    // generic noop-summary below would otherwise win and confuse users).
+    //
+    // Two ways an agent's findings end up here:
+    //   1. `handler.alwaysPreview` — QA Hunter and Manual QA opt in,
+    //      regardless of repo safety mode. A false-positive QA run must
+    //      not be able to spam the user's GitHub just because the repo
+    //      is in `issues+` / `prs+` / `automerge`. The user files
+    //      manually via FileIssueModal → previews:fileIssue, which
+    //      calls publish({ ..., manual: true }) — the approved bypass.
+    //   2. Legacy observe-mode: any agent with `skipsEvidenceGate` in
+    //      `observe` mode previews instead of publishing.
+    if (handler.alwaysPreview || (handler.skipsEvidenceGate && repo.mode === 'observe')) {
       for (const plan of plans) {
         // Previews live in their own table now (previews + preview_markers,
         // see migration 005) so they survive deletion of the originating
         // run row. Schema has ON DELETE SET NULL on the run_id back-pointer.
+        const fingerprint =
+          plan.kind === 'issue' && typeof plan.fingerprint === 'string' ? plan.fingerprint : null;
         insertPreview({
           repoId: repo.id,
           runId: run.id,
           agentName: input.agentName,
           payload: plan,
+          fingerprint,
         });
       }
       const summary =

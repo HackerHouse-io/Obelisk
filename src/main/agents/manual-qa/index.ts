@@ -1,13 +1,15 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { obeliskArtifactUrl } from '../../protocol/obelisk-protocol';
 import {
   fetchOpenIssueTitles,
+  normalizeText,
   previewTitleConflicts,
   titleConflicts,
 } from '../lib/find-existing-issue';
-import { listOpenPreviewTitlesForRepo } from '../../db/previews';
+import { listKnownFingerprintsForRepo, listOpenPreviewTitlesForRepo } from '../../db/previews';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { registerArtifactFromPath } from '../lib/register-artifact';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
@@ -30,6 +32,9 @@ export const manualQaHandler: AgentHandler = {
     'Adds another Manual QA instance — pair it with a different test plan and schedule.',
   skipsEvidenceGate: true,
   producesPatch: false,
+  // QA findings always go to previews regardless of repo safety mode —
+  // a false-positive run shouldn't be able to spam the user's GitHub.
+  alwaysPreview: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     // Manual QA must run against an explicit test plan — the gate is enforced
@@ -59,6 +64,11 @@ export const manualQaHandler: AgentHandler = {
     // Open previews for this repo — same dedup boundary as qa-hunter, so a
     // recurring sweep doesn't pile copies of the same bug into Observe-mode.
     const openPreviewTitles = listOpenPreviewTitlesForRepo(input.repo.id);
+    // Content-fingerprint set across ALL previews (open + dismissed +
+    // published) for this repo. Dismissed entries stay in here, so a
+    // "not a bug" decision survives the agent rewording the symptom on
+    // a later run.
+    const knownFingerprints = listKnownFingerprintsForRepo(input.repo.id);
 
     const out: PublishPlan[] = [];
     for (const f of findings) {
@@ -66,6 +76,8 @@ export const manualQaHandler: AgentHandler = {
       if (matchesNonBug(f, compiledRules)) continue;
 
       const title = titleFor(f);
+      const fingerprint = fingerprintForQa(f);
+      if (knownFingerprints.has(fingerprint)) continue;
       if (existing.some((row) => titleConflicts(row.title, title, '[QA Bug]'))) continue;
       if (openPreviewTitles.some((t) => previewTitleConflicts(t, title))) continue;
 
@@ -75,13 +87,32 @@ export const manualQaHandler: AgentHandler = {
         title,
         body: bodyFor(f, refs),
         labels: labelsFor(f),
+        fingerprint,
       });
       // Within-batch dedup — see qa-hunter for rationale.
       openPreviewTitles.push(title);
+      knownFingerprints.add(fingerprint);
     }
     return out;
   },
 };
+
+/**
+ * Stable content fingerprint for a Manual QA finding. Hashes the
+ * normalized flow + symptom + repro + likely_area so the bug's identity
+ * survives Playwright reruns where the agent rephrases the symptom.
+ * Mirrors qa-hunter's `fingerprintFor` so a "not a bug" dismissal in
+ * either tab suppresses the same finding from either agent.
+ */
+export function fingerprintForQa(f: QaFinding): string {
+  const parts = [
+    normalizeText(f.flow),
+    normalizeText(f.symptom),
+    normalizeText(f.repro),
+    normalizeText(f.likely_area),
+  ].join('\n');
+  return createHash('sha256').update(parts).digest('hex');
+}
 
 /* ---------- types + parser ---------- */
 

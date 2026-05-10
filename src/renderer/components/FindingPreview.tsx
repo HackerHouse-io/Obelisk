@@ -7,6 +7,13 @@ interface Props {
   finding: PreviewedFinding;
   onOpen: (finding: PreviewedFinding) => void;
   onDismiss?: (finding: PreviewedFinding) => void;
+  /**
+   * Reverse a "Not a bug" decision so the finding becomes actionable
+   * again. Only rendered when `finding.dismissed === true` and the
+   * caller passes a handler — i.e. when the FindingsTab's "Show
+   * dismissed" toggle is on.
+   */
+  onUndismiss?: (finding: PreviewedFinding) => void;
   defaultExpanded?: boolean;
 }
 
@@ -20,6 +27,7 @@ export function FindingPreview({
   finding,
   onOpen,
   onDismiss,
+  onUndismiss,
   defaultExpanded = false,
 }: Props): ReactElement {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -86,21 +94,29 @@ export function FindingPreview({
                 onClick={() => onOpen(finding)}
                 disabled={finding.dismissed}
                 title={
-                  finding.dismissed
-                    ? 'Dismissed — undo from the audit log'
-                    : 'Review and file this issue on GitHub'
+                  finding.dismissed ? 'Marked not a bug' : 'Review and open this issue on GitHub'
                 }
               >
-                <Icon.Issue size={11} /> Open issue
+                <Icon.Issue size={11} /> Review &amp; open
               </button>
               {onDismiss && !finding.dismissed ? (
                 <button
                   type="button"
                   className="btn ghost sm"
                   onClick={() => onDismiss(finding)}
-                  title="Mark as not a bug"
+                  title="Mark as not a bug — QA will not flag this again"
                 >
-                  Dismiss
+                  Not a bug
+                </button>
+              ) : null}
+              {onUndismiss && finding.dismissed ? (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={() => onUndismiss(finding)}
+                  title='Undo "Not a bug" — finding becomes actionable again'
+                >
+                  Undismiss
                 </button>
               ) : null}
             </>

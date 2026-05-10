@@ -4,6 +4,7 @@ import {
   listPreviewsForRepo,
   markPreviewDismissed,
   markPreviewPublished,
+  removePreviewDismissedMarker,
 } from '../db/previews';
 import { getPlaybookDraft } from '../agents/playbook-bootstrapper/publish';
 import { getRepo } from '../db/repos';
@@ -102,6 +103,18 @@ export async function handlePreviewsDismiss(
     sourcePreviewId: payload.previewId,
     runId: lookup.finding.runId,
   });
+  broadcast({ type: 'previews.changed', repoId: lookup.repoId });
+  return { ok: true };
+}
+
+export async function handlePreviewsUndismiss(
+  payload: IpcMap['previews:undismiss']['req'],
+): Promise<IpcMap['previews:undismiss']['res']> {
+  const lookup = getPreviewById(payload.previewId);
+  if (!lookup) {
+    throw new ObeliskError('NOT_FOUND', `Preview ${payload.previewId} not found`);
+  }
+  removePreviewDismissedMarker(payload.previewId);
   broadcast({ type: 'previews.changed', repoId: lookup.repoId });
   return { ok: true };
 }

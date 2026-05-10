@@ -129,14 +129,14 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
         className="modal-panel file-issue-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="File issue on GitHub"
+        aria-label="Open issue on GitHub"
         onClick={(e) => e.stopPropagation()}
       >
         <form onSubmit={handleSubmit}>
           <header className="file-issue-header">
             <div className="file-issue-headline">
               <Icon.GitHub size={14} color="var(--t-1)" />
-              <span className="file-issue-title-text">File issue on GitHub</span>
+              <span className="file-issue-title-text">Open issue on GitHub</span>
               {finding.severity ? (
                 <span className={`pill sev-${finding.severity.toLowerCase()}`}>
                   {finding.severity}
@@ -251,7 +251,7 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
           ) : null}
           {sent && post.issue ? (
             <div className="file-issue-success">
-              <Icon.Check size={11} /> Filed as #{post.issue.issueNumber}
+              <Icon.Check size={11} /> Opened as #{post.issue.issueNumber}
             </div>
           ) : null}
 
@@ -266,15 +266,15 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
             >
               {sending ? (
                 <>
-                  <Icon.Spinner size={12} /> Sending…
+                  <Icon.Spinner size={12} /> Opening…
                 </>
               ) : sent ? (
                 <>
-                  <Icon.Check size={12} /> Sent
+                  <Icon.Check size={12} /> Opened
                 </>
               ) : (
                 <>
-                  <Icon.GitHub size={12} /> Send to GitHub
+                  <Icon.GitHub size={12} /> Open on GitHub
                 </>
               )}
             </button>

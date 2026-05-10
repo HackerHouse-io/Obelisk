@@ -86,6 +86,17 @@ export function normalizeTitle(s: string): string {
 }
 
 /**
+ * Normalize free-form text (description / expected / actual / repro) into
+ * a canonical form for content fingerprinting. Lowercase + collapse all
+ * whitespace runs to a single space + trim. Cosmetic differences
+ * (indentation, trailing newlines, an extra blank line) shouldn't change
+ * the fingerprint of an otherwise-identical finding.
+ */
+export function normalizeText(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Title-equivalence test. Catches three flavours of near-duplicate that
  * a pure-substring check misses:
  *

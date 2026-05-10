@@ -46,6 +46,7 @@ interface IssuePlan {
   title: string;
   body: string;
   labels?: string[];
+  fingerprint?: string;
 }
 
 function isIssuePlan(v: unknown): v is IssuePlan {
@@ -56,7 +57,8 @@ function isIssuePlan(v: unknown): v is IssuePlan {
     typeof o['title'] === 'string' &&
     typeof o['body'] === 'string' &&
     (o['labels'] === undefined ||
-      (Array.isArray(o['labels']) && o['labels'].every((s) => typeof s === 'string')))
+      (Array.isArray(o['labels']) && o['labels'].every((s) => typeof s === 'string'))) &&
+    (o['fingerprint'] === undefined || typeof o['fingerprint'] === 'string')
   );
 }
 
@@ -254,24 +256,52 @@ export function getPreviewById(previewId: number): PreviewLookup | null {
 }
 
 /**
- * Insert a new preview. Called by the orchestrator on Observe-mode runs
- * when the agent emits a PublishPlan that would otherwise have been filed
- * as a GitHub issue. Returns the new preview's id.
+ * Insert a new preview. Called by the orchestrator when the agent emits a
+ * PublishPlan that should land in front of the user instead of being
+ * filed directly. `fingerprint` is the optional sha256 content key
+ * computed by the agent and indexed for dedup queries (migration 010).
+ * Returns the new preview's id.
  */
 export function insertPreview(opts: {
   repoId: string;
   runId: string;
   agentName: AgentName;
   payload: unknown;
+  fingerprint?: string | null;
 }): number {
   const at = new Date().toISOString();
   const result = getDb()
     .prepare(
-      `INSERT INTO previews (repo_id, run_id, agent_name, at, payload)
-         VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO previews (repo_id, run_id, agent_name, at, payload, fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(opts.repoId, opts.runId, opts.agentName, at, JSON.stringify(opts.payload));
+    .run(
+      opts.repoId,
+      opts.runId,
+      opts.agentName,
+      at,
+      JSON.stringify(opts.payload),
+      opts.fingerprint ?? null,
+    );
   return Number(result.lastInsertRowid);
+}
+
+/**
+ * All non-null fingerprints recorded against this repo's previews — open,
+ * dismissed, AND published. QA agents call this on each run and hard-drop
+ * any new finding whose fingerprint is in this set, before the title-
+ * similarity check runs. Survives agent rewording across runs because the
+ * fingerprint hashes the full content tuple, not just the title.
+ */
+export function listKnownFingerprintsForRepo(repoId: string): Set<string> {
+  const rows = getDb()
+    .prepare<[string], { fingerprint: string }>(
+      `SELECT fingerprint
+         FROM previews
+         WHERE repo_id = ? AND fingerprint IS NOT NULL`,
+    )
+    .all(repoId);
+  return new Set(rows.map((r) => r.fingerprint));
 }
 
 export function markPreviewPublished(opts: {
@@ -302,4 +332,21 @@ export function markPreviewDismissed(opts: { sourcePreviewId: number; runId: str
          ON CONFLICT(preview_id, kind) DO UPDATE SET at = excluded.at`,
     )
     .run(opts.sourcePreviewId, new Date().toISOString());
+}
+
+/**
+ * Reverse `markPreviewDismissed`: remove the dismissed marker so the
+ * finding reappears in the FindingsTab. Used by the 5-second undo toast
+ * and the persistent "Show dismissed → Undismiss" affordance. Note: the
+ * fingerprint stays on the preview row, so until the user undismisses,
+ * future runs will keep suppressing the same finding (which is the
+ * intended behaviour). After undismiss, the fingerprint *still* matches
+ * (the row is no longer dismissed but is still recorded), so future
+ * runs continue to dedup against it — undismiss surfaces the existing
+ * preview rather than letting a new copy land.
+ */
+export function removePreviewDismissedMarker(previewId: number): void {
+  getDb()
+    .prepare(`DELETE FROM preview_markers WHERE preview_id = ? AND kind = 'dismissed'`)
+    .run(previewId);
 }

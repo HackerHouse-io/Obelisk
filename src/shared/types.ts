@@ -622,6 +622,7 @@ export interface IpcMap {
     res: { issueNumber: number; htmlUrl: string };
   };
   'previews:dismiss': { req: { previewId: number }; res: { ok: true } };
+  'previews:undismiss': { req: { previewId: number }; res: { ok: true } };
 
   // Test plans — gate the QA agent run flow.
   'testPlans:list': {

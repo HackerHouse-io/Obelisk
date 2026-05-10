@@ -1,11 +1,13 @@
+import { createHash } from 'node:crypto';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import {
   fetchKnownIssueTitles,
   normalizeTitle,
+  normalizeText,
   previewTitleConflicts,
 } from '../lib/find-existing-issue';
-import { listAllPreviewTitlesForRepo } from '../../db/previews';
+import { listAllPreviewTitlesForRepo, listKnownFingerprintsForRepo } from '../../db/previews';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type {
   AgentHandler,
@@ -29,6 +31,9 @@ export const qaHunterHandler: AgentHandler = {
   // (which is about PR evidence) doesn't apply.
   skipsEvidenceGate: true,
   producesPatch: false,
+  // QA findings always go to previews regardless of repo safety mode —
+  // a false-positive run shouldn't be able to spam the user's GitHub.
+  alwaysPreview: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     // QA Hunter must run against a test plan — the gate is enforced by
@@ -43,7 +48,10 @@ export const qaHunterHandler: AgentHandler = {
     // (e.g. "Home capstone nodes open the story player" vs "Home capstone
     // path node opens read-only story"). Cap at 80 titles so we don't
     // bloat the prompt on mature repos.
-    const knownTitles = await collectKnownTitles(input.repo.id, input.repo.githubFullName);
+    const { titles: knownTitles } = await collectKnownDedupKeys(
+      input.repo.id,
+      input.repo.githubFullName,
+    );
     const knownBlock =
       knownTitles.length === 0
         ? ''
@@ -72,46 +80,84 @@ export const qaHunterHandler: AgentHandler = {
     const findings = parseFindings(input.runResult.reasoning);
     if (findings.length === 0) return [];
 
-    // Dedup pool unifies three sources, key-deduped via collectKnownTitles:
+    // Dedup pool unifies three sources, key-deduped via collectKnownDedupKeys:
     //   (a) recent previews for this repo (open + dismissed + published) —
     //       catches the recurring-sweep gotcha and respects "not a bug"
     //       dismissals.
     //   (b) obelisk:fix-labeled GitHub issues, both open and recently-
     //       closed — a closed issue is a settled topic.
     //   (c) titles we accept inside this batch, appended as we go.
-    const dedupTitles = await collectKnownTitles(input.repo.id, input.repo.githubFullName);
+    const { titles: dedupTitles, fingerprints: dedupFingerprints } = await collectKnownDedupKeys(
+      input.repo.id,
+      input.repo.githubFullName,
+    );
 
     const out: PublishPlan[] = [];
     for (const f of findings) {
       const title = titleFor(f);
+      const fingerprint = fingerprintFor(f);
+      // Fingerprint match wins over title-similarity: the user has
+      // already seen this exact content tuple (dismissed it, published
+      // it, or it's still open) and we should never re-emit it, even
+      // if the agent reworded the title this run.
+      if (dedupFingerprints.has(fingerprint)) continue;
       if (dedupTitles.some((t) => previewTitleConflicts(t, title))) continue;
       out.push({
         kind: 'issue',
         title,
         body: bodyFor(f),
         labels: labelsFor(f),
+        fingerprint,
       });
       dedupTitles.push(title);
+      dedupFingerprints.add(fingerprint);
     }
     return out;
   },
 };
 
-async function collectKnownTitles(repoId: string, repoFullName: string): Promise<string[]> {
+interface DedupKeys {
+  titles: string[];
+  fingerprints: Set<string>;
+}
+
+async function collectKnownDedupKeys(repoId: string, repoFullName: string): Promise<DedupKeys> {
   const previewTitles = listAllPreviewTitlesForRepo(repoId);
   const issues = await fetchKnownIssueTitles({
     repoFullName,
     label: OBELISK_LABELS.fix,
   }).catch(() => []);
   const seen = new Set<string>();
-  const out: string[] = [];
+  const titles: string[] = [];
   for (const t of [...previewTitles, ...issues.map((i) => i.title)]) {
     const key = normalizeTitle(t);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(t);
+    titles.push(t);
   }
-  return out;
+  return { titles, fingerprints: listKnownFingerprintsForRepo(repoId) };
+}
+
+/**
+ * Stable content fingerprint for a finding. Hashes the normalized title +
+ * expected + actual + sorted suspected_files so the identity of a bug
+ * survives the agent rewording its title between runs. Used by the dedup
+ * pool to hard-drop a re-emitted finding even when title-similarity would
+ * miss it.
+ */
+export function fingerprintFor(f: Finding): string {
+  const parts = [
+    normalizeText(f.title),
+    normalizeText(f.expected),
+    normalizeText(f.actual),
+    f.suspected_files
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+      .slice()
+      .sort()
+      .join(','),
+  ].join('\n');
+  return createHash('sha256').update(parts).digest('hex');
 }
 
 /* ---------- output parsing ---------- */

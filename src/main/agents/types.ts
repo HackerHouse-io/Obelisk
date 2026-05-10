@@ -67,6 +67,20 @@ export interface AgentHandler {
   readonly producesPatch: boolean;
 
   /**
+   * Findings always go to the previews table for human approval, regardless
+   * of repo safety mode. The user must click "Open on GitHub" in the
+   * FileIssueModal to actually file. QA Hunter and Manual QA opt in — a
+   * false-positive QA run shouldn't be able to pollute the user's GitHub
+   * just because the repo is in `issues+` / `prs+` / `automerge` mode.
+   *
+   * The orchestrator's preview-vs-publish gate honors this flag in
+   * preference to the older `skipsEvidenceGate && observe` rule. The
+   * `previews:fileIssue` IPC remains the user-approved bypass that calls
+   * `publish({ ..., manual: true })`.
+   */
+  readonly alwaysPreview?: boolean;
+
+  /**
    * Whether the runner *may* produce a patch but `no_changes` is still a
    * successful run as long as structured stdout was emitted. Used by PR
    * Reviewer in fix mode: the worktree is attached to the PR's branch so
@@ -213,7 +227,22 @@ export interface InterpretResultInput {
 
 export type PublishPlan =
   | { kind: 'pr'; title: string; body: string; head: string; base: string }
-  | { kind: 'issue'; title: string; body: string; labels: string[] }
+  | {
+      kind: 'issue';
+      title: string;
+      body: string;
+      labels: string[];
+      /**
+       * Optional sha256 of the normalized content (title + expected + actual
+       * + sorted suspected files). Lets the dedup pool drop a re-emitted
+       * finding by exact content match even when the agent reworded the
+       * title between runs. QA agents compute this; persisted on the
+       * preview row (column added in migration 010). Older rows that
+       * predate the migration keep fingerprint = NULL and fall back to
+       * title-similarity dedup.
+       */
+      fingerprint?: string;
+    }
   | { kind: 'comment'; issueNumber: number; body: string }
   | {
       kind: 'review';

@@ -14,6 +14,7 @@ import { useClickOutside } from '../hooks/useClickOutside';
 import { EmptyState } from '../ui/EmptyState';
 import { FindingPreview } from '../components/FindingPreview';
 import { FileIssueModal } from '../components/FileIssueModal';
+import { UndoToast } from '../components/UndoToast';
 import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
 import { labelForAgent } from '../format';
 import type {
@@ -773,6 +774,7 @@ function RunDrawer({
   const [findings, setFindings] = useState<PreviewedFinding[]>([]);
   const [modalFinding, setModalFinding] = useState<PreviewedFinding | null>(null);
   const [plan, setPlan] = useState<TestPlan | null>(null);
+  const [undoToasts, setUndoToasts] = useState<{ id: number; title: string }[]>([]);
 
   const refreshFindings = useCallback(async (runId: string, repoId: string) => {
     const res = await window.obelisk.invoke('previews:list', { repoId });
@@ -846,6 +848,17 @@ function RunDrawer({
 
   async function dismissFinding(f: PreviewedFinding): Promise<void> {
     const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
+    if (!res.ok) {
+      alert(res.error.message);
+      return;
+    }
+    // Stack toasts: if multiple "Not a bug" clicks land in quick
+    // succession, each gets its own row so any of them can be undone.
+    setUndoToasts((prev) => [...prev, { id: f.id, title: f.title }]);
+  }
+
+  async function undismissPreview(previewId: number): Promise<void> {
+    const res = await window.obelisk.invoke('previews:undismiss', { previewId });
     if (!res.ok) alert(res.error.message);
   }
 
@@ -977,7 +990,12 @@ function RunDrawer({
           />
         )}
         {tab === 'findings' && (
-          <FindingsTab findings={findings} onOpen={setModalFinding} onDismiss={dismissFinding} />
+          <FindingsTab
+            findings={findings}
+            onOpen={setModalFinding}
+            onDismiss={dismissFinding}
+            onUndismiss={(f) => void undismissPreview(f.id)}
+          />
         )}
         {tab === 'activity' && <ActivityTab lines={details?.auditLog ?? []} runState={run.state} />}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
@@ -992,6 +1010,18 @@ function RunDrawer({
           // Bus broadcast triggers refresh.
         }}
       />
+      {undoToasts.length > 0 ? (
+        <div className="undo-toast-stack" aria-live="polite">
+          {undoToasts.map((t) => (
+            <UndoToast
+              key={t.id}
+              message={`Marked "${t.title}" as not a bug`}
+              onUndo={() => void undismissPreview(t.id)}
+              onClose={() => setUndoToasts((prev) => prev.filter((x) => x.id !== t.id))}
+            />
+          ))}
+        </div>
+      ) : null}
     </aside>
   );
 }
@@ -1193,18 +1223,47 @@ function FindingsTab({
   findings,
   onOpen,
   onDismiss,
+  onUndismiss,
 }: {
   findings: PreviewedFinding[];
   onOpen: (f: PreviewedFinding) => void;
   onDismiss: (f: PreviewedFinding) => void;
+  onUndismiss: (f: PreviewedFinding) => void;
 }): ReactElement {
-  const visible = findings.filter((f) => !f.dismissed);
-  if (visible.length === 0) return <Empty>No findings to review.</Empty>;
+  const [showDismissed, setShowDismissed] = useState(false);
+  const dismissedCount = findings.filter((f) => f.dismissed).length;
+  const visible = showDismissed ? findings : findings.filter((f) => !f.dismissed);
+
+  if (visible.length === 0 && dismissedCount === 0) {
+    return <Empty>No findings to review.</Empty>;
+  }
+
   return (
     <div className="mc-findings col gap-1">
-      {visible.map((f) => (
-        <FindingPreview key={f.id} finding={f} onOpen={onOpen} onDismiss={onDismiss} />
-      ))}
+      {dismissedCount > 0 ? (
+        <button
+          type="button"
+          className="btn ghost sm mc-findings-toggle"
+          onClick={() => setShowDismissed((v) => !v)}
+        >
+          {showDismissed
+            ? `Hide dismissed (${dismissedCount})`
+            : `Show dismissed (${dismissedCount})`}
+        </button>
+      ) : null}
+      {visible.length === 0 ? (
+        <Empty>No findings to review.</Empty>
+      ) : (
+        visible.map((f) => (
+          <FindingPreview
+            key={f.id}
+            finding={f}
+            onOpen={onOpen}
+            onDismiss={onDismiss}
+            onUndismiss={onUndismiss}
+          />
+        ))
+      )}
     </div>
   );
 }

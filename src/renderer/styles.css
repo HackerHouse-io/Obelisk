@@ -2217,6 +2217,72 @@ body {
   container-type: inline-size;
 }
 
+.mc-findings-toggle {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--t-2);
+}
+
+.undo-toast-stack {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 1100;
+  pointer-events: none;
+}
+
+.undo-toast {
+  pointer-events: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-elev-2, #1f1f23);
+  color: var(--t-1);
+  border: 1px solid var(--border, oklch(50% 0 0 / 0.3));
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  min-width: 280px;
+  max-width: 380px;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.undo-toast-message {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.undo-toast-button {
+  background: transparent;
+  border: 1px solid var(--border, oklch(50% 0 0 / 0.3));
+  color: var(--t-1);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.undo-toast-button:hover {
+  background: var(--bg-elev-3, #2a2a30);
+}
+
+.undo-toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--accent, #8aa);
+  transform-origin: left center;
+}
+
 @container (max-width: 720px) {
   .finding-row-head {
     grid-template-columns: 1fr;

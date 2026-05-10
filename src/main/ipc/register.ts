@@ -51,6 +51,7 @@ import {
   handlePreviewsGet,
   handlePreviewsFileIssue,
   handlePreviewsDismiss,
+  handlePreviewsUndismiss,
 } from './previews';
 import {
   handleTestPlansList,
@@ -156,6 +157,7 @@ export function registerIpcHandlers(): void {
   register('previews:get', handlePreviewsGet);
   register('previews:fileIssue', handlePreviewsFileIssue);
   register('previews:dismiss', handlePreviewsDismiss);
+  register('previews:undismiss', handlePreviewsUndismiss);
 
   // Test plans (gate the QA agent run flow)
   register('testPlans:list', handleTestPlansList);
