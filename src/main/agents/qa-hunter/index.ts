@@ -127,6 +127,15 @@ interface Finding {
   suspected_files: string[];
   suggested_test: string;
   suspected_kind?: 'bug' | 'coverage';
+  /**
+   * Plan case id this finding maps to (or `extra-N` for unsolicited
+   * finds). Optional only because older QA Hunter outputs predate the
+   * field; the agent prompt requires it. Surfaced in the issue body so
+   * `derivePerCaseState` can flip the case to `failed` even when the
+   * live `CASE_FAIL` marker was lost (e.g. older codex runs whose
+   * agent_message text never reached the case-progress tracker).
+   */
+  case_id?: string;
 }
 
 export function parseFindings(stdout: string): Finding[] {
@@ -150,7 +159,8 @@ function isFinding(v: unknown): v is Finding {
     Array.isArray(obj['suspected_files']) &&
     obj['suspected_files'].every((f) => typeof f === 'string') &&
     typeof obj['suggested_test'] === 'string' &&
-    (obj['evidence'] === undefined || typeof obj['evidence'] === 'string')
+    (obj['evidence'] === undefined || typeof obj['evidence'] === 'string') &&
+    (obj['case_id'] === undefined || typeof obj['case_id'] === 'string')
   );
 }
 
@@ -159,7 +169,7 @@ function titleFor(f: Finding): string {
   return `${prefix} ${f.title}`;
 }
 
-function bodyFor(f: Finding): string {
+export function bodyFor(f: Finding): string {
   const sections: string[] = [
     `## Description`,
     f.description.trim(),
@@ -189,6 +199,16 @@ function bodyFor(f: Finding): string {
     '',
     `> Filed by Obelisk QA Hunter. Reply \`/obelisk fix\` to assign Bug Fixer to this issue.`,
   ];
+  // Trailing HTML comment carries the plan case_id so Mission Control's
+  // per-case status map (`derivePerCaseState`) can flip the case to
+  // `failed` when the live `CASE_FAIL` marker was lost — the codex
+  // runner used to drop them, and historical runs predate that fix.
+  // GitHub renders comments as nothing in the issue UI; the regex in
+  // `mission-control-helpers.ts` matches `case_id: <id>` either as
+  // free text or inside this hidden marker.
+  if (f.case_id && f.case_id.trim().length > 0) {
+    sections.push('', `<!-- obelisk:case_id=${f.case_id.trim()} -->`);
+  }
   return sections.join('\n');
 }
 

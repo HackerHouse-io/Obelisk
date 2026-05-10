@@ -139,6 +139,29 @@ describe('derivePerCaseState', () => {
     expect(c.passed).toBe(0);
   });
 
+  it('matches the QA Hunter case_id marker the orchestrator publishes (HTML comment form)', () => {
+    // Closes the loop with the QA Hunter `bodyFor` change: the issue
+    // body now ends with `<!-- obelisk:case_id=<id> -->` so historical
+    // codex runs (whose CASE_FAIL markers got dropped) still flip the
+    // case to `failed` once the issue lands as a finding.
+    const plan = makePlan(['01H1', '01H2', '01H3']);
+    const findings = [
+      {
+        id: 'f1',
+        runId: 'run-1',
+        body:
+          '## Description\nLooks bad.\n\n' +
+          '## Expected behavior\nWorks.\n\n' +
+          '<!-- obelisk:case_id=01H2 -->',
+        dismissed: false,
+      } as unknown as PreviewedFinding,
+    ];
+    const c = counts(plan, [progress('01H1', 'passed')], 'done', findings);
+    expect(c.passed).toBe(1);
+    expect(c.failed).toBe(1);
+    expect(c.skipped).toBe(1);
+  });
+
   it('latest case_progress row wins for a given caseId', () => {
     const plan = makePlan(['c1']);
     const log = [

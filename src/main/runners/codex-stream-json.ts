@@ -112,15 +112,30 @@ export class CodexStreamParser {
       const item = obj['item'] as Record<string, unknown> | undefined;
       if (!item) return;
 
-      // Plain assistant text — surface as `thinking` so the renderer
-      // collects consecutive turns into one card. Reasoning items get the
-      // same treatment.
+      // Plain assistant text — stream each line through `onText` so the
+      // activity tab gets it (`stdout` audit rows render as `thinking`
+      // cards via `mission-control-helpers.ts:buildActivityRows`) AND so
+      // the case-progress tracker sees QA agents' `CASE_START` /
+      // `CASE_PASS` / `CASE_FAIL` markers line-by-line. The
+      // case-progress tracker is line-based — without this per-line
+      // fan-out, every codex run shipped every case as `skipped`
+      // because no `case_progress` row ever landed (the Claude path
+      // already does this via `text_delta` streaming).
+      //
+      // Deliberately NOT emitting a separate `thinking` event for the
+      // same text: that would duplicate the text in the audit log AND
+      // double-render it in the Activity tab (the tab pushes both
+      // `agent_event:thinking` and `stdout` into the same accumulator).
+      // Mirrors Claude's `sawDeltas` short-circuit at
+      // `claude-stream-json.ts:124`.
       const itemType = stringField(item, 'type');
       if (itemType === 'agent_message' || itemType === 'reasoning') {
         const text = stringField(item, 'text') ?? stringField(item, 'content');
         if (text) {
           this.finalText.push(text);
-          this.emit({ type: 'thinking', text });
+          for (const line of text.split(/\r?\n/)) {
+            if (line.length > 0) this.opts.onText(line);
+          }
         }
         return;
       }

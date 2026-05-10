@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFindings } from '../../src/main/agents/qa-hunter';
+import { parseFindings, bodyFor } from '../../src/main/agents/qa-hunter';
 
 const RICH_FINDING = {
   title: 'Race in session refresh',
@@ -80,5 +80,46 @@ END_FINDINGS`;
 
   it('returns [] on malformed JSON', () => {
     expect(parseFindings('BEGIN_FINDINGS\n[broken JSON\nEND_FINDINGS')).toEqual([]);
+  });
+
+  it('preserves case_id on the parsed finding', () => {
+    const withCaseId = { ...RICH_FINDING, case_id: '01H1ABCDEF' };
+    const stdout = `BEGIN_FINDINGS\n${JSON.stringify([withCaseId])}\nEND_FINDINGS`;
+    const findings = parseFindings(stdout);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.case_id).toBe('01H1ABCDEF');
+  });
+
+  it('drops findings with a non-string case_id (shape gate)', () => {
+    const badCaseId = { ...RICH_FINDING, case_id: 42 };
+    const stdout = `BEGIN_FINDINGS\n${JSON.stringify([badCaseId])}\nEND_FINDINGS`;
+    expect(parseFindings(stdout)).toEqual([]);
+  });
+});
+
+describe('bodyFor', () => {
+  it('appends the case_id marker the Plan tab regex picks up', () => {
+    // Mission Control's `derivePerCaseState` matches `case_id: <id>` in
+    // the issue body so a published finding flips the case to `failed`
+    // even when the live `CASE_FAIL` marker was lost. The body must
+    // carry the id in a form that regex finds — see
+    // `mission-control-helpers.ts:48-51`.
+    const stdout = `BEGIN_FINDINGS\n${JSON.stringify([
+      { ...RICH_FINDING, case_id: '01H1ABCDEF' },
+    ])}\nEND_FINDINGS`;
+    const finding = parseFindings(stdout)[0]!;
+    const body = bodyFor(finding);
+
+    expect(body).toContain('obelisk:case_id=01H1ABCDEF');
+    // The exact regex used by `derivePerCaseState` — protect against
+    // future edits that break the match silently.
+    const m = /case[_-]?id\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/i.exec(body);
+    expect(m?.[1]).toBe('01H1ABCDEF');
+  });
+
+  it('omits the marker when case_id is absent (back-compat)', () => {
+    const stdout = `BEGIN_FINDINGS\n${JSON.stringify([RICH_FINDING])}\nEND_FINDINGS`;
+    const body = bodyFor(parseFindings(stdout)[0]!);
+    expect(body).not.toContain('obelisk:case_id');
   });
 });

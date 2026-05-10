@@ -120,20 +120,40 @@ describe('CodexStreamParser', () => {
     expect(call).toMatchObject({ type: 'tool_call', name: 'Write' });
   });
 
-  it('emits a thinking event for agent_message items and accumulates reasoning text', () => {
-    const { events, reasoning } = feed([
+  it('streams agent_message text line-by-line through onText (case-progress markers)', () => {
+    // Regression: codex used to emit a single `thinking` event for the
+    // whole turn and never call onText, so the case-progress tracker
+    // (line-based) never saw QA Hunter's CASE_START / CASE_PASS markers.
+    // Result: every codex-driven QA run shipped every case as `skipped`.
+    // The fix streams each line through onText AND drops the bulk
+    // `thinking` event to avoid double-rendering in the activity tab.
+    const { text, events, reasoning } = feed([
       JSON.stringify({
         type: 'item.completed',
-        item: { id: 'item_0', type: 'agent_message', text: 'planning the edits' },
+        item: {
+          id: 'item_0',
+          type: 'agent_message',
+          text: 'CASE_START 01H1\nLooking at auth/session.ts\nCASE_PASS 01H1',
+        },
       }),
       JSON.stringify({
         type: 'item.completed',
         item: { id: 'item_5', type: 'agent_message', text: 'all done' },
       }),
     ]);
-    const thinks = events.filter((e) => e.type === 'thinking');
-    expect(thinks).toHaveLength(2);
-    expect(reasoning).toBe('planning the edits\nall done');
+    expect(text).toEqual([
+      'CASE_START 01H1',
+      'Looking at auth/session.ts',
+      'CASE_PASS 01H1',
+      'all done',
+    ]);
+    // No bulk `thinking` event for the same text — it would double up in
+    // the audit log and the Activity tab.
+    expect(events.filter((e) => e.type === 'thinking')).toHaveLength(0);
+    // Reasoning still aggregates the full text for BEGIN_FINDINGS parsing.
+    expect(reasoning).toBe(
+      'CASE_START 01H1\nLooking at auth/session.ts\nCASE_PASS 01H1\nall done',
+    );
   });
 
   it('emits a result event from turn.completed with token totals', () => {
