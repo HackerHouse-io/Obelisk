@@ -8,6 +8,7 @@ import {
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
 import { postClaimSignal } from '../lib/claim-on-github';
+import { isClaimedByAnotherInstall } from '../lib/cross-install-guard';
 import { getAuthedLogin } from '../../auth/token-store';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
@@ -103,19 +104,13 @@ export const featureBuilderHandler: AgentHandler = {
         // Cross-installation guard — see bug-fixer for the rationale.
         const authedLogin = await getAuthedLogin().catch(() => null);
         if (
-          ctx.labels.includes(OBELISK_LABELS.inProgress) &&
-          authedLogin &&
-          ctx.assignees.includes(authedLogin)
+          isClaimedByAnotherInstall({
+            labels: ctx.labels,
+            assignees: ctx.assignees,
+            connectedLogin: authedLogin,
+            source: `issue#${item.githubIssue}`,
+          })
         ) {
-          appendAudit({
-            runId: 'system',
-            kind: 'cross_install_skipped',
-            payload: {
-              source: `issue#${item.githubIssue}`,
-              login: authedLogin,
-              assignees: ctx.assignees,
-            },
-          });
           unlockBacklogItem(item.id);
           crossInstall += 1;
           continue;

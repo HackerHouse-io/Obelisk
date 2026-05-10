@@ -1,5 +1,6 @@
 import { getGithub } from '../../github/client';
 import { ObeliskError } from '../../../shared/errors';
+import { normalizeGithubAssignees, normalizeGithubLabels } from './cross-install-guard';
 
 /**
  * Fetch the GitHub login of an issue's author. Used by every agent that
@@ -50,12 +51,7 @@ export async function fetchIssueContext(
     author: resp.data.user?.login?.toLowerCase() ?? null,
     state: resp.data.state === 'closed' ? 'closed' : 'open',
     locked: Boolean(resp.data.locked),
-    assignees: (resp.data.assignees ?? [])
-      .map((a) => a?.login?.toLowerCase())
-      .filter((s): s is string => typeof s === 'string' && s.length > 0),
-    labels: (resp.data.labels ?? [])
-      .map((l) => (typeof l === 'string' ? l : (l?.name ?? '')))
-      .map((s) => s.toLowerCase())
-      .filter((s) => s.length > 0),
+    assignees: normalizeGithubAssignees(resp.data.assignees),
+    labels: normalizeGithubLabels(resp.data.labels),
   };
 }

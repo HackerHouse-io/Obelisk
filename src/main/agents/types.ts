@@ -60,11 +60,23 @@ export interface AgentHandler {
 
   /**
    * Whether the runner is expected to produce a patch in the worktree.
-   * Read-only agents (QA Hunter, Manual QA, PR Reviewer) set this to false:
+   * Read-only agents (QA Hunter, Manual QA) set this to false:
    * the orchestrator then treats `RunResult.reason === 'no_changes'` as a
    * successful run and skips the patch/failing-test-diff artifacts.
    */
   readonly producesPatch: boolean;
+
+  /**
+   * Whether the runner *may* produce a patch but `no_changes` is still a
+   * successful run as long as structured stdout was emitted. Used by PR
+   * Reviewer in fix mode: the worktree is attached to the PR's branch so
+   * the runner CAN commit fixes — but it's also fine to emit a clean
+   * review with zero file edits. The orchestrator's `no_changes`
+   * coercion treats both producesPatch=false and optionalPatch=true as
+   * acceptable for an empty diff (the latter additionally requires a
+   * structured-output marker to guard against silent runner crashes).
+   */
+  readonly optionalPatch?: boolean;
 
   /**
    * Side-effecting setup the orchestrator runs after `selectTask` succeeds
@@ -169,6 +181,16 @@ export interface SelectedTask {
    * succeeds, and (b) releases the claim with a result on completion.
    */
   prReviewClaimId?: string;
+  /**
+   * Set by handlers that want the orchestrator to (a) attach the worktree
+   * to an existing branch instead of forking a fresh one off the default
+   * branch, and (b) push fix-up commits to an already-open PR (skipping
+   * `pulls.create`). PR Reviewer sets this in fix mode for Obelisk-opened
+   * PRs so the runner can commit on top of the PR's head and the publisher
+   * appends to the existing PR. Mirrors the worktree behavior of
+   * `RunAgentInput.resumeContext` without coupling to that mechanism.
+   */
+  attachToBranch?: { branch: string; existingPrNumber: number };
   /**
    * iOS QA Pilot sets this with the simulator slot it claimed. The
    * orchestrator's preRun reads it to boot the sim and start Appium

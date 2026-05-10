@@ -30,6 +30,7 @@ import { saveArtifact } from '../evidence/artifact-store';
 import { checkEvidence } from '../evidence/check';
 import { renderPrBody } from '../evidence/pr-body';
 import { parseBugFixReport } from '../agents/bug-fixer';
+import { PR_REVIEW_MARKER } from '../agents/pr-reviewer';
 import { publish, clearClaimSignals } from '../publisher';
 import type { RepoSummary, Permissions } from '../prompt-compiler';
 
@@ -227,15 +228,25 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
   let worktreeHandle: { worktreePath: string; branch: string } | null = null;
   let runInfra: import('../agents/types').RunInfra | null = null;
   try {
-    // 4) Worktree. Resumed runs attach to the existing PR branch so the
-    //    fix-up commit appends to it; fresh runs fork a new branch off the
-    //    repo's default branch.
+    // 4) Worktree. Three paths:
+    //    - Resumed runs (CI auto-fix retry) attach to the existing PR branch
+    //      so the fix-up commit appends to it.
+    //    - Handlers that set `attachToBranch` (PR Reviewer fix mode) attach
+    //      to the named branch — the runner commits on top of the PR.
+    //    - Otherwise: fork a fresh branch off the repo's default branch.
     if (input.resumeContext) {
       worktreeHandle = await attachWorktree({
         repoPath: repo.localPath,
         repoId: repo.id,
         slot: `${input.resumeContext.originalRunId}-resume-${run.id}`,
         branch: input.resumeContext.prBranch,
+      });
+    } else if (selected.attachToBranch) {
+      worktreeHandle = await attachWorktree({
+        repoPath: repo.localPath,
+        repoId: repo.id,
+        slot: `${run.id}-pr${selected.attachToBranch.existingPrNumber}`,
+        branch: selected.attachToBranch.branch,
       });
     } else {
       worktreeHandle = await createWorktree({
@@ -353,12 +364,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       return { runId: run.id, finalState: 'cancelled', reason: 'user_cancelled' };
     }
 
-    // Read-only agents (qa-hunter, manual-qa, pr-reviewer) report
-    // `no_changes` as their normal success path; coerce that into an ok
-    // result with an empty patch so downstream code treats it uniformly.
+    // Read-only agents (qa-hunter, manual-qa) report `no_changes` as their
+    // normal success path; coerce that into an ok result with an empty
+    // patch so downstream code treats it uniformly. PR Reviewer is a
+    // hybrid (`optionalPatch`) — it CAN commit fixes but a clean review
+    // with zero edits is also success. For the optional-patch case we
+    // additionally require structured stdout (the agent's output marker)
+    // so a silent runner crash isn't laundered into success.
     const result = runResult.result;
+    const reasoningHasMarker =
+      handler.optionalPatch === true && (result.reasoning ?? '').includes(PR_REVIEW_MARKER);
     const isReadOnlyNoChanges =
-      !result.ok && result.reason === 'no_changes' && handler.producesPatch === false;
+      !result.ok &&
+      result.reason === 'no_changes' &&
+      (handler.producesPatch === false || reasoningHasMarker);
 
     if (!result.ok && !isReadOnlyNoChanges) {
       const errorCode = errorCodeForFailure(result.reason, result.detail);
@@ -576,35 +595,44 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       return { runId: run.id, finalState: 'done', reason: summary };
     }
 
-    // Iterate plans. PR plans get the rendered Evidence body filled in.
+    // Iterate plans. PR plans get the rendered Evidence body filled in,
+    // EXCEPT when the publish is appending to an existing PR (resume or
+    // attachToBranch fix-up) — in that case `pulls.create` is skipped, so
+    // the body field is unused and rendering it is wasted work.
     const published: Awaited<ReturnType<typeof publish>>[] = [];
     const failures: string[] = [];
+    // Resume (CI-retry fix-up) takes precedence over fix-mode attach so
+    // a CI retry on top of an Obelisk PR keeps the original PR linkage.
+    const existingPrNumber =
+      input.resumeContext?.prNumber ?? selected.attachToBranch?.existingPrNumber;
     for (const plan of plans) {
       try {
         if (plan.kind === 'pr') {
           plan.head = worktreeHandle.branch;
-          // Bug-fixer runs are required to emit a structured
-          // BEGIN_BUG_FIX_REPORT block at the end of their reasoning;
-          // when present it powers the PR body's Root cause / Fix /
-          // Test evidence sections instead of the LLM monologue. Falls
-          // back to the legacy reasoning dump when the block is missing
-          // (e.g. the agent stopped early with REPRO_FAILED).
-          const bugFixReport =
-            input.agentName === 'bug-fixer' ? parseBugFixReport(ok.reasoning) : null;
-          const commits = await readCommitsOnBranch(
-            worktreeHandle.worktreePath,
-            repo.defaultBranch,
-          ).catch(() => [] as { sha: string; subject: string }[]);
-          plan.body = renderPrBody({
-            agentName: input.agentName,
-            runId: run.id,
-            taskRef: selected.task.ref,
-            summary: oneLine(ok.reasoning),
-            reasoning: ok.reasoning,
-            evidence,
-            bugFixReport,
-            commits,
-          });
+          if (!existingPrNumber) {
+            // Bug-fixer runs are required to emit a structured
+            // BEGIN_BUG_FIX_REPORT block at the end of their reasoning;
+            // when present it powers the PR body's Root cause / Fix /
+            // Test evidence sections instead of the LLM monologue. Falls
+            // back to the legacy reasoning dump when the block is missing
+            // (e.g. the agent stopped early with REPRO_FAILED).
+            const bugFixReport =
+              input.agentName === 'bug-fixer' ? parseBugFixReport(ok.reasoning) : null;
+            const commits = await readCommitsOnBranch(
+              worktreeHandle.worktreePath,
+              repo.defaultBranch,
+            ).catch(() => [] as { sha: string; subject: string }[]);
+            plan.body = renderPrBody({
+              agentName: input.agentName,
+              runId: run.id,
+              taskRef: selected.task.ref,
+              summary: oneLine(ok.reasoning),
+              reasoning: ok.reasoning,
+              evidence,
+              bugFixReport,
+              commits,
+            });
+          }
         }
         const result = await publish({
           repo,
@@ -615,7 +643,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
           plan,
           commitSubject: plan.kind === 'pr' ? plan.title : `chore: ${selected.task.ref}`,
           ...(selected.task.githubNumber ? { sourceIssueNumber: selected.task.githubNumber } : {}),
-          ...(input.resumeContext ? { existingPrNumber: input.resumeContext.prNumber } : {}),
+          ...(existingPrNumber ? { existingPrNumber } : {}),
         });
         published.push(result);
         appendAudit({ runId: run.id, kind: 'published', payload: result });

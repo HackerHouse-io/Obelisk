@@ -9,6 +9,7 @@ import {
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
 import { postClaimSignal } from '../lib/claim-on-github';
+import { isClaimedByAnotherInstall } from '../lib/cross-install-guard';
 import { getAuthedLogin } from '../../auth/token-store';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
@@ -142,27 +143,19 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
       continue;
     }
 
-    // Cross-installation guard: another Obelisk install (or our own
-    // crashed prior run) may already be working this issue. The signature
-    // is "obelisk:in-progress label present AND the connected user is an
-    // assignee". We skip and unlock — the claim-signal reaper will clear
-    // a genuinely orphaned signal after 24h, at which point this issue
-    // becomes claimable again.
+    // Cross-installation guard: skip issues another Obelisk install
+    // already claimed (label + self-assignee signature). The reaper will
+    // clear a genuinely orphaned signal after 24h, at which point the
+    // issue becomes claimable again.
     const authedLogin = await getAuthedLogin().catch(() => null);
     if (
-      ctx.labels.includes(OBELISK_LABELS.inProgress) &&
-      authedLogin &&
-      ctx.assignees.includes(authedLogin)
+      isClaimedByAnotherInstall({
+        labels: ctx.labels,
+        assignees: ctx.assignees,
+        connectedLogin: authedLogin,
+        source: `issue#${item.githubIssue}`,
+      })
     ) {
-      appendAudit({
-        runId: 'system',
-        kind: 'cross_install_skipped',
-        payload: {
-          source: `issue#${item.githubIssue}`,
-          login: authedLogin,
-          assignees: ctx.assignees,
-        },
-      });
       unlockBacklogItem(item.id);
       crossInstall += 1;
       continue;

@@ -3,6 +3,12 @@ import { getGithub } from '../../github/client';
 import { loadGitHubToken } from '../../auth/token-store';
 import { ObeliskError } from '../../../shared/errors';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
+import { postClaimSignal } from '../lib/claim-on-github';
+import {
+  isClaimedByAnotherInstall,
+  normalizeGithubAssignees,
+  normalizeGithubLabels,
+} from '../lib/cross-install-guard';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { crossCheckEvidence, isEvidenceComplete } from './evidence-cross-check';
 import { claimPrReview, wasReviewed as wasReviewedAtSha } from '../../db/pr-review-claims';
@@ -14,14 +20,46 @@ import type {
   PublishPlan,
 } from '../types';
 
+/**
+ * After this many completed `pr-reviewer` runs against the same PR (across
+ * all SHAs), stop attempting fix-up commits and fall back to review-only.
+ * The reviewer's own commits change the head SHA, which means a "new"
+ * (PR, SHA) tuple is claimable on the next sweep — without a cap, the
+ * agent could spend forever fixing-then-fixing-its-fixes.
+ */
+const REVIEW_LIVELOCK_CAP = 3;
+
+/**
+ * Branch-name convention for Obelisk-opened PRs (Bug Fixer / Feature
+ * Builder). Used to gate fix mode — the reviewer never pushes commits
+ * onto a human-authored PR's branch.
+ */
+const OBELISK_BRANCH_PREFIX = 'obelisk/';
+
+/**
+ * The structured-output fence the agent emits. The orchestrator's
+ * `optionalPatch` coercion uses this to distinguish a clean review run
+ * (the agent ran, emitted findings, didn't touch files) from a silent
+ * runner crash (no diff, no output). Exported so `orchestrator/run.ts`
+ * doesn't have to know the agent's wire format.
+ */
+export const PR_REVIEW_MARKER = 'BEGIN_PR_REVIEW';
+
 export const prReviewerHandler: AgentHandler = {
   name: 'pr-reviewer',
   multiInstance: true,
   addAnotherExplainer:
     'Each instance reviews a different open PR. The same PR is never reviewed twice at the same SHA.',
-  // Reviews never write code, never open PRs.
+  // The PR's existing Evidence section was produced by the original
+  // agent; the reviewer's optional fix-up commits append to that PR
+  // and don't open a new one, so the Evidence gate doesn't apply.
   skipsEvidenceGate: true,
-  producesPatch: false,
+  // Hybrid: in fix mode the runner CAN commit fixes onto the PR's
+  // branch; in review-only mode it produces no patch. The orchestrator
+  // treats `no_changes` as success when structured review output is
+  // present (see `optionalPatch` in agents/types.ts).
+  producesPatch: true,
+  optionalPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     const gh = await getGithub();
@@ -69,17 +107,33 @@ export const prReviewerHandler: AgentHandler = {
         if (!allow.ok) continue;
       }
 
+      // Cross-installation guard: skip PRs another Obelisk install already
+      // claimed (label + self-assignee signature). Run before the DB claim
+      // so we don't churn the claim table on PRs we don't own.
+      if (
+        isClaimedByAnotherInstall({
+          labels: normalizeGithubLabels(pr.labels),
+          assignees: normalizeGithubAssignees(pr.assignees),
+          connectedLogin: connectedLogin ?? null,
+          source: taskRef,
+        })
+      ) {
+        continue;
+      }
+
       // Atomic claim — guarantees only one reviewer instance picks this PR/SHA.
       // If another instance got here first the partial-unique index returns 0
       // changes and we fall through to the next candidate.
       if (!agentId) {
         // No agent id available (legacy callers). Skip the claim and rely on
         // alreadyReviewed dedup; behavior matches pre-multi-instance.
+        // Legacy callers also miss out on fix mode — that's intentional, fix
+        // mode requires the claim row to attribute the eventual push.
         return {
           task: {
             ref: taskRef,
             kind: 'review',
-            context: prContextFor(pr),
+            context: prContextFor(pr, /* fixMode */ false),
             githubNumber: pr.number,
           },
         };
@@ -92,14 +146,43 @@ export const prReviewerHandler: AgentHandler = {
       });
       if (!claim) continue;
 
+      // Fix-mode gating. All three conditions must hold:
+      //  - PR was opened by Obelisk (head ref `obelisk/<run-id>`).
+      //  - Repo safety mode permits commit + push (publisher would reject
+      //    otherwise; refuse the dispatch up front rather than spawning
+      //    a doomed run).
+      //  - We haven't already cycled through too many fix attempts on
+      //    this PR (livelock guard — the reviewer's own push creates a
+      //    new SHA which would otherwise let the next sweep re-claim).
+      const isObeliskPr = pr.head.ref.startsWith(OBELISK_BRANCH_PREFIX);
+      const safetyAllowsFix = input.repo.mode === 'prs' || input.repo.mode === 'automerge';
+      const priorRuns = priorReviewerRunCount(input.repo.id, pr.number);
+      const livelockOk = priorRuns < REVIEW_LIVELOCK_CAP;
+      const fixMode = isObeliskPr && safetyAllowsFix && livelockOk;
+
+      // GitHub-side claim signal so a teammate's Obelisk install (or our
+      // own second machine) sees that this PR is being worked. Best-effort
+      // and idempotent. Cleanup is automatic — the orchestrator's finally
+      // calls clearClaimSignals(repo, task.githubNumber) regardless of
+      // run outcome. Applied in both fix and review-only modes so the
+      // cross-install guard above sees a consistent signal.
+      await postClaimSignal({
+        repo: input.repo,
+        issueNumber: pr.number,
+        source: taskRef,
+      });
+
       return {
         task: {
           ref: taskRef,
           kind: 'review',
-          context: prContextFor(pr),
+          context: prContextFor(pr, fixMode),
           githubNumber: pr.number,
         },
         prReviewClaimId: claim.id,
+        ...(fixMode
+          ? { attachToBranch: { branch: pr.head.ref, existingPrNumber: pr.number } }
+          : {}),
       };
     }
 
@@ -113,16 +196,55 @@ export const prReviewerHandler: AgentHandler = {
 
     // Fetch the PR body to cross-check the Evidence section.
     const evidence = await fetchEvidenceCrossCheck(input.repo.githubFullName, issueNumber);
-    const enforced = enforceEvidenceVerdict(review, evidence);
 
-    return [
-      {
-        kind: 'review',
-        prNumber: issueNumber,
-        event: enforced.event,
-        body: enforced.body,
-      },
-    ];
+    // Did the runner actually commit fixes? In fix mode the worktree is
+    // attached to the PR's branch — any patch in the run result should be
+    // pushed to that PR.
+    const hasFixUpDiff = (input.runResult.patch.diff ?? '').trim().length > 0;
+
+    // Verdict math: when the agent committed fixes, override based on
+    // remaining P0/P1 findings. No remaining → APPROVE (PR is merge-ready).
+    // Any remaining → COMMENT (we made progress; humans need to handle the
+    // rest). The Evidence override below still wins over both.
+    let workingReview = review;
+    if (hasFixUpDiff) {
+      const remainingHighSeverity = review.findings.some(
+        (f) => f.severity === 'P0' || f.severity === 'P1',
+      );
+      const newVerdict: ReviewOutput['verdict'] = remainingHighSeverity ? 'COMMENT' : 'APPROVE';
+      const note = remainingHighSeverity
+        ? '\n\n_PR Reviewer pushed fix-up commits for some findings; the items above still need human attention._'
+        : '\n\n_PR Reviewer pushed fix-up commits addressing the findings above._';
+      workingReview = {
+        ...review,
+        verdict: newVerdict,
+        summary: review.summary + note,
+      };
+    }
+
+    const enforced = enforceEvidenceVerdict(workingReview, evidence);
+    const reviewPlan: PublishPlan = {
+      kind: 'review',
+      prNumber: issueNumber,
+      event: enforced.event,
+      body: enforced.body,
+    };
+
+    // PR plan goes FIRST so the publisher's git push lands before the
+    // review references the new SHA on GitHub. The orchestrator overrides
+    // `head` from the worktree branch and skips the body render because
+    // existingPrNumber is set (publisher won't call pulls.create).
+    if (hasFixUpDiff) {
+      const prPlan: PublishPlan = {
+        kind: 'pr',
+        title: `fix: address review findings on #${issueNumber}`,
+        body: '',
+        head: '',
+        base: input.repo.defaultBranch,
+      };
+      return [prPlan, reviewPlan];
+    }
+    return [reviewPlan];
   },
 };
 
@@ -143,15 +265,17 @@ interface ReviewFinding {
   note: string;
 }
 
+const PR_REVIEW_END_MARKER = 'END_PR_REVIEW';
+
 export function parseReviewOutput(stdout: string): ReviewOutput | null {
   const wrapped = stdout.replace(
-    /BEGIN_PR_REVIEW\s*([\s\S]*?)\s*END_PR_REVIEW/,
-    (_match, body: string) => `BEGIN_PR_REVIEW [${body.trim()}] END_PR_REVIEW`,
+    new RegExp(`${PR_REVIEW_MARKER}\\s*([\\s\\S]*?)\\s*${PR_REVIEW_END_MARKER}`),
+    (_match, body: string) => `${PR_REVIEW_MARKER} [${body.trim()}] ${PR_REVIEW_END_MARKER}`,
   );
   const items = parseFencedJson<ReviewOutput>(
     wrapped,
-    'BEGIN_PR_REVIEW',
-    'END_PR_REVIEW',
+    PR_REVIEW_MARKER,
+    PR_REVIEW_END_MARKER,
     isReviewOutput,
   );
   return items[0] ?? null;
@@ -265,6 +389,30 @@ function alreadyReviewed(repoId: string, taskRef: string): boolean {
   return (row?.count ?? 0) > 0;
 }
 
-function prContextFor(pr: { title: string; body: string | null; number: number }): string {
-  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${pr.body ?? '(no PR body)'}`;
+/**
+ * Count completed `pr-reviewer` runs against this PR across ALL SHAs.
+ * Used to cap the fix-mode livelock: each fix-up commit produces a new
+ * SHA which would otherwise let the next sweep re-claim the PR forever.
+ * The cap (REVIEW_LIVELOCK_CAP) is a heuristic — beyond it, fall back
+ * to review-only.
+ */
+function priorReviewerRunCount(repoId: string, prNumber: number): number {
+  const row = getDb()
+    .prepare<[string, string], { c: number }>(
+      `SELECT COUNT(*) AS c FROM runs
+       WHERE repo_id = ? AND agent_name = 'pr-reviewer'
+         AND task_ref LIKE ? AND state = 'done'`,
+    )
+    .get(repoId, `pr#${prNumber}@%`);
+  return row?.c ?? 0;
+}
+
+function prContextFor(
+  pr: { title: string; body: string | null; number: number; head: { ref: string } },
+  fixMode: boolean,
+): string {
+  const modeHint = fixMode
+    ? `FIX MODE: this PR was opened by Obelisk on branch \`${pr.head.ref}\`. The worktree is checked out on that branch — you may commit fixes for findings you're confident about. See agents/pr-reviewer.md for the rules.`
+    : `REVIEW ONLY: do not modify any files. Post the review and stop.`;
+  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}\n\n${pr.body ?? '(no PR body)'}`;
 }
