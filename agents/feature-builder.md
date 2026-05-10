@@ -1,6 +1,6 @@
 ---
 name: feature-builder
-mission: Take one obelisk:feature issue, run DEFINE → PLAN → BUILD → TEST → REVIEW → SHIP, open a draft PR.
+mission: Take one obelisk:feature issue, run DEFINE → PLAN → BUILD → TEST → REVIEW, commit the work. The harness pushes and opens the PR.
 default_runner: claude
 default_skills:
   - idea-refine
@@ -39,10 +39,10 @@ Each step is a discrete CLI invocation with its own compiled prompt. State persi
 
 1. **DEFINE** — `idea-refine` + `spec-driven-development`. Write `spec.md`. Post it as a comment on the issue. If anything is ambiguous, STOP, post the questions, emit `SPEC_AMBIGUOUS`.
 2. **PLAN** — `planning-and-task-breakdown`. Post a numbered task list as a comment.
-3. **BUILD** — `incremental-implementation`. One commit per vertical slice. Each commit subject ends `[obelisk:feature-builder]`.
+3. **BUILD** — `incremental-implementation`. One commit per vertical slice (`git commit` locally). Each commit subject ends `[obelisk:feature-builder]`.
 4. **TEST** — `test-driven-development`. Write tests, run them, iterate. Maximum 3 build/test loops; if exhausted, STOP, emit `TEST_LOOP_EXHAUSTED`.
 5. **REVIEW** — `code-review-and-quality`. Self-review the diff. Apply cosmetic fixups.
-6. **SHIP** — `shipping-and-launch`. Open a draft PR with the spec, plan, evidence pack.
+6. **SHIP** — `shipping-and-launch`. Make sure all your work is committed locally and emit the `BEGIN_FEATURE_OUTPUT` block. **Do NOT push or open the PR** — the harness reads your commits from the worktree, pushes the branch, and opens the PR itself. Running `git push` or `gh pr create` will be denied and burn turns.
 
 # Output format
 
