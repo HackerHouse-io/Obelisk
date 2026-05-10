@@ -245,6 +245,31 @@ export function MissionControl(): ReactElement {
 
   const selectedRun = selectedRunId ? (runs[selectedRunId] ?? null) : null;
 
+  // Translate vertical wheel to horizontal scroll on the pipeline so a regular
+  // mouse wheel can scroll across columns. Yields to a column body that still
+  // has vertical room to scroll in the wheel's direction. Uses a non-passive
+  // listener so we can preventDefault and avoid double-scrolling.
+  const pipelineRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = pipelineRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent): void {
+      if (!el || e.deltaY === 0 || e.shiftKey || e.ctrlKey || e.metaKey) return;
+      if (el.scrollWidth <= el.clientWidth) return;
+      const target = e.target as HTMLElement | null;
+      const body = target?.closest<HTMLElement>('.mc-stage-body');
+      if (body && body.scrollHeight > body.clientHeight) {
+        const atTop = body.scrollTop <= 0;
+        const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+        if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) return;
+      }
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [repo]);
+
   if (!repo) {
     return (
       <EmptyState
@@ -322,7 +347,7 @@ export function MissionControl(): ReactElement {
             </button>
           </div>
         </div>
-        <div className="mc-pipeline">
+        <div className="mc-pipeline" ref={pipelineRef}>
           {STAGES.map((stage) => {
             const cards = repoRuns
               .filter((r) => stage.matchState.includes(r.state))
