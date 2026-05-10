@@ -213,4 +213,59 @@ describe('orchestrator: bug-fixer happy path', () => {
     expect(payload.result).toBe('pass');
     expect(payload.missing).toEqual([]);
   });
+
+  it('treats committed work (Bug Fixer Prove-It) as a successful run, not no_changes', async () => {
+    // Regression for the May 10 2026 outage: every Bug Fixer run was failing
+    // with `INTERNAL — worktree had no staged changes after run` because the
+    // agent (correctly) committed its failing-test + fix as separate commits,
+    // leaving nothing for `git add --all` to discover. The orchestrator now
+    // captures HEAD before the runner starts and the runner falls back to
+    // `baseRef..HEAD` — so the run must reach publishing and the artifacts
+    // must contain the agent's diff.
+    const repo = createRepo({
+      githubFullName: 'test/express-buggy',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'prs',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'bug-fixer' });
+    addToAllowlist(repo.id, 'fixture-author', 'auto');
+    createBacklogItem({
+      repoId: repo.id,
+      source: 'manual',
+      title: 'Bug fixed by an agent that commits its own work',
+      kind: 'bug',
+      priorityLabel: 'P0',
+    });
+
+    const recipe: MockRecipe = {
+      filesToWrite: [
+        { path: 'auth/session.ts', contents: FIXED_BUG_FILE },
+        { path: 'auth/session.test.ts', contents: FAILING_TEST_FILE },
+      ],
+      commitInsteadOfStage: true,
+      reasoning: 'fix(auth): emit SameSite=None when Secure is true',
+    };
+    const factory = (kind: 'claude' | 'codex'): MockRunner => new MockRunner(kind, recipe);
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      trigger: 'manual',
+      runnerFactory: factory,
+    });
+
+    // The run progresses past collectPatch + the evidence gate and only
+    // fails at the GitHub call (no signed-in user in tests). The CRITICAL
+    // assertion is the negative one: it must NOT fail with `no_changes`
+    // (the regression we just fixed).
+    expect(result.reason).not.toMatch(/no staged changes|no_changes/);
+
+    // Patch artifact contains both committed files.
+    const artifacts = listArtifacts(result.runId);
+    const patch = artifacts.find((a) => a.kind === 'patch');
+    expect(patch).toBeDefined();
+    expect(patch!.bytes).toBeGreaterThan(0);
+  });
 });

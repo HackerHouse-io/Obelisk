@@ -1,8 +1,8 @@
-import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
 import { looksLikeAuthRequired } from './detect-auth';
 import { CodexStreamParser } from './codex-stream-json';
+import { collectPatch } from './collect-patch';
 import type { CodingAgentRunner, RunOpts, RunResult, AuditLine } from './types';
 
 export class CodexRunner implements CodingAgentRunner {
@@ -86,29 +86,4 @@ export class CodexRunner implements CodingAgentRunner {
     // `agent_message` text only.
     return collectPatch(opts, parser.reasoning());
   }
-}
-
-async function collectPatch(opts: RunOpts, reasoning: string): Promise<RunResult> {
-  const git = simpleGit(opts.worktreePath);
-  await git.add('--all');
-  const status = await git.status();
-  if (status.files.length === 0) {
-    return {
-      ok: false,
-      reason: 'no_changes',
-      detail: 'worktree had no staged changes after run',
-      // Read-only agents (qa-hunter, manual-qa, pr-reviewer) emit findings on
-      // stdout. Carrying the reasoning through here keeps the orchestrator
-      // from dropping it when it coerces no_changes → ok for those agents.
-      reasoning,
-    };
-  }
-  const diff = await git.diff(['--cached']);
-  const filesChanged = [...new Set(status.files.map((f) => f.path))].sort();
-  return {
-    ok: true,
-    patch: { diff, filesChanged },
-    testsRun: [],
-    reasoning,
-  };
 }

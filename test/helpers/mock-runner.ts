@@ -12,7 +12,14 @@ export interface MockRecipe {
   reasoning?: string;
   /** Force a failure. If set, the run returns ok=false with this reason. */
   failWith?: { reason: 'timeout' | 'crash' | 'non_zero_exit' | 'no_changes'; detail: string };
-  /** Override the runner's emitted patch (defaults to whatever git status sees). */
+  /**
+   * Simulate the Bug Fixer's Prove-It pattern: stage AND commit the
+   * recipe's files inside the worktree before returning, then let the
+   * runner's `collectPatch` discover the patch via `baseRef..HEAD`
+   * instead of `git status --cached`. Without this flag the runner's
+   * default path stages files and reads the cached diff.
+   */
+  commitInsteadOfStage?: boolean;
 }
 
 /**
@@ -65,26 +72,34 @@ export class MockRunner implements CodingAgentRunner {
 
     const git = simpleGit(opts.worktreePath);
     await git.add('--all');
-    const status = await git.status();
-    if (status.files.length === 0) {
-      return { ok: false, reason: 'no_changes', detail: 'mock recipe produced no diff' };
-    }
-    const diff = await git.diff(['--cached']);
-    const filesChanged = [...new Set(status.files.map((f) => f.path))].sort();
 
-    return {
-      ok: true,
-      patch: { diff, filesChanged },
-      testsRun: [
+    if (this.recipe.commitInsteadOfStage) {
+      // Apply the same git config a fresh runner worktree gets in
+      // production so simple-git can `commit` here (the orchestrator's
+      // publisher does this just before its own commit, but the recipe
+      // commits BEFORE we reach the publisher).
+      await git.addConfig('user.name', 'Mock Agent');
+      await git.addConfig('user.email', 'mock@example.com');
+      await git.addConfig('commit.gpgsign', 'false');
+      await git.commit('mock: agent committed its own work', { '--no-verify': null });
+    }
+
+    // Fall through to the shared collectPatch path so the test exercises
+    // the same runner code as production (staged → diff --cached, or
+    // committed → baseRef..HEAD).
+    const { collectPatch } = await import('../../src/main/runners/collect-patch');
+    const result = await collectPatch(opts, this.recipe.reasoning ?? 'Mock run completed.');
+    if (result.ok) {
+      result.testsRun = [
         {
           command: 'pnpm test',
           exitCode: 0,
           durationMs: 1234,
           summary: 'PASS  src/auth/session.test.ts (3 tests)',
         },
-      ],
-      reasoning: this.recipe.reasoning ?? 'Mock run completed.',
-    };
+      ];
+    }
+    return result;
   }
 }
 

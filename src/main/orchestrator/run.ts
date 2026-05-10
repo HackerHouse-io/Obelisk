@@ -258,6 +258,18 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     }
     transitionRun(run.id, 'running', { worktreePath: worktreeHandle.worktreePath });
 
+    // Capture the worktree's HEAD BEFORE the runner runs. The Bug Fixer
+    // (and any other PR-producing agent) is told to commit its work, so
+    // the runner's `collectPatch` falls back to `baseRef..HEAD` when
+    // there are no unstaged changes left. Without this snapshot a clean
+    // working tree at the end of a successful run would be misread as
+    // `no_changes` and the entire run thrown away — a regression we hit
+    // hard once the agent prompt was tightened to leave nothing dangling.
+    const baseRef = await simpleGit(worktreeHandle.worktreePath)
+      .revparse(['HEAD'])
+      .then((s) => s.trim())
+      .catch(() => '');
+
     // 4b) Agent-specific infrastructure setup — boot a simulator, start
     // an Appium server, etc. The teardown handle is invoked in the
     // `finally` block regardless of success/failure so we don't leak
@@ -343,6 +355,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       timeoutMs: agentRow?.timeoutMs ?? 30 * 60 * 1000,
       abortSignal: abortController.signal,
       caseTracker,
+      ...(baseRef ? { baseRef } : {}),
     });
     caseTracker.flush();
 
@@ -830,6 +843,13 @@ interface FallbackInput {
   abortSignal: AbortSignal;
   /** Streaming parser fed every stdout line so CASE_* markers fire live updates. */
   caseTracker: CaseProgressTracker;
+  /**
+   * Worktree HEAD captured BEFORE the runner ran. Threaded into RunOpts so
+   * `collectPatch` can fall back to `baseRef..HEAD` when the agent
+   * committed its work (Bug Fixer's Prove-It pattern) instead of leaving
+   * it staged. Optional — runner falls back to status-only detection.
+   */
+  baseRef?: string;
 }
 
 interface FallbackOutput {
@@ -864,6 +884,7 @@ async function runWithFallback(input: FallbackInput): Promise<FallbackOutput> {
             input.caseTracker.feedLine(line.payload);
           }
         },
+        ...(input.baseRef ? { baseRef: input.baseRef } : {}),
       },
       input.abortSignal,
     );

@@ -17,6 +17,16 @@ export interface RunOpts {
   timeoutMs: number;
   /** Stream stdout / stderr / lifecycle events to the audit log. */
   onAudit: (line: AuditLine) => void;
+  /**
+   * Commit the worktree was at BEFORE the runner ran (a full SHA captured
+   * by the orchestrator right after worktree setup). Bug Fixer's Prove-It
+   * pattern tells the agent to land its work as separate commits (failing
+   * test, then fix), so a clean working tree with HEAD ahead of `baseRef`
+   * is the normal happy path — `collectPatch` uses `baseRef..HEAD` to
+   * materialize the patch when nothing is left staged. Optional only so
+   * MockRunner / unit fixtures don't have to thread it through.
+   */
+  baseRef?: string;
 }
 
 export interface GitPatch {

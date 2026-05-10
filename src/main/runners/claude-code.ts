@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
 import { looksLikeAuthRequired } from './detect-auth';
 import { ClaudeStreamParser } from './claude-stream-json';
+import { collectPatch } from './collect-patch';
 import type { CodingAgentRunner, RunOpts, RunResult, AuditLine } from './types';
 
 export class ClaudeCodeRunner implements CodingAgentRunner {
@@ -98,33 +98,4 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
     // raw JSONL would defeat the parser.
     return collectPatch(opts, parser.reasoning());
   }
-}
-
-/**
- * Walk the worktree's git status to materialize the patch + filesChanged.
- * Both runners produce side-effects in the worktree; the runner doesn't
- * need to parse patch markers out of stdout.
- */
-async function collectPatch(opts: RunOpts, reasoning: string): Promise<RunResult> {
-  const git = simpleGit(opts.worktreePath);
-  await git.add('--all');
-  const status = await git.status();
-  if (status.files.length === 0) {
-    return {
-      ok: false,
-      reason: 'no_changes',
-      detail: 'worktree had no staged changes after run',
-      // Read-only agents emit findings on stdout; preserve them so the
-      // orchestrator's no_changes-coerce-to-ok path can parse BEGIN_FINDINGS.
-      reasoning,
-    };
-  }
-  const diff = await git.diff(['--cached']);
-  const filesChanged = [...new Set(status.files.map((f) => f.path))].sort();
-  return {
-    ok: true,
-    patch: { diff, filesChanged },
-    testsRun: [], // Phase 4+ wires test extraction
-    reasoning,
-  };
 }

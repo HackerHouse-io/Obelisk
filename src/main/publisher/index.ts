@@ -150,16 +150,25 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
       const git = simpleGit(input.worktreePath);
       await applyGitConfig(git, attr);
 
-      // Stage everything the runner produced + commit with the standardized
-      // message shape (subject ends with [obelisk:<agent>], coauthor trailer).
+      // Stage anything the runner left dangling. The agent itself usually
+      // commits its own work (Bug Fixer's Prove-It pattern lands the
+      // failing test and the fix as separate commits — see
+      // agents/bug-fixer.md), so this `add --all` mostly catches stray
+      // edits like a forgotten `.gitignore` tweak. Only commit when
+      // something is actually staged; otherwise simple-git's
+      // `git commit` would fail with "nothing to commit" and we'd lose
+      // the agent's already-landed commits.
       await git.add('--all');
-      const commitMessage = renderCommitMessage({
-        subject: input.commitSubject,
-        agentName: input.agentName,
-        ...(input.commitBody ? { body: input.commitBody } : {}),
-        attribution: attr,
-      });
-      await git.commit(commitMessage, { '--no-verify': null });
+      const stagedStatus = await git.status();
+      if (stagedStatus.files.length > 0) {
+        const commitMessage = renderCommitMessage({
+          subject: input.commitSubject,
+          agentName: input.agentName,
+          ...(input.commitBody ? { body: input.commitBody } : {}),
+          attribution: attr,
+        });
+        await git.commit(commitMessage, { '--no-verify': null });
+      }
 
       // Push the per-run branch to origin. For resume publishes the branch
       // already has an upstream tracking ref, so set-upstream is a no-op
