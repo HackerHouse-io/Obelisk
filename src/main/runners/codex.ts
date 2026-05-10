@@ -2,7 +2,8 @@ import { simpleGit } from 'simple-git';
 import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
 import { looksLikeAuthRequired } from './detect-auth';
-import type { CodingAgentRunner, RunOpts, RunResult } from './types';
+import { CodexStreamParser } from './codex-stream-json';
+import type { CodingAgentRunner, RunOpts, RunResult, AuditLine } from './types';
 
 export class CodexRunner implements CodingAgentRunner {
   readonly kind = 'codex' as const;
@@ -18,6 +19,28 @@ export class CodexRunner implements CodingAgentRunner {
       payload: { stage: 'spawning', runner: 'codex' },
     });
 
+    // Codex is invoked with `--json` (set in codex-layout.ts), so each
+    // stdout line is a JSON event, not raw text. Wrap onAudit so the rest
+    // of the orchestrator (CaseProgressTracker, audit log, BEGIN_FINDINGS
+    // parser) receives the parsed assistant text instead of a wall of
+    // JSONL — and Mission Control's Activity tab gets the same structured
+    // tool_call / tool_result rows the Claude Code runner produces.
+    const parser = new CodexStreamParser({
+      onText: (line) => {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'stdout', payload: line });
+      },
+      onEvent: (event) => {
+        opts.onAudit({ at: new Date().toISOString(), kind: 'agent_event', payload: event });
+      },
+    });
+    const wrappedOnAudit = (line: AuditLine): void => {
+      if (line.kind !== 'stdout' || typeof line.payload !== 'string') {
+        opts.onAudit(line);
+        return;
+      }
+      parser.feedLine(line.payload);
+    };
+
     let result;
     try {
       result = await spawnAgentCli({
@@ -27,12 +50,13 @@ export class CodexRunner implements CodingAgentRunner {
         env: runnerEnv(),
         stdin: opts.prompt.userMessage,
         timeoutMs: opts.timeoutMs,
-        onAudit: opts.onAudit,
+        onAudit: wrappedOnAudit,
         abort,
       });
     } catch (e) {
       return { ok: false, reason: 'crash', detail: (e as Error).message };
     }
+    parser.flush();
 
     if (result.timedOut) {
       return { ok: false, reason: 'timeout', detail: `> ${opts.timeoutMs}ms` };
@@ -55,7 +79,12 @@ export class CodexRunner implements CodingAgentRunner {
       return { ok: false, reason: 'non_zero_exit', detail };
     }
 
-    return collectPatch(opts, result.stdout);
+    // Success path: hand the parsed assistant text to collectPatch as
+    // `reasoning`. With `--json` enabled, raw stdout is JSONL — feeding
+    // that to BEGIN_FINDINGS / suggested_test parsers in the orchestrator
+    // would defeat them. The parser's `reasoning()` is the joined
+    // `agent_message` text only.
+    return collectPatch(opts, parser.reasoning());
   }
 }
 

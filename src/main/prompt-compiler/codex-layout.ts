@@ -105,11 +105,21 @@ function renderRunnerArgs(input: CompileInput): string[] {
   // OR the caller passed a per-run modelOverride (Test Plans popover).
   // Hardcoding model names breaks ChatGPT-account Codex sign-ins (which reject
   // `gpt-5` etc.) and rots fast as model versions ship.
-  return buildCodexExecArgs({
+  // `--json` makes codex emit one JSONL event per line on stdout. The
+  // CodexStreamParser in the runner turns those into the same structured
+  // `agent_event` audit lines Claude Code produces, so Mission Control's
+  // Activity tab shows the same "reading / editing / running" rows for
+  // both runners. Scoped to the agent-run path: test-plan generation +
+  // playbook-curator both parse raw stdout markers, so they call
+  // `buildCodexExecArgs` directly without `--json`.
+  const args = buildCodexExecArgs({
     sandbox: 'workspace-write',
     reasoning,
     ...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
   });
+  // Insert right after `exec` so help text / arg ordering stays predictable.
+  args.splice(1, 0, '--json');
+  return args;
 }
 
 export function buildCodexExecArgs(opts: {

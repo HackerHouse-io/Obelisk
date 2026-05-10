@@ -221,6 +221,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > bug-fixer × codex 1`]
   "contentHash": "c88167bf0b350dad2f5a61d15016b9cc4f9bff3acc197eb675e91c85703174cb",
   "runnerArgs": [
     "exec",
+    "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
@@ -767,6 +768,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > feature-builder × cod
   "contentHash": "359b19e3c75a3a59179c2bf37f4d5e5ade724d8f2ca3a38129832897f9d16252",
   "runnerArgs": [
     "exec",
+    "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
@@ -1244,6 +1246,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > manual-qa × codex 1`]
   "contentHash": "ee4e7e6ccaf44736caf34039141728e24f0a46e0f9e79fb92ffe9884c4fe8542",
   "runnerArgs": [
     "exec",
+    "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
@@ -1626,6 +1629,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > pr-reviewer × codex 1
   "contentHash": "94b714f1becfc4897f8fc1da322c63fbb5798ce47f995f0ace216cb625ffffdc",
   "runnerArgs": [
     "exec",
+    "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
@@ -2075,6 +2079,7 @@ exports[`prompt-compiler > snapshot per (agent, runner) > qa-hunter × codex 1`]
   "contentHash": "d3c55d31df1a55c852a208551c78c34436ef97fb3dec91600f32b24ee3149a21",
   "runnerArgs": [
     "exec",
+    "--json",
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
