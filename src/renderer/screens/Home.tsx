@@ -98,6 +98,15 @@ export function Home(): ReactElement {
       if (b.ok) setBacklog(b.value);
       if (p.ok) setPreviews(p.value);
     });
+
+    // Kick off a foreground GitHub sync immediately on mount. This is what
+    // strips findings whose GitHub issue is already closed — without this,
+    // the user would see stale rows until the next 2-min auto-sweep ticks.
+    // Runs in the background; the broadcast → previews.changed handler
+    // below picks up the refreshed list when the sync finishes.
+    void window.obelisk.invoke('previews:refresh', { repoId: repo.id }).then((res) => {
+      if (res.ok) setPreviews(res.value);
+    });
   }, [repo, upsertRun]);
 
   // Real-time updates while the user stays on this screen:
@@ -289,6 +298,24 @@ export function Home(): ReactElement {
     if (!res.ok) alert(res.error.message);
   }, []);
 
+  const [previewsRefreshing, setPreviewsRefreshing] = useState(false);
+  const [previewsRefreshError, setPreviewsRefreshError] = useState<string | null>(null);
+  const refreshTaskPreviews = useCallback(async () => {
+    if (!repo || previewsRefreshing) return;
+    setPreviewsRefreshing(true);
+    setPreviewsRefreshError(null);
+    try {
+      const res = await window.obelisk.invoke('previews:refresh', { repoId: repo.id });
+      if (res.ok) {
+        setPreviews(res.value);
+      } else {
+        setPreviewsRefreshError(res.error.message);
+      }
+    } finally {
+      setPreviewsRefreshing(false);
+    }
+  }, [repo, previewsRefreshing]);
+
   const kpis = useMemo(() => {
     const liveRuns = runs.filter((r) => LIVE_STATES.includes(r.state)).length;
     const doneToday = runs.filter((r) => r.state === 'done' && isToday(r.finishedAt)).length;
@@ -407,20 +434,22 @@ export function Home(): ReactElement {
         )}
       </div>
 
-      {repo.mode === 'observe' ? (
-        <ObservePreviews
-          findings={previews.findings}
-          repoMode={repo.mode}
-          installedAgents={agents}
-          runState={runState}
-          onUpgradeMode={() => setRoute('settings')}
-          onOpenTestPlans={() => setRoute('test-plans')}
-          onOpenFinding={setModalFinding}
-          onDismissFinding={dismissPreview}
-          onRunAgent={runAgent}
-          onDismissError={dismissRunError}
-        />
-      ) : null}
+      <TaskPreviews
+        findings={previews.findings}
+        repoMode={repo.mode}
+        installedAgents={agents}
+        runState={runState}
+        refreshing={previewsRefreshing}
+        refreshError={previewsRefreshError}
+        onUpgradeMode={() => setRoute('settings')}
+        onOpenTestPlans={() => setRoute('test-plans')}
+        onOpenFinding={setModalFinding}
+        onDismissFinding={dismissPreview}
+        onRunAgent={runAgent}
+        onDismissError={dismissRunError}
+        onRefresh={refreshTaskPreviews}
+        onDismissRefreshError={() => setPreviewsRefreshError(null)}
+      />
 
       <div className="home-section">
         <div className="home-section-title">
@@ -710,44 +739,87 @@ function RunButton({
   );
 }
 
-function ObservePreviews({
+function TaskPreviews({
   findings,
+  repoMode,
   installedAgents,
   runState,
+  refreshing,
+  refreshError,
   onUpgradeMode,
   onOpenTestPlans,
   onOpenFinding,
   onDismissFinding,
   onRunAgent,
   onDismissError,
+  onRefresh,
+  onDismissRefreshError,
 }: {
   findings: PreviewsResponse['findings'];
   repoMode: SafetyMode;
   installedAgents: Agent[];
   runState: RunStateMap;
+  refreshing: boolean;
+  refreshError: string | null;
   onUpgradeMode: () => void;
   onOpenTestPlans: () => void;
   onOpenFinding: (f: PreviewedFinding) => void;
   onDismissFinding: (f: PreviewedFinding) => void;
   onRunAgent: (a: Agent) => Promise<void> | void;
   onDismissError: () => void;
+  onRefresh: () => Promise<void> | void;
+  onDismissRefreshError: () => void;
 }): ReactElement {
   const visible = findings.filter((f) => !f.dismissed);
   const qaAgents = installedAgents.filter((a) => QA_AGENT_NAMES.includes(a.name));
+  const isObserve = repoMode === 'observe';
   return (
     <div className="home-section observe-previews">
       <div className="home-section-title">
         <span className="row gap-2" style={{ alignItems: 'center' }}>
           <Icon.Eye size={13} color="var(--brand)" />
-          Observe-mode previews
+          Task previews
         </span>
-        <button type="button" className="btn ghost sm" onClick={onUpgradeMode}>
-          Switch to &ldquo;File issues&rdquo; mode
-        </button>
+        <div className="row gap-2" style={{ alignItems: 'center' }}>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => void onRefresh()}
+            disabled={refreshing}
+            data-testid="previews-refresh"
+            title="Pull the latest issue states from GitHub. Auto-syncs every ~2 min in the background."
+          >
+            {refreshing ? (
+              <>
+                <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
+                Refreshing…
+              </>
+            ) : (
+              <>
+                <Icon.Refresh size={11} /> Refresh
+              </>
+            )}
+          </button>
+          {isObserve ? (
+            <button type="button" className="btn ghost sm" onClick={onUpgradeMode}>
+              Switch to &ldquo;File issues&rdquo; mode
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="home-section-sub">
-        Safety mode is set to <span className="mono">observe</span>, so nothing has been written to
-        GitHub. Findings show up here — review and click <em>Open issue</em> to file each one.
+        {isObserve ? (
+          <>
+            Safety mode is set to <span className="mono">observe</span>, so nothing has been written
+            to GitHub. Findings show up here — review and click <em>Open issue</em> to file each
+            one.
+          </>
+        ) : (
+          <>
+            GitHub issues and QA-hunter bugs surface here. Items already filed link to GitHub;
+            pending findings can be reviewed and opened manually.
+          </>
+        )}
       </div>
 
       {runState.error ? (
@@ -773,12 +845,33 @@ function ObservePreviews({
         </div>
       ) : null}
 
+      {refreshError ? (
+        <div className="observe-error" role="alert" data-testid="previews-refresh-error">
+          <div className="observe-error-icon">
+            <Icon.AlertTri size={13} />
+          </div>
+          <div className="observe-error-body">
+            <div className="observe-error-title">Couldn’t refresh</div>
+            <div className="observe-error-msg">{refreshError}</div>
+          </div>
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={onDismissRefreshError}
+            aria-label="Dismiss refresh error"
+          >
+            <Icon.Close size={11} />
+          </button>
+        </div>
+      ) : null}
+
       {visible.length === 0 ? (
         <div className="observe-empty">
           <div className="observe-empty-title">No findings yet</div>
           <div className="observe-empty-sub">
-            Pick a QA agent and a test plan; the agent runs, surfaces bugs here, and you choose
-            which to file as GitHub issues.
+            {isObserve
+              ? 'Pick a QA agent and a test plan; the agent runs, surfaces bugs here, and you choose which to file as GitHub issues.'
+              : 'Pick a QA agent and a test plan; bugs the agent finds — and any issues already filed on GitHub — show up here.'}
           </div>
           <div className="row gap-2 observe-empty-actions">
             {qaAgents.length === 0 ? (

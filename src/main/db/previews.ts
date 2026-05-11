@@ -304,6 +304,42 @@ export function listKnownFingerprintsForRepo(repoId: string): Set<string> {
   return new Set(rows.map((r) => r.fingerprint));
 }
 
+/**
+ * Issue numbers for previews that are published to GitHub but not yet
+ * dismissed in our DB. The backlog-sync sweep uses this to detect findings
+ * whose underlying GitHub issue has been closed, so they can be auto-hidden
+ * from the Command Center without the user having to dismiss each one.
+ */
+export function listPublishedOpenPreviewIssueNumbersForRepo(
+  repoId: string,
+): { previewId: number; issueNumber: number }[] {
+  const rows = getDb()
+    .prepare<[string], { preview_id: number; payload: string }>(
+      `SELECT pm.preview_id AS preview_id, pm.payload AS payload
+         FROM preview_markers pm
+         JOIN previews p ON p.id = pm.preview_id
+         WHERE p.repo_id = ?
+           AND pm.kind = 'published'
+           AND NOT EXISTS (
+             SELECT 1 FROM preview_markers d
+              WHERE d.preview_id = pm.preview_id AND d.kind = 'dismissed'
+           )`,
+    )
+    .all(repoId);
+  const out: { previewId: number; issueNumber: number }[] = [];
+  for (const r of rows) {
+    try {
+      const parsed = JSON.parse(r.payload) as { issueNumber?: unknown };
+      if (typeof parsed.issueNumber === 'number') {
+        out.push({ previewId: r.preview_id, issueNumber: parsed.issueNumber });
+      }
+    } catch {
+      // Malformed payload — skip; rowToFinding will already have ignored it.
+    }
+  }
+  return out;
+}
+
 export function markPreviewPublished(opts: {
   sourcePreviewId: number;
   runId: string;

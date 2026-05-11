@@ -535,6 +535,17 @@ export interface IpcMap {
     };
   };
 
+  // Runners — quick installed-state check for both CLIs at once. Drives the
+  // pre-flight disable on the per-feature Generate button so we don't dispatch
+  // a generation job that's guaranteed to fail.
+  'runners:installed': {
+    req: Record<string, never>;
+    res: {
+      claude: { installed: boolean; version?: string; hint?: string };
+      codex: { installed: boolean; version?: string; hint?: string };
+    };
+  };
+
   // Models — dynamic discovery (CLI config + live API + curated fallback).
   // Replaces the renderer's hardcoded MODEL_OPTIONS for non-stale dropdowns.
   'models:list': {
@@ -623,6 +634,23 @@ export interface IpcMap {
   };
   'previews:dismiss': { req: { previewId: number }; res: { ok: true } };
   'previews:undismiss': { req: { previewId: number }; res: { ok: true } };
+  // Foreground sync against GitHub for the Command Center "Task previews"
+  // card. Drives the refresh button: triggers the same sweep that runs every
+  // ~2 min in the background (additive backlog upserts + closed-issue reaper
+  // + preview close-detection) and returns the refreshed previews list in
+  // one round-trip.
+  'previews:refresh': {
+    req: { repoId: string };
+    res: {
+      findings: PreviewedFinding[];
+      playbookDraft: {
+        generatedAt: ISO;
+        framework: string;
+        criticalFlows: string[];
+        fileCount: number;
+      } | null;
+    };
+  };
 
   // Test plans — gate the QA agent run flow.
   'testPlans:list': {

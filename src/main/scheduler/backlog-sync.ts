@@ -4,6 +4,7 @@ import {
   listBacklogGhIssueNumbers,
   deleteBacklogGhIssue,
 } from '../db/backlog';
+import { listPublishedOpenPreviewIssueNumbersForRepo, markPreviewDismissed } from '../db/previews';
 import { getGithub } from '../github/client';
 import { OBELISK_LABELS } from '../publisher/labels';
 import { broadcast } from '../ipc/bus';
@@ -153,9 +154,48 @@ async function syncRepo(repo: Repo): Promise<void> {
   // resolved. We re-fetch each candidate via gh.issues.get to confirm
   // its state before deleting (avoids paginating-out false positives
   // on repos with >50 open obelisk-labelled issues).
+  //
+  // Same sweep doubles as the close-detection pass for Command Center
+  // "Task previews": any published-not-dismissed preview pointing at a
+  // non-live issue number gets auto-dismissed. Sharing the iteration
+  // (and the `gh.issues.get` calls) means zero extra API cost on top of
+  // what the backlog reaper already pays.
+  const published = listPublishedOpenPreviewIssueNumbersForRepo(repo.id);
+  const previewsByIssue = new Map<number, number[]>();
+  for (const { previewId, issueNumber } of published) {
+    const list = previewsByIssue.get(issueNumber) ?? [];
+    list.push(previewId);
+    previewsByIssue.set(issueNumber, list);
+  }
+  function autoDismissPreviewsForIssue(issueNumber: number, reason: string): number {
+    const previewIds = previewsByIssue.get(issueNumber);
+    if (!previewIds) return 0;
+    for (const previewId of previewIds) {
+      markPreviewDismissed({ sourcePreviewId: previewId, runId: '' });
+      appendAudit({
+        runId: 'system',
+        kind: 'preview_auto_dismissed',
+        payload: {
+          repo: repo.githubFullName,
+          previewId,
+          issueNumber,
+          reason,
+        },
+      });
+    }
+    previewsByIssue.delete(issueNumber);
+    return previewIds.length;
+  }
+
   let reaped = 0;
-  const known = listBacklogGhIssueNumbers(repo.id);
-  for (const num of known) {
+  let autoDismissed = 0;
+  // Inspect every issue number we know about — from the backlog OR from
+  // published previews — that wasn't returned by the live-open fetch.
+  // The union lets us auto-dismiss findings whose issue was filed
+  // through QA-Hunter and never lived in the backlog.
+  const backlogNumbers = new Set(listBacklogGhIssueNumbers(repo.id));
+  const candidatesToCheck = new Set<number>([...backlogNumbers, ...previewsByIssue.keys()]);
+  for (const num of candidatesToCheck) {
     if (livePresent.has(num)) continue;
     try {
       const detail = await gh.issues.get({ owner, repo: name, issue_number: num });
@@ -167,37 +207,35 @@ async function syncRepo(repo: Repo): Promise<void> {
           (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : (l?.name ?? ''))),
         ) !== null;
       if (stillLive) continue;
-      deleteBacklogGhIssue(repo.id, num);
-      reaped += 1;
-      appendAudit({
-        runId: 'system',
-        kind: 'backlog_row_reaped',
-        payload: {
-          repo: repo.githubFullName,
-          issueNumber: num,
-          reason:
-            issue.state === 'closed'
-              ? 'issue_closed'
-              : issue.locked
-                ? 'issue_locked'
-                : 'trigger_label_removed',
-        },
-      });
-    } catch (e) {
-      // 404 → issue deleted on GitHub. Drop the row anyway.
-      const status = (e as { status?: number }).status;
-      if (status === 404) {
+      const reason =
+        issue.state === 'closed'
+          ? 'issue_closed'
+          : issue.locked
+            ? 'issue_locked'
+            : 'trigger_label_removed';
+      if (backlogNumbers.has(num)) {
         deleteBacklogGhIssue(repo.id, num);
         reaped += 1;
         appendAudit({
           runId: 'system',
           kind: 'backlog_row_reaped',
-          payload: {
-            repo: repo.githubFullName,
-            issueNumber: num,
-            reason: 'issue_404',
-          },
+          payload: { repo: repo.githubFullName, issueNumber: num, reason },
         });
+      }
+      autoDismissed += autoDismissPreviewsForIssue(num, reason);
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      if (status === 404) {
+        if (backlogNumbers.has(num)) {
+          deleteBacklogGhIssue(repo.id, num);
+          reaped += 1;
+          appendAudit({
+            runId: 'system',
+            kind: 'backlog_row_reaped',
+            payload: { repo: repo.githubFullName, issueNumber: num, reason: 'issue_404' },
+          });
+        }
+        autoDismissed += autoDismissPreviewsForIssue(num, 'issue_404');
       }
       // Other errors (rate limit, network) are non-fatal — try next sweep.
     }
@@ -205,6 +243,9 @@ async function syncRepo(repo: Repo): Promise<void> {
 
   if (upserted > 0 || reaped > 0) {
     broadcast({ type: 'backlog.changed', repoId: repo.id });
+  }
+  if (autoDismissed > 0) {
+    broadcast({ type: 'previews.changed', repoId: repo.id });
   }
 }
 

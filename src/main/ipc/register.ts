@@ -52,6 +52,7 @@ import {
   handlePreviewsFileIssue,
   handlePreviewsDismiss,
   handlePreviewsUndismiss,
+  handlePreviewsRefresh,
 } from './previews';
 import {
   handleTestPlansList,
@@ -76,7 +77,7 @@ import {
 } from './qa';
 import { handleSettingsGet, handleSettingsUpdate } from './settings';
 import { handleModelsList } from './models';
-import { handleRunnerProbeAuth } from './runner';
+import { handleRunnerProbeAuth, handleRunnersInstalled } from './runner';
 
 type Handler<C extends IpcChannel> = (payload: IpcMap[C]['req']) => Promise<IpcMap[C]['res']>;
 
@@ -158,6 +159,7 @@ export function registerIpcHandlers(): void {
   register('previews:fileIssue', handlePreviewsFileIssue);
   register('previews:dismiss', handlePreviewsDismiss);
   register('previews:undismiss', handlePreviewsUndismiss);
+  register('previews:refresh', handlePreviewsRefresh);
 
   // Test plans (gate the QA agent run flow)
   register('testPlans:list', handleTestPlansList);
@@ -191,6 +193,7 @@ export function registerIpcHandlers(): void {
 
   // Runner sign-in probe (drives the auth banner's "Verify sign-in" button)
   register('runner:probeAuth', handleRunnerProbeAuth);
+  register('runners:installed', handleRunnersInstalled);
 
   // Bind ipcMain.handle for every registered channel with a single envelope wrapper.
   for (const [channel, handler] of handlers) {

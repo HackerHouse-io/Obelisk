@@ -121,6 +121,22 @@ export function FindingPreview({
               ) : null}
             </>
           )}
+          {onDismiss && !finding.dismissed ? (
+            <button
+              type="button"
+              className="btn ghost icon"
+              onClick={() => onDismiss(finding)}
+              aria-label="Dismiss"
+              title={
+                isPublished
+                  ? 'Hide this from the Task previews list'
+                  : 'Dismiss — QA will not flag this again'
+              }
+              data-testid="finding-row-dismiss"
+            >
+              <Icon.Close size={11} />
+            </button>
+          ) : null}
         </div>
       </div>
       {expanded ? (

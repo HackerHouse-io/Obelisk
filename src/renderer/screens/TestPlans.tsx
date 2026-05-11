@@ -1,11 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
   type ReactElement,
+  type ReactNode,
 } from 'react';
 import { ulid } from 'ulid';
 import { useStore } from '../state/store';
@@ -20,6 +22,7 @@ import type {
   FindingSeverity,
   TestPlan,
   TestPlanBlock,
+  TestPlanGenerationJob,
   TestPlanScope,
   TestPlanSummary,
 } from '../../shared/types';
@@ -51,6 +54,38 @@ const INITIAL_NEW_PLAN_STATE: NewPlanState = {
   error: null,
 };
 
+function isJobActive(job: TestPlanGenerationJob): boolean {
+  return job.stage !== 'done' && job.stage !== 'failed';
+}
+
+function featureKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function buildInFlightFeatureSet(jobs: TestPlanGenerationJob[], repoId: string): Set<string> {
+  const set = new Set<string>();
+  for (const job of jobs) {
+    if (job.repoId !== repoId) continue;
+    if (job.scope !== 'feature') continue;
+    if (!job.feature) continue;
+    if (!isJobActive(job)) continue;
+    set.add(featureKey(job.feature));
+  }
+  return set;
+}
+
+function applyJobToInFlightSet(prev: Set<string>, job: TestPlanGenerationJob): Set<string> {
+  if (job.scope !== 'feature' || !job.feature) return prev;
+  const key = featureKey(job.feature);
+  const active = isJobActive(job);
+  if (active && prev.has(key)) return prev;
+  if (!active && !prev.has(key)) return prev;
+  const next = new Set(prev);
+  if (active) next.add(key);
+  else next.delete(key);
+  return next;
+}
+
 export function TestPlans(): ReactElement {
   const repos = useStore((s) => s.repos);
   const selectedRepoId = useStore((s) => s.selectedRepoId);
@@ -65,6 +100,10 @@ export function TestPlans(): ReactElement {
   const [runError, setRunError] = useState<string | null>(null);
   const [runStarting, setRunStarting] = useState(false);
   const [newPlan, setNewPlan] = useState<NewPlanState>(INITIAL_NEW_PLAN_STATE);
+  // Lowercased trimmed feature names with a non-terminal generation job for
+  // the active repo. Drives the per-section "Generate" button's in-flight
+  // disable state so the user can't double-fire a job for the same feature.
+  const [featuresInFlight, setFeaturesInFlight] = useState<Set<string>>(() => new Set());
 
   const refreshList = useCallback(async () => {
     if (!repo) return;
@@ -117,6 +156,31 @@ export function TestPlans(): ReactElement {
     window.addEventListener('obelisk:open-test-plan', onOpen);
     return () => window.removeEventListener('obelisk:open-test-plan', onOpen);
   }, [refreshList]);
+
+  // Seed `featuresInFlight` from the current job list whenever the active
+  // repo changes, and keep it in sync via the generation-progress bus. Keyed
+  // by trimmed lowercased feature name so the per-section button can compare
+  // against its current title without worrying about casing.
+  useEffect(() => {
+    if (!repo) {
+      setFeaturesInFlight(new Set());
+      return;
+    }
+    let cancelled = false;
+    void window.obelisk.invoke('testPlans:generationJobs', { repoId: repo.id }).then((res) => {
+      if (cancelled || !res.ok) return;
+      setFeaturesInFlight(buildInFlightFeatureSet(res.value, repo.id));
+    });
+    const unsub = window.obelisk.subscribe((evt) => {
+      if (evt.type !== 'testPlanGeneration.progress') return;
+      if (evt.job.repoId !== repo.id) return;
+      setFeaturesInFlight((prev) => applyJobToInFlightSet(prev, evt.job));
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [repo]);
 
   const saveBlocks = useCallback(
     async (
@@ -205,6 +269,38 @@ export function TestPlans(): ReactElement {
     // in the background and the floating toast streams its progress. Close
     // the modal so the user can keep working.
     setNewPlan(INITIAL_NEW_PLAN_STATE);
+  }
+
+  async function generateForFeature(
+    featureName: string,
+    overrides: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
+  ): Promise<void> {
+    if (!repo || !activePlan) return;
+    const agentName = activePlan.frontmatter.agentNames[0] ?? 'qa-hunter';
+    const res = await window.obelisk.invoke('testPlans:generate', {
+      repoId: repo.id,
+      agentName,
+      scope: 'feature',
+      featureName,
+      ...(overrides.runnerOverride ? { runnerOverride: overrides.runnerOverride } : {}),
+      ...(overrides.modelOverride !== undefined ? { modelOverride: overrides.modelOverride } : {}),
+    });
+    if (!res.ok) {
+      // Synchronous failures here are rare — bad input would already have
+      // disabled the button. Surface anything that does slip through via the
+      // editor's existing error banner instead of swallowing it silently.
+      setRunError(`Could not start generation: ${res.error.message}`);
+      return;
+    }
+    // Optimistically mark this feature in-flight so a fast second click is
+    // ignored before the progress bus has caught up.
+    setFeaturesInFlight((prev) => {
+      const key = featureKey(featureName);
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
   }
 
   async function runWithPlan(
@@ -339,10 +435,12 @@ export function TestPlans(): ReactElement {
             savedAt={savedAt}
             runError={runError}
             runStarting={runStarting}
+            featuresInFlight={featuresInFlight}
             onChange={onChangeBlocks}
             onRename={onRenamePlan}
             onChangeAgents={onChangeAgents}
             onRun={(targetAgent, overrides) => void runWithPlan(activePlan, targetAgent, overrides)}
+            onGenerateFeature={generateForFeature}
             onDismissRunError={() => setRunError(null)}
             onDelete={() => {
               const summary = plans.find((p) => p.id === activePlan.frontmatter.id);
@@ -467,10 +565,12 @@ function PlanEditor({
   savedAt,
   runError,
   runStarting,
+  featuresInFlight,
   onChange,
   onRename,
   onChangeAgents,
   onRun,
+  onGenerateFeature,
   onDismissRunError,
   onDelete,
 }: {
@@ -478,6 +578,7 @@ function PlanEditor({
   savedAt: string | null;
   runError: string | null;
   runStarting: boolean;
+  featuresInFlight: Set<string>;
   onChange: (blocks: TestPlanBlock[]) => void;
   onRename: (next: string) => void;
   onChangeAgents: (next: AgentName[]) => void;
@@ -485,6 +586,10 @@ function PlanEditor({
     targetAgent: AgentName,
     overrides?: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
   ) => void;
+  onGenerateFeature: (
+    featureName: string,
+    overrides: { runnerOverride?: 'claude' | 'codex'; modelOverride?: string },
+  ) => Promise<void>;
   onDismissRunError: () => void;
   onDelete: () => void;
 }): ReactElement {
@@ -647,6 +752,17 @@ function PlanEditor({
                 onDelete={() => removeAt(group.section!.idx)}
                 onMoveUp={() => moveBlock(group.section!.idx, -1)}
                 onMoveDown={() => moveBlock(group.section!.idx, 1)}
+                generateSlot={
+                  plan.frontmatter.scope === 'whole-app' ? (
+                    <GenerateFeatureButton
+                      featureName={group.section.title}
+                      inFlight={featuresInFlight.has(group.section.title.trim().toLowerCase())}
+                      onGenerate={(overrides) =>
+                        onGenerateFeature(group.section!.title.trim(), overrides)
+                      }
+                    />
+                  ) : undefined
+                }
               />
             ) : null}
             {group.cases.map(({ block, idx }) => (
@@ -838,6 +954,168 @@ function RunButtonWithOptions({
   );
 }
 
+interface RunnerInstalledState {
+  claude: { installed: boolean; version?: string; hint?: string };
+  codex: { installed: boolean; version?: string; hint?: string };
+}
+
+/**
+ * One-click "generate test map for this feature" button rendered inside a
+ * section header on a whole-app plan. Opens a tiny popover (Runner +
+ * Model), pre-flights that the chosen runner is on PATH, then dispatches
+ * `testPlans:generate` with `scope: 'feature'`. The resulting feature-scoped
+ * plan appears in the sidebar; the source plan is left untouched.
+ */
+function GenerateFeatureButton({
+  featureName,
+  inFlight,
+  onGenerate,
+}: {
+  featureName: string;
+  inFlight: boolean;
+  onGenerate: (overrides: {
+    runnerOverride?: 'claude' | 'codex';
+    modelOverride?: string;
+  }) => Promise<void>;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [runner, setRunner] = useState<'' | 'claude' | 'codex'>('');
+  const [model, setModel] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [installed, setInstalled] = useState<RunnerInstalledState | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useClickOutside(open, wrapRef, () => setOpen(false));
+
+  // Pre-flight on open: ask main which CLIs are installed so the Generate
+  // button can disable itself before we dispatch a doomed job.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void window.obelisk.invoke('runners:installed', {}).then((res) => {
+      if (cancelled) return;
+      if (res.ok) setInstalled(res.value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const trimmedName = featureName.trim();
+  const disableReason = useMemo<string | null>(() => {
+    if (trimmedName.length === 0) return 'Name the section first.';
+    if (inFlight) return 'Already generating for this feature.';
+    if (!installed) return null; // still probing — Generate stays disabled implicitly below
+    if (runner === 'claude' && !installed.claude.installed) {
+      return installed.claude.hint ?? 'Claude Code CLI not found on PATH.';
+    }
+    if (runner === 'codex' && !installed.codex.installed) {
+      return installed.codex.hint ?? 'Codex CLI not found on PATH.';
+    }
+    if (runner === '' && !installed.claude.installed && !installed.codex.installed) {
+      return 'Install Claude Code or Codex first.';
+    }
+    return null;
+  }, [trimmedName, inFlight, installed, runner]);
+
+  const generateDisabled = submitting || installed === null || disableReason !== null;
+
+  async function start(): Promise<void> {
+    if (generateDisabled) return;
+    setSubmitting(true);
+    try {
+      setOpen(false);
+      await onGenerate({
+        ...(runner ? { runnerOverride: runner } : {}),
+        ...(model.trim() ? { modelOverride: model.trim() } : {}),
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const triggerTitle = inFlight
+    ? 'Already generating for this feature'
+    : trimmedName.length === 0
+      ? 'Name the section first'
+      : `Generate a feature test plan for "${trimmedName}"`;
+
+  return (
+    <div ref={wrapRef} className="plan-editor-run-wrap">
+      <button
+        type="button"
+        className="btn ghost icon"
+        onClick={() => {
+          if (inFlight || trimmedName.length === 0) return;
+          setOpen((v) => !v);
+        }}
+        disabled={inFlight || trimmedName.length === 0}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={triggerTitle}
+        data-testid="plan-section-generate"
+      >
+        <Icon.Sparkles size={11} />
+      </button>
+
+      {open ? (
+        <div className="plan-run-popover" role="dialog" aria-label="Generate feature test plan">
+          <div className="plan-run-popover-title">Generate test plan</div>
+          <div className="plan-run-popover-sub">
+            Drafts a new feature-scoped plan for <strong>{trimmedName || 'this section'}</strong>{' '}
+            using the model and runner you pick. The current plan is untouched.
+          </div>
+          <div className="plan-run-popover-field">
+            <label className="new-plan-label" htmlFor="plan-section-runner">
+              Runner
+            </label>
+            <select
+              id="plan-section-runner"
+              className="file-issue-input"
+              value={runner}
+              onChange={(e) => {
+                const next = e.target.value as '' | 'claude' | 'codex';
+                setRunner(next);
+                // Model id namespace differs between runners — reset on flip.
+                setModel('');
+              }}
+            >
+              <option value="">Use default</option>
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex</option>
+            </select>
+          </div>
+          <div className="plan-run-popover-field">
+            <label className="new-plan-label" htmlFor="plan-section-model">
+              Model
+            </label>
+            <ModelSelect
+              id="plan-section-model"
+              runner={runner}
+              value={model}
+              onChange={setModel}
+            />
+          </div>
+          <div className="plan-run-popover-actions">
+            <button type="button" className="btn ghost sm" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn primary sm"
+              onClick={() => void start()}
+              disabled={generateDisabled}
+              title={disableReason ?? undefined}
+              data-testid="plan-section-generate-start"
+            >
+              <Icon.Sparkles size={11} /> Generate
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const AGENT_OPTIONS: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
 
 function AgentMultiSelect({
@@ -938,6 +1216,7 @@ function SectionHeader({
   onDelete,
   onMoveUp,
   onMoveDown,
+  generateSlot,
 }: {
   block: Extract<TestPlanBlock, { kind: 'section' }>;
   count: number;
@@ -946,6 +1225,7 @@ function SectionHeader({
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  generateSlot?: ReactNode;
 }): ReactElement {
   return (
     <div className="plan-section-card-head" data-section-id={block.id}>
@@ -959,6 +1239,7 @@ function SectionHeader({
         {count} case{count === 1 ? '' : 's'}
       </span>
       <div className="plan-block-actions">
+        {generateSlot}
         <button type="button" className="btn ghost icon" onClick={onAddCase} title="Add test case">
           <Icon.Plus size={11} />
         </button>

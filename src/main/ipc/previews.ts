@@ -9,6 +9,7 @@ import {
 import { getPlaybookDraft } from '../agents/playbook-bootstrapper/publish';
 import { getRepo } from '../db/repos';
 import { publish } from '../publisher';
+import { syncBacklogForRepo } from '../scheduler/backlog-sync';
 import { broadcast } from './bus';
 import type { IpcMap } from '../../shared/types';
 
@@ -117,4 +118,30 @@ export async function handlePreviewsUndismiss(
   removePreviewDismissedMarker(payload.previewId);
   broadcast({ type: 'previews.changed', repoId: lookup.repoId });
   return { ok: true };
+}
+
+/**
+ * Foreground sync for the Task previews card. Runs the same sweep as the
+ * 2-min background pass (backlog upserts + closed-issue reaper + preview
+ * close-detection), then returns the refreshed previews list so the
+ * renderer gets the post-sync view in one round-trip — including any
+ * findings auto-dismissed because their GitHub issue just closed.
+ */
+export async function handlePreviewsRefresh(
+  payload: IpcMap['previews:refresh']['req'],
+): Promise<IpcMap['previews:refresh']['res']> {
+  await syncBacklogForRepo(payload.repoId);
+  const findings = listPreviewsForRepo(payload.repoId);
+  const draft = getPlaybookDraft(payload.repoId);
+  return {
+    findings,
+    playbookDraft: draft
+      ? {
+          generatedAt: draft.generatedAt,
+          framework: draft.framework,
+          criticalFlows: draft.criticalFlows,
+          fileCount: draft.files.length,
+        }
+      : null,
+  };
 }
