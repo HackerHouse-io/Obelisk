@@ -133,7 +133,11 @@ export const prReviewerHandler: AgentHandler = {
           task: {
             ref: taskRef,
             kind: 'review',
-            context: prContextFor(pr, /* fixMode */ false),
+            context: prContextFor(pr, {
+              fixMode: false,
+              hasConflicts: false,
+              baseBranch: input.repo.defaultBranch,
+            }),
             githubNumber: pr.number,
           },
         };
@@ -160,12 +164,18 @@ export const prReviewerHandler: AgentHandler = {
       const livelockOk = priorRuns < REVIEW_LIVELOCK_CAP;
       const fixMode = isObeliskPr && safetyAllowsFix && livelockOk;
 
-      // GitHub-side claim signal so a teammate's Obelisk install (or our
-      // own second machine) sees that this PR is being worked. Best-effort
-      // and idempotent. Cleanup is automatic — the orchestrator's finally
-      // calls clearClaimSignals(repo, task.githubNumber) regardless of
-      // run outcome. Applied in both fix and review-only modes so the
-      // cross-install guard above sees a consistent signal.
+      // mergeable_state is computed lazily by GitHub. pulls.list returns it
+      // stale or absent; pulls.get triggers / returns the current value.
+      // We only need it for fix-mode PRs (the agent can't push conflict
+      // resolutions on a human PR anyway).
+      const hasConflicts = fixMode
+        ? await prHasConflicts(gh, owner, name, pr.number).catch(() => false)
+        : false;
+      const baseBranch =
+        pr.base?.ref && typeof pr.base.ref === 'string' && pr.base.ref.length > 0
+          ? pr.base.ref
+          : input.repo.defaultBranch;
+
       await postClaimSignal({
         repo: input.repo,
         issueNumber: pr.number,
@@ -176,7 +186,7 @@ export const prReviewerHandler: AgentHandler = {
         task: {
           ref: taskRef,
           kind: 'review',
-          context: prContextFor(pr, fixMode),
+          context: prContextFor(pr, { fixMode, hasConflicts, baseBranch }),
           githubNumber: pr.number,
         },
         prReviewClaimId: claim.id,
@@ -437,12 +447,48 @@ function priorReviewerRunCount(repoId: string, prNumber: number): number {
   return row?.c ?? 0;
 }
 
+interface PrContextOpts {
+  fixMode: boolean;
+  hasConflicts: boolean;
+  baseBranch: string;
+}
+
 function prContextFor(
   pr: { title: string; body: string | null; number: number; head: { ref: string } },
-  fixMode: boolean,
+  opts: PrContextOpts,
 ): string {
-  const modeHint = fixMode
-    ? `FIX MODE: this PR was opened by Obelisk on branch \`${pr.head.ref}\`. The worktree is checked out on that branch — you may commit fixes for findings you're confident about. See agents/pr-reviewer.md for the rules.`
+  const modeHint = opts.fixMode
+    ? `FIX MODE: this PR was opened by Obelisk on branch \`${pr.head.ref}\` (base: \`${opts.baseBranch}\`). The worktree is checked out on that branch — you may commit fixes for findings you're confident about. See agents/pr-reviewer.md for the rules.`
     : `REVIEW ONLY: do not modify any files. Post the review and stop.`;
-  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}\n\n${pr.body ?? '(no PR body)'}`;
+  const conflictHint =
+    opts.fixMode && opts.hasConflicts
+      ? `\n\nMERGE CONFLICTS: GitHub reports this PR is not mergeable against \`${opts.baseBranch}\`. Resolve before reviewing:\n\n` +
+        '```\n' +
+        `git fetch origin ${opts.baseBranch}\n` +
+        `git merge origin/${opts.baseBranch}\n` +
+        '# resolve conflicts, then:\n' +
+        'git add -A && git commit --no-edit\n' +
+        '```\n\n' +
+        "If a conflict can't be resolved safely, emit it as a P0 finding and stop — do not guess."
+      : '';
+  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}${conflictHint}\n\n${pr.body ?? '(no PR body)'}`;
+}
+
+/**
+ * Returns true when GitHub reports the PR is not mergeable into its base.
+ * `mergeable` is computed asynchronously — null means "still computing";
+ * we treat unknown as "no conflicts" (the agent will discover them via
+ * `git merge` if they exist).
+ */
+async function prHasConflicts(
+  gh: Awaited<ReturnType<typeof getGithub>>,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<boolean> {
+  if (!gh) return false;
+  const { data } = await gh.pulls.get({ owner, repo, pull_number: prNumber });
+  if (data.mergeable === false) return true;
+  if (typeof data.mergeable_state === 'string' && data.mergeable_state === 'dirty') return true;
+  return false;
 }

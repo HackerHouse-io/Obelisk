@@ -206,6 +206,63 @@ describe('pr-reviewer selectTask: fix-mode gating', () => {
     expect(selected!.task.context).toContain('REVIEW ONLY');
   });
 
+  it('adds MERGE CONFLICTS instructions when fix-mode PR has a dirty mergeable_state', async () => {
+    const repo = makeRepo('prs');
+    const agentId = makeAgent(repo.id);
+    pullsList.mockResolvedValue({
+      data: [
+        mockPr({
+          number: 30,
+          headRef: 'obelisk/run-CONFLICT',
+          headSha: 'sha30aaaaaaaaaaa',
+        }),
+      ],
+    });
+    pullsGet.mockResolvedValue({
+      data: { mergeable: false, mergeable_state: 'dirty' },
+    });
+
+    const selected = await prReviewerHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+      trigger: 'schedule',
+      agentId,
+    });
+
+    expect(selected).not.toBeNull();
+    expect(selected!.task.context).toContain('FIX MODE');
+    expect(selected!.task.context).toContain('MERGE CONFLICTS');
+    expect(selected!.task.context).toContain('git merge origin/main');
+  });
+
+  it('omits MERGE CONFLICTS section for a clean fix-mode PR', async () => {
+    const repo = makeRepo('prs');
+    const agentId = makeAgent(repo.id);
+    pullsList.mockResolvedValue({
+      data: [
+        mockPr({
+          number: 31,
+          headRef: 'obelisk/run-CLEAN',
+          headSha: 'sha31aaaaaaaaaaa',
+        }),
+      ],
+    });
+    pullsGet.mockResolvedValue({
+      data: { mergeable: true, mergeable_state: 'clean' },
+    });
+
+    const selected = await prReviewerHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+      trigger: 'schedule',
+      agentId,
+    });
+
+    expect(selected).not.toBeNull();
+    expect(selected!.task.context).toContain('FIX MODE');
+    expect(selected!.task.context).not.toContain('MERGE CONFLICTS');
+  });
+
   it('does NOT attach when 3+ prior pr-reviewer runs already completed against this PR (livelock cap)', async () => {
     const repo = makeRepo('prs');
     const agentId = makeAgent(repo.id);

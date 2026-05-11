@@ -78,6 +78,20 @@ const ACTION_PERMITTED: Record<SafetyMode, ReadonlySet<string>> = {
   ]),
 };
 
+/**
+ * GitHub returns 422 with this message when the authed user is the PR
+ * author and tries to APPROVE / REQUEST_CHANGES. Detect it so we can
+ * downgrade to an issue comment instead of dropping the review body.
+ */
+function isSelfReviewRejection(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as { status?: number; message?: string };
+  if (err.status !== 422) return false;
+  return /can\s*not\s+(approve|request changes)\s+(on\s+)?your\s+own\s+pull\s+request/i.test(
+    err.message ?? '',
+  );
+}
+
 function ensureModeAllows(repo: Repo, action: string): void {
   if (!ACTION_PERMITTED[repo.mode].has(action)) {
     throw new ObeliskError(
@@ -251,14 +265,36 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
     case 'review': {
       ensureModeAllows(input.repo, 'post_review');
       const prNumber = input.sourcePrNumber ?? input.plan.prNumber;
-      const created = await gh.pulls.createReview({
-        owner,
-        repo: repoName,
-        pull_number: prNumber,
-        event: input.plan.event,
-        body: input.plan.body,
-      });
-      return { kind: 'review', prNumber, reviewId: created.data.id };
+      try {
+        const created = await gh.pulls.createReview({
+          owner,
+          repo: repoName,
+          pull_number: prNumber,
+          event: input.plan.event,
+          body: input.plan.body,
+        });
+        return { kind: 'review', prNumber, reviewId: created.data.id };
+      } catch (e) {
+        // GitHub rejects APPROVE / REQUEST_CHANGES from the PR's author with
+        // 422 "Can not <approve|request changes> on your own pull request".
+        // The review body is still valuable — fall back to an issue comment
+        // so the verdict + findings land somewhere the user can read.
+        if (isSelfReviewRejection(e)) {
+          const downgraded = await gh.issues.createComment({
+            owner,
+            repo: repoName,
+            issue_number: prNumber,
+            body: `**Verdict:** ${input.plan.event} _(downgraded to comment — GitHub won't let the PR author file a formal review)_\n\n${input.plan.body}`,
+          });
+          return {
+            kind: 'comment',
+            issueNumber: prNumber,
+            commentId: downgraded.data.id,
+            htmlUrl: downgraded.data.html_url,
+          };
+        }
+        throw e;
+      }
     }
 
     case 'comment': {
