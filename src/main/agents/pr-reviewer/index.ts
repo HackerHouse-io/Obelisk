@@ -1,6 +1,6 @@
 import { getDb } from '../../db';
 import { getGithub } from '../../github/client';
-import { loadGitHubToken } from '../../auth/token-store';
+import { loadGitHubToken, getAuthedLogin } from '../../auth/token-store';
 import { ObeliskError } from '../../../shared/errors';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { postClaimSignal } from '../lib/claim-on-github';
@@ -194,12 +194,10 @@ export const prReviewerHandler: AgentHandler = {
     const issueNumber = input.task.githubNumber;
     if (!review || !issueNumber) return [];
 
-    // Fetch the PR body to cross-check the Evidence section.
-    const evidence = await fetchEvidenceCrossCheck(input.repo.githubFullName, issueNumber);
+    // Fetch PR body (for Evidence cross-check) and author (to detect
+    // self-authored PRs, which GitHub refuses to APPROVE / REQUEST_CHANGES).
+    const prInfo = await fetchPrInfoForReview(input.repo.githubFullName, issueNumber);
 
-    // Did the runner actually commit fixes? In fix mode the worktree is
-    // attached to the PR's branch — any patch in the run result should be
-    // pushed to that PR.
     const hasFixUpDiff = (input.runResult.patch.diff ?? '').trim().length > 0;
 
     // Verdict math: when the agent committed fixes, override based on
@@ -222,13 +220,30 @@ export const prReviewerHandler: AgentHandler = {
       };
     }
 
-    const enforced = enforceEvidenceVerdict(workingReview, evidence);
-    const reviewPlan: PublishPlan = {
-      kind: 'review',
-      prNumber: issueNumber,
-      event: enforced.event,
-      body: enforced.body,
-    };
+    const enforced = enforceEvidenceVerdict(workingReview, prInfo.evidence);
+
+    // GitHub rejects pulls.createReview with APPROVE / REQUEST_CHANGES when
+    // the reviewer authored the PR. Route the body through an issue comment
+    // (allowed on your own PR) instead, with a verdict header so the user
+    // can still see the bottom line.
+    const authedLogin = (await getAuthedLogin().catch(() => null)) ?? null;
+    const isSelfAuthored =
+      authedLogin !== null &&
+      prInfo.author !== null &&
+      authedLogin.toLowerCase() === prInfo.author.toLowerCase();
+
+    const verdictPlan: PublishPlan = isSelfAuthored
+      ? {
+          kind: 'comment',
+          issueNumber,
+          body: `**Verdict:** ${enforced.event}\n\n${enforced.body}`,
+        }
+      : {
+          kind: 'review',
+          prNumber: issueNumber,
+          event: enforced.event,
+          body: enforced.body,
+        };
 
     // PR plan goes FIRST so the publisher's git push lands before the
     // review references the new SHA on GitHub. The orchestrator overrides
@@ -242,9 +257,9 @@ export const prReviewerHandler: AgentHandler = {
         head: '',
         base: input.repo.defaultBranch,
       };
-      return [prPlan, reviewPlan];
+      return [prPlan, verdictPlan];
     }
-    return [reviewPlan];
+    return [verdictPlan];
   },
 };
 
@@ -301,12 +316,27 @@ export async function fetchEvidenceCrossCheck(
   repoFullName: string,
   prNumber: number,
 ): Promise<ReturnType<typeof crossCheckEvidence>> {
+  return (await fetchPrInfoForReview(repoFullName, prNumber)).evidence;
+}
+
+interface PrInfoForReview {
+  evidence: ReturnType<typeof crossCheckEvidence>;
+  author: string | null;
+}
+
+async function fetchPrInfoForReview(
+  repoFullName: string,
+  prNumber: number,
+): Promise<PrInfoForReview> {
   const gh = await getGithub();
-  if (!gh) return crossCheckEvidence('');
+  if (!gh) return { evidence: crossCheckEvidence(''), author: null };
   const [owner, name] = repoFullName.split('/');
-  if (!owner || !name) return crossCheckEvidence('');
+  if (!owner || !name) return { evidence: crossCheckEvidence(''), author: null };
   const { data } = await gh.pulls.get({ owner, repo: name, pull_number: prNumber });
-  return crossCheckEvidence(data.body ?? '');
+  return {
+    evidence: crossCheckEvidence(data.body ?? ''),
+    author: data.user?.login ?? null,
+  };
 }
 
 export function enforceEvidenceVerdict(

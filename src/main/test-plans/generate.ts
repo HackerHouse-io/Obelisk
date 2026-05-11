@@ -141,12 +141,16 @@ async function runJob(jobId: string, input: GenerateInput): Promise<void> {
       return;
     }
     if (result.exitCode !== 0) {
-      const stderr = result.stderr.trim().slice(-300);
-      finishFailed(
-        jobId,
-        `${runnerKind} exited ${result.exitCode ?? '?'}.`,
-        stderr || `Run \`${runnerKind} --version\` to verify your installation.`,
-      );
+      // `claude` prints model-rejection errors ("model does not exist") to
+      // stdout, not stderr — surface whichever stream actually carries the
+      // message so the user sees the real failure instead of a generic hint.
+      const stderr = result.stderr.trim();
+      const stdoutTail = result.stdout.trim().split('\n').slice(-3).join(' | ').slice(-400);
+      const hint =
+        stderr.length > 0
+          ? stderr.slice(-400)
+          : stdoutTail || `Run \`${runnerKind} --version\` to verify your installation.`;
+      finishFailed(jobId, `${runnerKind} exited ${result.exitCode ?? '?'}.`, hint);
       return;
     }
 

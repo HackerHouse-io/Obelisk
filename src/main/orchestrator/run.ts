@@ -701,7 +701,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       deleteBacklogGhIssue(repo.id, selected.task.githubNumber);
     }
 
-    const outputSummary = describeOutcomes(published);
+    const outputSummary = describeOutcomes(published, failures.length);
     transitionRun(run.id, 'done', {
       outputSummary,
       runnerUsed: runResult.runnerUsed,
@@ -1040,7 +1040,10 @@ function oneLine(text: string): string {
   return text.split(/\r?\n/, 1)[0]?.trim() ?? '';
 }
 
-function describeOutcomes(results: Awaited<ReturnType<typeof publish>>[]): string {
+function describeOutcomes(
+  results: Awaited<ReturnType<typeof publish>>[],
+  failureCount = 0,
+): string {
   const prs = results.filter((r) => r.kind === 'pr').length;
   const issues = results.filter((r) => r.kind === 'issue').length;
   const comments = results.filter((r) => r.kind === 'comment').length;
@@ -1050,5 +1053,6 @@ function describeOutcomes(results: Awaited<ReturnType<typeof publish>>[]): strin
   if (prs) parts.push(`${prs} PR${prs === 1 ? '' : 's'}`);
   if (comments) parts.push(`${comments} comment${comments === 1 ? '' : 's'}`);
   if (reviews) parts.push(`${reviews} review${reviews === 1 ? '' : 's'}`);
-  return parts.length === 0 ? 'noop' : `Published ${parts.join(', ')}`;
+  const head = parts.length === 0 ? 'noop' : `Published ${parts.join(', ')}`;
+  return failureCount > 0 ? `${head} (${failureCount} publish failed)` : head;
 }

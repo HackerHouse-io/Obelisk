@@ -49,9 +49,12 @@ const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
 // first-paint, but the IPC always overlays freshly-discovered entries on top.
 export const CURATED_MODELS: Record<RunnerKind, DiscoveredModel[]> = {
   claude: [
-    { id: 'opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
-    { id: 'haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
+    // Use full pinned ids — `claude --model` accepts the alias (`sonnet`,
+    // `opus`, `haiku`) or the full name (`claude-sonnet-4-6`), but rejects
+    // version-suffixed shorthand like `sonnet-4-6` with exit 1.
+    { id: 'claude-opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
+    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
+    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
   ],
   codex: [
     { id: 'gpt-5.5', label: 'GPT-5.5', tier: 'flagship' },

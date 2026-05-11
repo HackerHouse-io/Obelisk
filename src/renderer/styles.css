@@ -3893,13 +3893,18 @@ body {
 .tpg-toast-busy {
   border-color: var(--brand-line);
 }
+/* Solid base + gradient overlay — `background: linear-gradient(...)` alone
+   leaves the top half partially transparent because the start stop has low
+   alpha, which makes the toast unreadable over busy page content. */
 .tpg-toast-ok {
   border-color: oklch(70% 0.14 152 / 0.5);
-  background: linear-gradient(180deg, oklch(70% 0.14 152 / 0.08), var(--bg-1));
+  background-color: var(--bg-1);
+  background-image: linear-gradient(180deg, oklch(70% 0.14 152 / 0.18), transparent);
 }
 .tpg-toast-error {
-  border-color: oklch(66% 0.18 18 / 0.45);
-  background: linear-gradient(180deg, oklch(66% 0.18 18 / 0.08), var(--bg-1));
+  border-color: oklch(66% 0.18 18 / 0.55);
+  background-color: var(--bg-1);
+  background-image: linear-gradient(180deg, oklch(66% 0.18 18 / 0.22), transparent);
 }
 
 .tpg-toast-icon {

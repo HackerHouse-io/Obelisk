@@ -20,9 +20,9 @@ export interface ModelOption {
 
 export const MODEL_OPTIONS: Record<RunnerKind, ModelOption[]> = {
   claude: [
-    { id: 'opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
-    { id: 'sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
-    { id: 'haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
+    { id: 'claude-opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
+    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
+    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
   ],
   codex: [
     { id: 'gpt-5.5', label: 'GPT-5.5', tier: 'flagship' },

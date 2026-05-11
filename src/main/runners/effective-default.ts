@@ -60,9 +60,28 @@ export function resolveRunnerModel(
   override: string | null | undefined,
 ): string | null {
   if (override === null) return null;
+  let resolved: string | null;
   if (override !== undefined) {
     const trimmed = override.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    resolved = trimmed.length > 0 ? trimmed : null;
+  } else {
+    resolved = effectiveDefaultModel(kind);
   }
-  return effectiveDefaultModel(kind);
+  if (resolved === null) return null;
+  return kind === 'claude' ? normalizeClaudeModelId(resolved) : resolved;
+}
+
+/**
+ * Map version-suffixed shorthand (`sonnet-4-6`, `opus-4-7`, `haiku-4-5`) to
+ * the full pinned ids the `claude` CLI actually accepts. Earlier curated
+ * lists shipped the shorthand and it persisted into user Settings; the CLI
+ * exits 1 with "model does not exist" if we pass it through. Aliases
+ * (`sonnet`/`opus`/`haiku`) and full ids (`claude-sonnet-4-6`) are
+ * passed through unchanged.
+ */
+function normalizeClaudeModelId(id: string): string {
+  if (/^claude-/.test(id)) return id;
+  const m = /^(sonnet|opus|haiku)-(.+)$/.exec(id);
+  if (m) return `claude-${m[1]}-${m[2]}`;
+  return id;
 }

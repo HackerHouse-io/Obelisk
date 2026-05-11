@@ -487,7 +487,7 @@ export interface IpcMap {
       runnerOverride?: RunnerKind;
       /**
        * One-shot model override for this run only.
-       * - non-empty string → that exact model id (e.g. "opus-4-7")
+       * - non-empty string → that exact model id (e.g. "claude-opus-4-7")
        * - empty string / omitted → fall through to agent row override → Settings → CLI default
        */
       modelOverride?: string;

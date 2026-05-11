@@ -499,4 +499,75 @@ describe('pr-reviewer interpretResult: verdict + plan emission', () => {
     expect(plans[1]!.event).toBe('REQUEST_CHANGES');
     expect(plans[1]!.body).toContain('Evidence Pack incomplete');
   });
+
+  // GitHub refuses APPROVE / REQUEST_CHANGES from the PR's author. The agent
+  // re-routes the verdict through a regular issue comment in that case so the
+  // review body actually lands instead of failing 422 in the publisher.
+  it('PR author == connected user → emits a comment plan, not a review plan', async () => {
+    const repo = makeRepo('prs');
+    pullsGet.mockResolvedValue({
+      data: { body: COMPLETE_EVIDENCE_BODY, user: { login: CONNECTED_USER } },
+    });
+
+    const plansOrPlan = await prReviewerHandler.interpretResult(
+      interpretInput({
+        diff: '',
+        reasoning: REVIEW_WITH_P1,
+        prNumber: 14,
+        prBody: COMPLETE_EVIDENCE_BODY,
+        repo,
+      }),
+    );
+    const plans = Array.isArray(plansOrPlan) ? plansOrPlan : [plansOrPlan];
+
+    expect(plans).toHaveLength(1);
+    if (plans[0]!.kind !== 'comment') throw new Error('expected comment plan');
+    expect(plans[0]!.issueNumber).toBe(14);
+    expect(plans[0]!.body).toContain('**Verdict:** REQUEST_CHANGES');
+    expect(plans[0]!.body).toContain('There is a real bug.');
+  });
+
+  it('PR author == connected user with fix-up → pr plan FIRST, comment plan second', async () => {
+    const repo = makeRepo('prs');
+    pullsGet.mockResolvedValue({
+      data: { body: COMPLETE_EVIDENCE_BODY, user: { login: CONNECTED_USER } },
+    });
+
+    const plansOrPlan = await prReviewerHandler.interpretResult(
+      interpretInput({
+        diff: 'diff --git a/x b/x\n+fix\n',
+        reasoning: REVIEW_NO_HIGH_SEV,
+        prNumber: 15,
+        prBody: COMPLETE_EVIDENCE_BODY,
+        repo,
+      }),
+    );
+    const plans = Array.isArray(plansOrPlan) ? plansOrPlan : [plansOrPlan];
+
+    expect(plans).toHaveLength(2);
+    expect(plans[0]!.kind).toBe('pr');
+    if (plans[1]!.kind !== 'comment') throw new Error('expected comment plan');
+    expect(plans[1]!.body).toContain('**Verdict:** APPROVE');
+  });
+
+  it('PR author != connected user → keeps the formal review plan', async () => {
+    const repo = makeRepo('prs');
+    pullsGet.mockResolvedValue({
+      data: { body: COMPLETE_EVIDENCE_BODY, user: { login: 'someone-else' } },
+    });
+
+    const plansOrPlan = await prReviewerHandler.interpretResult(
+      interpretInput({
+        diff: '',
+        reasoning: REVIEW_WITH_P1,
+        prNumber: 16,
+        prBody: COMPLETE_EVIDENCE_BODY,
+        repo,
+      }),
+    );
+    const plans = Array.isArray(plansOrPlan) ? plansOrPlan : [plansOrPlan];
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]!.kind).toBe('review');
+  });
 });
