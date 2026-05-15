@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type DragEvent, type ReactElement } from 
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { runAgentByName } from '../state/agent-actions';
+import { showApiAlert } from '../state/alert-store';
 import type { AgentName, BacklogItem } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 
@@ -124,7 +125,7 @@ export function Backlog(): ReactElement {
   async function runFixerForKind(kind: BacklogItem['kind']): Promise<void> {
     const agentName: AgentName = kind === 'bug' ? 'bug-fixer' : 'feature-builder';
     const res = await runAgentByName(repo!.id, agentName);
-    if (!res.ok) alert(res.error.message);
+    if (!res.ok) showApiAlert(res.error, 'start run');
   }
 
   async function pin(itemId: string): Promise<void> {

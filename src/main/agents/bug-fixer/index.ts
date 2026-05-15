@@ -5,6 +5,7 @@ import {
   deleteBacklogGhIssue,
   getBacklogItem,
   listBacklog,
+  releaseStaleBacklogLocks,
 } from '../../db/backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
@@ -58,26 +59,35 @@ export const bugFixerHandler: AgentHandler = {
 /* ---------- internals ---------- */
 
 async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTask | null> {
-  // Make the FIRST Run-now click work even if the periodic backlog sync
-  // (every ~2 min) hasn't fired since the user connected the repo. Skip
-  // the inline sync for scheduled triggers — the cron tick already runs
-  // sync alongside dispatch, so doing it again wastes API quota.
+  // Stale-lock + sync pre-pass on manual Run-now. Two failure modes
+  // we used to surface as the misleading "No claimable issue right now":
+  //
+  //   - Orphan locks from a crashed run (in_progress_run set, but the
+  //     run row is terminal or missing) hide rows from claimNextBacklogItem
+  //     forever. Release them first so the loop can see them.
+  //   - Stale local backlog: a freshly-labeled GitHub issue won't appear
+  //     until the next 5-min sync sweep. The previous `haveBugs` short-
+  //     circuit skipped the inline sync whenever any unlocked row existed
+  //     locally, so a stale row could mask new GH issues. Always sync on
+  //     manual triggers — the cost is one (mostly-ETag-cached) Octokit
+  //     call and the benefit is Run-now always reflects current GH state.
+  //
+  // Scheduled / webhook triggers stay on the periodic 5-min sweep path
+  // and skip both the cleanup and the inline sync — the cron tick handles
+  // them on its own cadence and we don't want to amplify quota use.
+  let staleLocksReleased = 0;
   if (input.trigger === 'manual') {
-    const haveBugs = listBacklog(input.repo.id).some(
-      (b) => b.kind === 'bug' && b.inProgressRun === null,
-    );
-    if (!haveBugs) {
-      await syncBacklogForRepo(input.repo.id).catch((e: unknown) => {
-        appendAudit({
-          runId: 'system',
-          kind: 'inline_backlog_sync_failed',
-          payload: {
-            repo: input.repo.githubFullName,
-            error: e instanceof Error ? e.message : String(e),
-          },
-        });
+    staleLocksReleased = releaseStaleBacklogLocks(input.repo.id);
+    await syncBacklogForRepo(input.repo.id).catch((e: unknown) => {
+      appendAudit({
+        runId: 'system',
+        kind: 'inline_backlog_sync_failed',
+        payload: {
+          repo: input.repo.githubFullName,
+          error: e instanceof Error ? e.message : String(e),
+        },
       });
-    }
+    });
   }
 
   // Atomic claim — guarantees two parallel Bug Fixers pick different rows.
@@ -204,7 +214,8 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   // (the orchestrator converts that to the "nothing to do" sentinel) so
   // the cron tick doesn't spam scheduler_error rows every minute on a
   // genuinely-empty backlog.
-  const totalBugs = listBacklog(input.repo.id).filter((b) => b.kind === 'bug').length;
+  const allBugs = listBacklog(input.repo.id).filter((b) => b.kind === 'bug');
+  const totalBugs = allBugs.length;
   if (tried.size === 0 && totalBugs === 0) {
     if (input.trigger !== 'manual') return null;
     throw new ObeliskError(
@@ -224,16 +235,35 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   if (crossInstall > 0) reasons.push(`${crossInstall} already claimed by another Obelisk install`);
   if (allowlistDenied > 0)
     reasons.push(`${allowlistDenied} authored by users not on the allowlist`);
-  throw new ObeliskError(
-    'BACKLOG_ALL_FILTERED',
-    reasons.length > 0
-      ? `All ${tried.size} candidate issue${tried.size === 1 ? '' : 's'} ` +
-          `${tried.size === 1 ? 'was' : 'were'} filtered out: ${reasons.join(', ')}.`
-      : 'No claimable issue right now.',
+  // Diagnostic fallback — reached when tried.size === 0 (every local row
+  // is locked by a live run) or every iteration silently skipped via
+  // the !ctx path (issue removed from GitHub between sync and fetch).
+  // Either way, the old "No claimable issue right now" was uninformative;
+  // tell the user what we actually saw.
+  const inFlight = allBugs.filter((b) => b.inProgressRun !== null).length;
+  let message: string;
+  if (reasons.length > 0) {
+    message =
+      `All ${tried.size} candidate issue${tried.size === 1 ? '' : 's'} ` +
+      `${tried.size === 1 ? 'was' : 'were'} filtered out: ${reasons.join(', ')}.`;
+  } else if (inFlight > 0 && inFlight === totalBugs) {
+    message =
+      `All ${totalBugs} \`obelisk:fix\` issue${totalBugs === 1 ? '' : 's'} in the local backlog ` +
+      `${totalBugs === 1 ? 'is' : 'are'} already in flight (held by another run).`;
+  } else {
+    message =
+      `Local backlog has ${totalBugs} \`obelisk:fix\` issue${totalBugs === 1 ? '' : 's'}` +
+      `${inFlight > 0 ? ` (${inFlight} in flight)` : ''}, but none could be claimed.`;
+  }
+  const hint =
     allowlistDenied > 0
       ? 'Add the issue authors via the Allowlist settings.'
-      : 'Try again after a sync cycle, or file a manual backlog item.',
-  );
+      : inFlight > 0 && inFlight === totalBugs
+        ? 'Wait for a run to finish, or label more GitHub issues with `obelisk:fix`.'
+        : staleLocksReleased > 0
+          ? `Cleared ${staleLocksReleased} stale lock${staleLocksReleased === 1 ? '' : 's'} from a previous run — try Run now again.`
+          : 'Open the Backlog screen to inspect the rows, or label more GitHub issues with `obelisk:fix`.';
+  throw new ObeliskError('BACKLOG_ALL_FILTERED', message, hint);
 }
 
 function wrap(item: NonNullable<ReturnType<typeof getBacklogItem>>): SelectedTask {

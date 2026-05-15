@@ -4,6 +4,7 @@ import { useStore } from '../state/store';
 import { useClickOutside } from '../hooks/useClickOutside';
 import type { PlaybookFile, PlaybookRegenMode } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
+import { showApiAlert } from '../state/alert-store';
 
 export function Playbook(): ReactElement {
   const repos = useStore((s) => s.repos);
@@ -54,7 +55,7 @@ export function Playbook(): ReactElement {
     });
     setRegenMode(null);
     if (!res.ok) {
-      alert(`Couldn't regenerate playbook: ${res.error.message}`);
+      showApiAlert(res.error, 'regenerate playbook');
       return;
     }
     setActivePath(null);
@@ -125,7 +126,7 @@ export function Playbook(): ReactElement {
     });
     setSaving(false);
     if (!res.ok) {
-      alert(res.error.message);
+      showApiAlert(res.error, 'save playbook');
       return;
     }
     setFiles(updated);

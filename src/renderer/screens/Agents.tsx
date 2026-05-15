@@ -21,6 +21,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { SchedulePresetCard } from './agents/SchedulePresetCard';
 import { scheduleSummary } from './agents/schedule-helpers';
 import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
+import { showApiAlert } from '../state/alert-store';
 
 interface AgentMeta {
   name: AgentName;
@@ -775,7 +776,7 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       patch,
     });
     if (!res.ok) {
-      alert(res.error.message);
+      showApiAlert(res.error, 'update agent');
       return;
     }
     // Surface a confirmation toast on the paused → enabled transition and

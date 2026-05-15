@@ -21,6 +21,7 @@ import {
   type PlanGateState,
 } from '../components/PlanGateDialog';
 import { labelForAgent } from '../format';
+import { showApiAlert } from '../state/alert-store';
 
 type PreviewsResponse = IpcMap['previews:list']['res'];
 
@@ -65,7 +66,7 @@ export function Home(): ReactElement {
   }, [runs]);
   const stopRun = useCallback(async (runId: string): Promise<void> => {
     const res = await window.obelisk.invoke('agents:cancel', { runId });
-    if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+    if (!res.ok) showApiAlert(res.error, 'stop run');
   }, []);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const [previews, setPreviews] = useState<PreviewsResponse>({
@@ -295,7 +296,7 @@ export function Home(): ReactElement {
 
   const dismissPreview = useCallback(async (f: PreviewedFinding) => {
     const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
-    if (!res.ok) alert(res.error.message);
+    if (!res.ok) showApiAlert(res.error, 'dismiss finding');
   }, []);
 
   const [previewsRefreshing, setPreviewsRefreshing] = useState(false);
@@ -485,7 +486,7 @@ export function Home(): ReactElement {
                         title="Stop this run"
                         onClick={async () => {
                           const res = await window.obelisk.invoke('agents:cancel', { runId: r.id });
-                          if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+                          if (!res.ok) showApiAlert(res.error, 'stop run');
                         }}
                       >
                         <Icon.Pause size={11} /> Stop

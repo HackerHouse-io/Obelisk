@@ -15,6 +15,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { FindingPreview } from '../components/FindingPreview';
 import { FileIssueModal } from '../components/FileIssueModal';
 import { UndoToast } from '../components/UndoToast';
+import { showApiAlert } from '../state/alert-store';
 import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
 import { labelForAgent } from '../format';
 import type {
@@ -211,7 +212,7 @@ export function MissionControl(): ReactElement {
         setDrawerOpen(false);
       }
     } else {
-      alert(`Couldn't delete run: ${res.error.message}`);
+      showApiAlert(res.error, 'delete run');
     }
   };
 
@@ -220,7 +221,7 @@ export function MissionControl(): ReactElement {
     // don't need to optimistically mutate here. If the cancel IPC errors
     // (run already terminal, etc.), surface it inline.
     const res = await window.obelisk.invoke('agents:cancel', { runId });
-    if (!res.ok) alert(`Couldn't stop run: ${res.error.message}`);
+    if (!res.ok) showApiAlert(res.error, 'stop run');
   };
 
   const handleClearCompleted = async (): Promise<void> => {
@@ -239,7 +240,7 @@ export function MissionControl(): ReactElement {
     if (res.ok) {
       removeRunsByRepo(repo.id, ['done', 'failed']);
     } else {
-      alert(`Couldn't clear runs: ${res.error.message}`);
+      showApiAlert(res.error, 'clear runs');
     }
   };
 
@@ -315,7 +316,9 @@ export function MissionControl(): ReactElement {
                 if (res.ok) {
                   setSelectedRunId(res.value.runId);
                   setDrawerOpen(true);
-                } else alert(res.error.message);
+                } else {
+                  showApiAlert(res.error, 'start run');
+                }
               }}
             >
               <Icon.Play size={11} /> Run Bug Fixer now
@@ -849,7 +852,7 @@ function RunDrawer({
   async function dismissFinding(f: PreviewedFinding): Promise<void> {
     const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
     if (!res.ok) {
-      alert(res.error.message);
+      showApiAlert(res.error, 'dismiss finding');
       return;
     }
     // Stack toasts: if multiple "Not a bug" clicks land in quick
@@ -859,7 +862,7 @@ function RunDrawer({
 
   async function undismissPreview(previewId: number): Promise<void> {
     const res = await window.obelisk.invoke('previews:undismiss', { previewId });
-    if (!res.ok) alert(res.error.message);
+    if (!res.ok) showApiAlert(res.error, 'restore finding');
   }
 
   const toggleBtn = (
@@ -952,7 +955,7 @@ function RunDrawer({
                         ...(taskId ? { taskId } : {}),
                       })
                       .then((res) => {
-                        if (!res.ok) alert(`Couldn't retry: ${res.error.message}`);
+                        if (!res.ok) showApiAlert(res.error, 'retry');
                       });
                   }
                 : undefined

@@ -6,6 +6,7 @@ import { RunStartedToast } from '../components/RunStartedToast';
 import { AgentEnabledToast } from '../components/AgentEnabledToast';
 import { AgentAutoPausedToast } from '../components/AgentAutoPausedToast';
 import { RunnerAuthBanner } from '../components/RunnerAuthBanner';
+import { GlobalAlert } from '../components/GlobalAlert';
 
 interface Props {
   children: ReactNode;
@@ -24,6 +25,7 @@ export function Shell({ children }: Props): ReactElement {
       <RunStartedToast />
       <AgentEnabledToast />
       <AgentAutoPausedToast />
+      <GlobalAlert />
     </div>
   );
 }

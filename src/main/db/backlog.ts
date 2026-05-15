@@ -161,6 +161,56 @@ export function unlockBacklogItem(id: string): void {
     .run(new Date().toISOString(), id);
 }
 
+/**
+ * Stale-lock window for `pending:*` placeholder tokens. selectTask should
+ * promote these to a real run id within milliseconds (the orchestrator
+ * calls lockBacklogItem right after createRun). 60s is generous enough
+ * to absorb a slow GitHub call inside selectTask but short enough that
+ * an abandoned placeholder doesn't survive a single Run-now click.
+ */
+const STALE_PENDING_LOCK_MS = 60_000;
+
+/**
+ * Release backlog locks that no longer correspond to a live run. Two
+ * shapes get cleared:
+ *
+ *   1. `in_progress_run = '<runId>'` where the run row is in a terminal
+ *      state (done/failed/cancelled) or is missing entirely. Normally
+ *      the orchestrator's `finally` unlocks these — but a process crash
+ *      mid-run skips finally, leaving an orphan lock that hides the
+ *      backlog row from every future selectTask.
+ *
+ *   2. `in_progress_run = 'pending:<ulid>'` older than STALE_PENDING_LOCK_MS.
+ *      These are placeholders held during selectTask before createRun
+ *      attaches the real id; if selectTask threw between claim and
+ *      createRun, the placeholder would otherwise stay forever.
+ *
+ * Returns the number of rows released so callers can include it in
+ * diagnostic output.
+ */
+export function releaseStaleBacklogLocks(repoId: string): number {
+  const cutoff = new Date(Date.now() - STALE_PENDING_LOCK_MS).toISOString();
+  const now = new Date().toISOString();
+  const result = getDb()
+    .prepare(
+      `UPDATE backlog
+       SET in_progress_run = NULL, last_seen_at = ?
+       WHERE repo_id = ?
+         AND in_progress_run IS NOT NULL
+         AND (
+           (in_progress_run LIKE 'pending:%' AND last_seen_at < ?)
+           OR
+           (in_progress_run NOT LIKE 'pending:%' AND in_progress_run NOT IN (
+             SELECT id FROM runs
+             WHERE repo_id = ?
+               AND state IN ('queued','running','publishing','paused')
+           ))
+         )`,
+    )
+    .run(now, repoId, cutoff, repoId);
+  return result.changes;
+}
+
 export interface UpsertBacklogFromGithubInput {
   repoId: string;
   githubIssue: number;

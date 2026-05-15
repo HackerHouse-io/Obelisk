@@ -13,7 +13,8 @@ import { runAgent } from '../orchestrator/run';
 import { defaultCronFor, nextFireAt } from '../scheduler/cron';
 import { ObeliskError } from '../../shared/errors';
 import { getAgentHandler } from '../agents/registry';
-import type { Agent, IpcMap, RunnerKind } from '../../shared/types';
+import { getPatchAgentCap, isPatchAgent } from '../scheduler/patch-agent-cap';
+import type { Agent, AgentName, IpcMap, RunnerKind } from '../../shared/types';
 import { readAgentMd } from '../agents/skill-loader';
 import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
@@ -66,6 +67,16 @@ export async function handleAgentsRun(
   const repo = getRepo(agent.repoId);
   if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${agent.repoId} not found`);
   assertModeAllowsAgent(repo, handler, agent.displayName);
+
+  // Per-repo cap on patch-producing multi-instance agents (bug-fixer,
+  // feature-builder). The scheduled-dispatch path enforces the same cap
+  // in scheduler/tick.ts; this pre-flight covers manual Run-now so the
+  // user gets an actionable cap message instead of "No claimable issue
+  // right now" — every backlog item is locked by the in-flight runs.
+  if (handler.multiInstance && isPatchAgent(agent.name)) {
+    const liveCount = listLiveRuns(agent.repoId).filter((r) => r.agentName === agent.name).length;
+    assertPatchAgentCap(agent.repoId, agent.name, agent.displayName, liveCount);
+  }
 
   // runAgent drives the entire run synchronously — selectTask, createRun,
   // CLI spawn, publish — and that takes anywhere from seconds to minutes.
@@ -128,6 +139,28 @@ export async function handleAgentsRun(
  * publish actions a producesPatch agent will need (commit / push /
  * open_pr). Pure function — exported for unit testing.
  */
+/**
+ * Throw PATCH_AGENT_CAP_REACHED when the per-repo concurrency cap for
+ * bug-fixer / feature-builder is already met. Pure function — exported
+ * for unit testing. The cap itself is sourced from
+ * `scheduler/patch-agent-cap.ts` so tick.ts and the IPC stay aligned.
+ */
+export function assertPatchAgentCap(
+  repoId: string,
+  agentName: AgentName,
+  agentDisplayName: string,
+  liveCount: number,
+): void {
+  const cap = getPatchAgentCap(repoId);
+  if (liveCount < cap) return;
+  const noun = agentName === 'feature-builder' ? 'Feature Builders' : 'Bug Fixers';
+  throw new ObeliskError(
+    'PATCH_AGENT_CAP_REACHED',
+    `${cap} ${noun} are already running on this repo — that's the per-repo cap.`,
+    `Wait for one to finish, or raise this repo's "bug_fixer_cap" setting if you want more in parallel. The cap exists to stay under GitHub's secondary rate limits and to keep CI from thrashing.`,
+  );
+}
+
 export function assertModeAllowsAgent(
   repo: { mode: import('../../shared/types').SafetyMode; githubFullName: string },
   handler: { producesPatch: boolean },

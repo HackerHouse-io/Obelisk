@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 
 import { Icon, type IconName } from '../icons';
 import { useStore, type Route } from '../state/store';
 import { runAgentByName } from '../state/agent-actions';
+import { showApiAlert } from '../state/alert-store';
 
 export interface Command {
   id: string;
@@ -86,7 +87,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         run: async () => {
           if (!hasRepo) return;
           const res = await runAgentByName(selectedRepoId!, 'bug-fixer');
-          if (!res.ok) alert(res.error.message);
+          if (!res.ok) showApiAlert(res.error, 'start run');
           onClose();
         },
       },
@@ -100,7 +101,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         run: async () => {
           if (!hasRepo) return;
           const res = await runAgentByName(selectedRepoId!, 'qa-hunter');
-          if (!res.ok) alert(res.error.message);
+          if (!res.ok) showApiAlert(res.error, 'start run');
           onClose();
         },
       },
@@ -114,7 +115,7 @@ export function CommandPalette({ open, onClose }: Props): ReactElement | null {
         run: async () => {
           if (!hasRepo) return;
           const res = await runAgentByName(selectedRepoId!, 'feature-builder');
-          if (!res.ok) alert(res.error.message);
+          if (!res.ok) showApiAlert(res.error, 'start run');
           onClose();
         },
       },

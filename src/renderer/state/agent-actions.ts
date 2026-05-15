@@ -8,7 +8,7 @@ import type { Result } from '../../shared/errors';
  * via `agents:run`.
  *
  * Returns the same Result shape as the underlying IPC so callers can use the
- * regular `if (!res.ok) alert(...)` pattern.
+ * regular `if (!res.ok) showApiAlert(res.error)` pattern.
  */
 export async function runAgentByName(
   repoId: string,

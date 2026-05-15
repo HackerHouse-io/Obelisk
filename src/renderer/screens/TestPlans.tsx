@@ -13,6 +13,7 @@ import { ulid } from 'ulid';
 import { useStore } from '../state/store';
 import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
+import { showApiAlert } from '../state/alert-store';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { ModelSelect } from '../components/ModelSelect';
 import { useClickOutside } from '../hooks/useClickOutside';
@@ -359,7 +360,7 @@ export function TestPlans(): ReactElement {
     if (!repo) return;
     const res = await window.obelisk.invoke('testPlans:delete', { planId, repoId: repo.id });
     if (!res.ok) {
-      alert(res.error.message);
+      showApiAlert(res.error, 'delete plan');
       return;
     }
     setConfirmDelete(null);

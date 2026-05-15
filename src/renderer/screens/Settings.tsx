@@ -3,6 +3,7 @@ import { Icon } from '../icons';
 import { EmptyState } from '../ui/EmptyState';
 import { useStore } from '../state/store';
 import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
+import { showApiAlert } from '../state/alert-store';
 import type {
   AttributionMode,
   RunnerKind,
@@ -103,7 +104,7 @@ export function SettingsScreen(): ReactElement {
       if (res.error.code === 'AUTH_REQUIRED') {
         await window.obelisk.invoke('auth:upgradeScope', { to: target });
       } else {
-        alert(res.error.message);
+        showApiAlert(res.error, 'change safety mode');
       }
       return;
     }
@@ -155,7 +156,7 @@ export function SettingsScreen(): ReactElement {
       login,
     });
     if (!res.ok) {
-      alert(res.error.message);
+      showApiAlert(res.error, 'remove from allowlist');
       return;
     }
     const list = await window.obelisk.invoke('allowlist:list', { repoId: repo!.id });

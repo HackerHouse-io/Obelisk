@@ -6,6 +6,7 @@ import { ObeliskMark } from './Obelisk';
 import { CommandPalette } from '../ui/CommandPalette';
 import { RepoSwitcher } from '../ui/RepoSwitcher';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { showApiAlert } from '../state/alert-store';
 
 export function Titlebar(): ReactElement {
   const repos = useStore((s) => s.repos);
@@ -36,7 +37,7 @@ export function Titlebar(): ReactElement {
       return;
     }
     const res = await runAgentByName(repo.id, 'bug-fixer');
-    if (!res.ok) alert(res.error.message);
+    if (!res.ok) showApiAlert(res.error, 'start run');
   }
 
   return (

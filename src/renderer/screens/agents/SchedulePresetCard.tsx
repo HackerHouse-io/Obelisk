@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { Icon, type IconName } from '../../icons';
 import { useStore } from '../../state/store';
+import { showAlert } from '../../state/alert-store';
 import type { Agent, ScheduleConfig, ScheduleMode } from '../../../shared/types';
 import {
   CRON_PRESETS,
@@ -262,9 +263,10 @@ function CustomEditor({
 
   async function save(): Promise<void> {
     if (eventGated) {
-      alert(
-        'Event-driven scheduling lands with the GitHub webhook ingestor. For now, use Recurring or Cron.',
-      );
+      showAlert({
+        title: 'Event-driven scheduling not available yet',
+        body: 'It lands with the GitHub webhook ingestor. For now, use Recurring or Cron.',
+      });
       return;
     }
     await onSave(draft);
