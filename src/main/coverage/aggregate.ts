@@ -1,4 +1,5 @@
 import { simpleGit } from 'simple-git';
+import { getDb } from '../db';
 import { getRepo } from '../db/repos';
 import { listRuns } from '../db/runs';
 import { listPlans, getPlan } from '../test-plans/store';
@@ -6,7 +7,22 @@ import { listPreviewsForRepo } from '../db/previews';
 import { ObeliskError } from '../../shared/errors';
 import { loadCoverageMap, matchesAnyGlob, resolveScopeToGlobs } from './coverage-map';
 import type { CoverageMap } from './coverage-map';
-import type { CoverageEntry, CoverageReport, TestPlan } from '../../shared/types';
+import { scanFromTrackedFiles } from './feature-scan';
+import { derivePerCaseState } from '../../shared/case-progress';
+import { computeFeatureScore } from '../../shared/coverage-formula';
+import type {
+  AgentName,
+  AuditLine,
+  CoverageEntry,
+  CoverageFeature,
+  CoverageReport,
+  TestPlan,
+} from '../../shared/types';
+
+/** Files-per-feature cap on the IPC payload — keeps responses bounded for large globs. */
+const MAX_FILES_PER_FEATURE = 500;
+/** "Recent pass" cutoff for the freshness score, in days. */
+const FRESHNESS_WINDOW_DAYS = 14;
 
 /**
  * Build a per-file coverage report for a repo. Read-only — the function
@@ -31,13 +47,51 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
       // Skip plans that fail to parse — they don't contribute coverage.
     }
   }
+  const plansById = new Map(plans.map((p) => [p.frontmatter.id, p] as const));
 
-  // 1) caseCount per file + per-label index.
+  // 1) caseCount per file + per-feature index.
   const caseCount = new Map<string, number>();
-  const labelStats = new Map<string, { planIds: Set<string>; caseCount: number }>();
   // For each plan, collect the set of files that ANY of its cases target —
   // used in the lastPassedAt step below.
   const planFiles = new Map<string, Set<string>>();
+
+  interface FeatureScratch {
+    planRefs: Map<string, { id: string; name: string; agentNames: AgentName[]; updatedAt: string }>;
+    caseIds: Set<string>;
+    /** caseIds tagged with this feature, grouped by their owning plan. */
+    caseIdsByPlan: Map<string, Set<string>>;
+  }
+  const featureScratch = new Map<string, FeatureScratch>();
+
+  function scratchFor(label: string): FeatureScratch {
+    let s = featureScratch.get(label);
+    if (!s) {
+      s = { planRefs: new Map(), caseIds: new Set(), caseIdsByPlan: new Map() };
+      featureScratch.set(label, s);
+    }
+    return s;
+  }
+
+  // Seed features from THREE sources so the radar reflects the whole app,
+  // not just whatever a plan happens to mention:
+  //   (a) live filesystem scan — every feature directory the repo has,
+  //       even if no plan / map entry exists yet
+  //   (b) coverage-map.md labels — user-curated names and globs
+  //   (c) plan scope tags — handled by the loop below
+  //
+  // Each seeded label gets the best-available globs: map-entry wins, else
+  // the scanner's auto-derived globs, else the substring fallback baked
+  // into `resolveScopeToGlobs`.
+  const scanned = scanFromTrackedFiles(repo.localPath, trackedFiles);
+  const scannerGlobs = new Map<string, string[]>();
+  for (const c of scanned) {
+    scannerGlobs.set(c.label, c.globs);
+    scratchFor(c.label);
+  }
+  for (const label of coverageMap.keys()) {
+    scratchFor(label);
+  }
+
   for (const plan of plans) {
     const filesForPlan = new Set<string>();
     for (const block of plan.blocks) {
@@ -46,10 +100,20 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
       if (scope.length === 0) continue;
       for (const label of scope) {
         const lower = label.toLowerCase();
-        const stats = labelStats.get(lower) ?? { planIds: new Set(), caseCount: 0 };
-        stats.planIds.add(plan.frontmatter.id);
-        stats.caseCount += 1;
-        labelStats.set(lower, stats);
+        const s = scratchFor(lower);
+        s.planRefs.set(plan.frontmatter.id, {
+          id: plan.frontmatter.id,
+          name: plan.frontmatter.name,
+          agentNames: plan.frontmatter.agentNames,
+          updatedAt: plan.updatedAt,
+        });
+        s.caseIds.add(block.id);
+        let byPlan = s.caseIdsByPlan.get(plan.frontmatter.id);
+        if (!byPlan) {
+          byPlan = new Set();
+          s.caseIdsByPlan.set(plan.frontmatter.id, byPlan);
+        }
+        byPlan.add(block.id);
       }
       const globs = resolveScopeToGlobs(scope, coverageMap);
       for (const file of trackedFiles) {
@@ -63,8 +127,10 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
   }
 
   // 2) lastPassedAt per file: walk done runs, attribute to all files in the
-  //    run's plan.
+  //    run's plan. Also remember the latest done run per plan — used in
+  //    step 5 to compute per-feature casesPassed.
   const lastPassedAt = new Map<string, string>();
+  const latestDoneRunByPlan = new Map<string, { runId: string; finishedAt: string }>();
   let lastDoneAt: string | null = null;
   const runs = listRuns(repoId, 200);
   for (const run of runs) {
@@ -74,21 +140,30 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     const planId = parsePlanIdFromTaskRef(run.taskRef);
     if (!planId) continue;
     const files = planFiles.get(planId);
-    if (!files) continue;
-    for (const file of files) {
-      const cur = lastPassedAt.get(file);
-      if (!cur || run.finishedAt > cur) lastPassedAt.set(file, run.finishedAt);
+    if (files) {
+      for (const file of files) {
+        const cur = lastPassedAt.get(file);
+        if (!cur || run.finishedAt > cur) lastPassedAt.set(file, run.finishedAt);
+      }
+    }
+    const prev = latestDoneRunByPlan.get(planId);
+    if (!prev || run.finishedAt > prev.finishedAt) {
+      latestDoneRunByPlan.set(planId, { runId: run.id, finishedAt: run.finishedAt });
     }
   }
 
   // 3) findingsCount per file: walk open previews, parse the `Suspected files`
   //    block out of the markdown body. Best-effort — bodies that don't follow
-  //    the convention contribute zero.
+  //    the convention contribute zero. We also keep the raw set of suspected
+  //    files per preview around so step 6 can attribute findings to features.
   const findingsCount = new Map<string, number>();
   const previews = listPreviewsForRepo(repoId, 500);
+  const openPreviewSuspectedFiles: string[][] = [];
   for (const p of previews) {
     if (p.dismissed || p.published) continue;
-    for (const file of parseSuspectedFiles(p.body)) {
+    const suspected = parseSuspectedFiles(p.body);
+    openPreviewSuspectedFiles.push(suspected);
+    for (const file of suspected) {
       findingsCount.set(file, (findingsCount.get(file) ?? 0) + 1);
     }
   }
@@ -116,13 +191,127 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     return score(b) - score(a);
   });
 
-  const labels = Array.from(labelStats.entries())
-    .map(([label, stats]) => ({
+  // 5) Per-plan: pull case_progress audit rows for the latest done run and
+  //    project them into a per-case state map (passed/failed/skipped/…).
+  //    Used by step 6 below to count `casesPassed` per feature.
+  const passedCaseIdsByPlan = new Map<string, Set<string>>();
+  for (const [planId, runRef] of latestDoneRunByPlan) {
+    const plan = plansById.get(planId);
+    if (!plan) continue;
+    const auditLog = loadAuditLog(runRef.runId);
+    const { byCase } = derivePerCaseState({
+      plan,
+      auditLog,
+      findings: [],
+      runState: 'done',
+    });
+    const passed = new Set<string>();
+    for (const [caseId, state] of byCase) {
+      if (state === 'passed') passed.add(caseId);
+    }
+    passedCaseIdsByPlan.set(planId, passed);
+  }
+
+  // 6) Per-feature aggregation. Walk the scratch map, resolve each label's
+  //    glob, intersect with the per-file aggregates from steps 1–4, compute
+  //    the composite coveragePct, and collect plan refs for the run CTAs.
+  const freshnessCutoffIso = new Date(
+    Date.now() - FRESHNESS_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const fileByPath = new Map(fileEntries.map((e) => [e.path, e] as const));
+  const features: CoverageFeature[] = [];
+  const staleLabels: string[] = [];
+
+  for (const [label, scratch] of featureScratch) {
+    // Map entry wins. If the label isn't in the map, fall back to the
+    // scanner's auto-derived globs. If neither knows about it (a scope
+    // tag on a case for which we have no glob anywhere), resolveScope
+    // falls through to substring matching.
+    let globs: string[];
+    if (coverageMap.has(label)) {
+      globs = resolveScopeToGlobs([label], coverageMap);
+    } else if (scannerGlobs.has(label)) {
+      globs = scannerGlobs.get(label)!;
+    } else {
+      globs = resolveScopeToGlobs([label], coverageMap);
+    }
+    const filesInGlob: string[] = [];
+    for (const file of trackedFiles) {
+      if (matchesAnyGlob(file, globs)) filesInGlob.push(file);
+    }
+    if (filesInGlob.length === 0) {
+      staleLabels.push(label);
+      continue;
+    }
+
+    let filesWithCases = 0;
+    let filesRecentPass = 0;
+    for (const file of filesInGlob) {
+      const entry = fileByPath.get(file);
+      if (!entry) continue;
+      if (entry.caseCount > 0) filesWithCases += 1;
+      if (
+        entry.lastPassedAt &&
+        entry.lastPassedAt >= freshnessCutoffIso &&
+        entry.churnSinceLastPass === 0
+      ) {
+        filesRecentPass += 1;
+      }
+    }
+
+    let openFindings = 0;
+    for (const suspected of openPreviewSuspectedFiles) {
+      if (suspected.some((p) => matchesAnyGlob(p, globs))) openFindings += 1;
+    }
+
+    let casesPassed = 0;
+    for (const [planId, caseIdsForLabel] of scratch.caseIdsByPlan) {
+      const passed = passedCaseIdsByPlan.get(planId);
+      if (!passed) continue;
+      for (const caseId of caseIdsForLabel) {
+        if (passed.has(caseId)) casesPassed += 1;
+      }
+    }
+
+    const caseCountForLabel = scratch.caseIds.size;
+    const score = computeFeatureScore({
+      filesInGlob: filesInGlob.length,
+      filesWithCases,
+      filesRecentPass,
+      caseCount: caseCountForLabel,
+      casesPassed,
+      openFindings,
+    });
+
+    const planRefs = Array.from(scratch.planRefs.values())
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        agentNames: p.agentNames,
+        updatedAt: p.updatedAt,
+      }));
+
+    features.push({
       label,
-      planCount: stats.planIds.size,
-      caseCount: stats.caseCount,
-    }))
-    .sort((a, b) => b.caseCount - a.caseCount);
+      planCount: scratch.planRefs.size,
+      caseCount: caseCountForLabel,
+      casesPassed,
+      filesInGlob: filesInGlob.length,
+      filesWithCases,
+      filesRecentPass,
+      openFindings,
+      coveragePct: score.coveragePct,
+      planRefs,
+      files: filesInGlob.slice(0, MAX_FILES_PER_FEATURE),
+    });
+  }
+
+  features.sort((a, b) => {
+    if (a.coveragePct !== b.coveragePct) return a.coveragePct - b.coveragePct;
+    return b.caseCount - a.caseCount;
+  });
+  staleLabels.sort();
 
   let coveredFiles = 0;
   let uncoveredFiles = 0;
@@ -134,12 +323,38 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
   return {
     repoId,
     files: fileEntries,
-    labels,
+    features,
+    staleLabels,
+    hasCoverageMap: coverageMap.size > 0,
     totalFiles: fileEntries.length,
     coveredFiles,
     uncoveredFiles,
     lastDoneAt,
   };
+}
+
+function loadAuditLog(runId: string): AuditLine[] {
+  const rows = getDb()
+    .prepare<
+      [string],
+      { id: number; run_id: string; at: string; kind: string; payload: string }
+    >('SELECT * FROM audit_log WHERE run_id = ? ORDER BY id ASC')
+    .all(runId);
+  return rows.map((r) => ({
+    id: r.id,
+    runId: r.run_id,
+    at: r.at,
+    kind: r.kind,
+    payload: safeParse(r.payload),
+  }));
+}
+
+function safeParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 async function listTrackedFiles(git: ReturnType<typeof simpleGit>): Promise<string[]> {

@@ -769,6 +769,17 @@ export interface IpcMap {
     req: { repoId: string };
     res: CoverageReport;
   };
+  // Bootstrap `qa/coverage-map.md` from a heuristic + filesystem scan.
+  // - `commit: false / omitted` → return proposed entries for preview only.
+  // - `commit: true`            → write the file (refuses to overwrite).
+  'coverage:bootstrapMap': {
+    req: { repoId: string; commit?: boolean };
+    res: {
+      proposals: { label: string; globs: string[]; filesMatched: number }[];
+      written: boolean;
+      reason?: string;
+    };
+  };
 
   // iOS QA Pilot
   'qa:list': { req: { repoId: string }; res: QaFlow[] };
@@ -826,10 +837,40 @@ export interface CoverageEntry {
   churnSinceLastPass: number;
 }
 
+/**
+ * Per-feature aggregate. One per coverage-map label (or one per ad-hoc
+ * label referenced by a test case but missing from the map — those land
+ * in `staleLabels` instead when they match zero files).
+ *
+ * `coveragePct` is the composite 0..100 score driving the radar chart;
+ * the formula is the same one the renderer uses to render the breakdown
+ * tooltip and lives in `src/renderer/screens/coverage/coverageFormula.ts`.
+ */
+export interface CoverageFeature {
+  label: string;
+  planCount: number;
+  caseCount: number;
+  casesPassed: number;
+  filesInGlob: number;
+  filesWithCases: number;
+  filesRecentPass: number;
+  openFindings: number;
+  coveragePct: number;
+  /** Plans that cover this label — used to wire run CTAs to existing plans. */
+  planRefs: { id: string; name: string; agentNames: AgentName[]; updatedAt: ISO }[];
+  /** Files in this label's glob — capped so the IPC payload stays bounded. */
+  files: string[];
+}
+
 export interface CoverageReport {
   repoId: string;
   files: CoverageEntry[];
-  labels: { label: string; planCount: number; caseCount: number }[];
+  /** Per-feature aggregates used by the radar + feature-card UI. */
+  features: CoverageFeature[];
+  /** Labels referenced by test cases but matching zero tracked files. */
+  staleLabels: string[];
+  /** False when `qa/coverage-map.md` is missing or empty — drives the bootstrap CTA. */
+  hasCoverageMap: boolean;
   totalFiles: number;
   coveredFiles: number;
   uncoveredFiles: number;

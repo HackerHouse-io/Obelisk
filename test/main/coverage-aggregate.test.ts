@@ -184,8 +184,8 @@ describe('buildCoverageReport', () => {
     expect(report.totalFiles).toBeGreaterThanOrEqual(3);
     expect(report.coveredFiles).toBe(2);
     expect(report.uncoveredFiles).toBeGreaterThanOrEqual(1);
-    expect(report.labels.find((l) => l.label === 'auth')?.caseCount).toBe(2);
-    expect(report.labels.find((l) => l.label === 'billing')?.caseCount).toBe(1);
+    expect(report.features.find((f) => f.label === 'auth')?.caseCount).toBe(2);
+    expect(report.features.find((f) => f.label === 'billing')?.caseCount).toBe(1);
   });
 
   it('falls back to substring globs when no coverage-map.md exists', async () => {

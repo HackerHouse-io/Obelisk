@@ -6064,6 +6064,409 @@ body {
   text-align: center;
 }
 
+/* ---------- Coverage by feature: banner / radar / cards ---------- */
+
+.coverage-banner-info {
+  background: var(--info-soft);
+  color: var(--t-1);
+  border: 1px solid oklch(72% 0.1 230 / 0.4);
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+}
+.coverage-banner-info svg {
+  color: var(--info);
+}
+
+.coverage-radar-section {
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 880px) {
+  .coverage-radar-section {
+    grid-template-columns: 1fr;
+  }
+}
+
+.coverage-radar-stage {
+  background: var(--bg-2);
+  border: 1px solid oklch(72% 0.1 230 / 0.18);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.coverage-radar-shell {
+  position: relative;
+}
+
+.coverage-radar {
+  display: block;
+}
+
+.coverage-radar-ring {
+  stroke: oklch(72% 0.05 230 / 0.25);
+  stroke-width: 1;
+  fill: none;
+}
+.coverage-radar-spoke {
+  stroke: oklch(72% 0.05 230 / 0.18);
+  stroke-width: 1;
+}
+
+.coverage-radar-fill {
+  fill: oklch(72% 0.1 230 / 0.32);
+  stroke: var(--info);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  transition: fill 200ms ease;
+}
+
+.coverage-radar-dot {
+  fill: var(--info);
+  stroke: var(--bg-2);
+  stroke-width: 2;
+  cursor: pointer;
+  transition:
+    r 120ms ease,
+    fill 120ms ease;
+}
+.coverage-radar-dot.hover,
+.coverage-radar-dot.selected {
+  fill: oklch(80% 0.14 230);
+}
+
+.coverage-radar-label {
+  cursor: pointer;
+}
+.coverage-radar-label-text {
+  fill: var(--t-1);
+  font-size: 11px;
+  font-weight: 500;
+}
+.coverage-radar-label-pct {
+  fill: var(--t-2);
+  font-size: 10px;
+}
+.coverage-radar-label:hover .coverage-radar-label-text,
+.coverage-radar-label.selected .coverage-radar-label-text {
+  fill: var(--t-0);
+}
+.coverage-radar-label.selected .coverage-radar-label-pct {
+  fill: var(--info);
+}
+
+.coverage-radar-tip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  pointer-events: none;
+  background: var(--bg-3);
+  border: 1px solid oklch(72% 0.05 230 / 0.3);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--t-1);
+  min-width: 160px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+}
+.coverage-radar-tip-title {
+  color: var(--t-0);
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.coverage-radar-tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 2px;
+}
+.coverage-radar-tip-row .bad {
+  color: var(--bad);
+}
+
+.coverage-radar-empty {
+  padding: 24px;
+  font-size: 12px;
+  color: var(--t-2);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.coverage-radar-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+}
+.coverage-radar-bar {
+  display: grid;
+  grid-template-columns: 80px 1fr 38px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--t-1);
+  cursor: pointer;
+  text-align: left;
+}
+.coverage-radar-bar:hover {
+  background: var(--bg-3);
+}
+.coverage-radar-bar.selected {
+  border-color: var(--info);
+  background: var(--info-soft);
+}
+.coverage-radar-bar-label {
+  font-size: 12px;
+  color: var(--t-0);
+}
+.coverage-radar-bar-track {
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.coverage-radar-bar-fill {
+  height: 100%;
+  background: var(--info);
+  transition: width 200ms ease;
+}
+.coverage-radar-bar-pct {
+  font-size: 11px;
+  color: var(--t-2);
+  text-align: right;
+}
+
+.coverage-radar-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  align-content: start;
+}
+.coverage-summary-stat {
+  background: var(--bg-2);
+  border: 1px solid oklch(72% 0.05 230 / 0.12);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.coverage-summary-stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--t-0);
+  line-height: 1.1;
+}
+.coverage-summary-stat-value.text {
+  font-size: 16px;
+  font-weight: 500;
+}
+.coverage-summary-stat-value.warn {
+  color: var(--warn);
+}
+.coverage-summary-stat-label {
+  font-size: 11px;
+  color: var(--t-2);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.coverage-summary-stale {
+  grid-column: 1 / -1;
+  background: var(--warn-soft);
+  border: 1px solid oklch(76% 0.14 75 / 0.32);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--t-1);
+}
+.coverage-summary-stale-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn);
+  margin-bottom: 4px;
+}
+.coverage-summary-stale-list {
+  color: var(--t-0);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.coverage-summary-stale-hint {
+  color: var(--t-2);
+  line-height: 1.5;
+}
+
+.coverage-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.coverage-feature-card {
+  background: var(--bg-2);
+  border: 1px solid oklch(72% 0.05 230 / 0.14);
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+.coverage-feature-card.selected {
+  border-color: var(--info);
+  box-shadow: 0 0 0 1px var(--info) inset;
+}
+.coverage-feature-card-ok {
+  box-shadow: inset 3px 0 0 0 var(--ok);
+}
+.coverage-feature-card-mid {
+  box-shadow: inset 3px 0 0 0 var(--warn);
+}
+.coverage-feature-card-bad {
+  box-shadow: inset 3px 0 0 0 var(--bad);
+}
+.coverage-feature-card-ok.selected,
+.coverage-feature-card-mid.selected,
+.coverage-feature-card-bad.selected {
+  box-shadow:
+    0 0 0 1px var(--info) inset,
+    inset 3px 0 0 0 currentColor;
+}
+
+.coverage-feature-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+.coverage-feature-card-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--t-0);
+  text-align: left;
+  text-transform: capitalize;
+}
+.coverage-feature-card-pct {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.coverage-feature-card-ok .coverage-feature-card-pct {
+  color: var(--ok);
+}
+.coverage-feature-card-mid .coverage-feature-card-pct {
+  color: var(--warn);
+}
+.coverage-feature-card-bad .coverage-feature-card-pct {
+  color: var(--bad);
+}
+
+.coverage-feature-card-bar {
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.coverage-feature-card-bar-fill {
+  height: 100%;
+  background: var(--info);
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.coverage-feature-card-ok .coverage-feature-card-bar-fill {
+  background: var(--ok);
+}
+.coverage-feature-card-mid .coverage-feature-card-bar-fill {
+  background: var(--warn);
+}
+.coverage-feature-card-bad .coverage-feature-card-bar-fill {
+  background: var(--bad);
+}
+
+.coverage-feature-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.coverage-feature-card-stat {
+  background: var(--bg-1);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.coverage-feature-card-stat-label {
+  font-size: 10px;
+  color: var(--t-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.coverage-feature-card-stat-value {
+  font-size: 13px;
+  color: var(--t-0);
+  margin-top: 2px;
+}
+.coverage-feature-card-stat-bad .coverage-feature-card-stat-value {
+  color: var(--bad);
+}
+
+.coverage-feature-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.coverage-feature-card-plan {
+  font-size: 11px;
+  color: var(--t-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coverage-files-disclosure {
+  background: var(--bg-2);
+  border: 1px solid oklch(72% 0.05 230 / 0.14);
+  border-radius: 12px;
+  padding: 4px 12px;
+}
+.coverage-files-disclosure[open] {
+  padding: 4px 12px 12px;
+}
+.coverage-files-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--t-0);
+}
+.coverage-files-summary::-webkit-details-marker {
+  display: none;
+}
+.coverage-files-summary-count {
+  font-size: 11px;
+  color: var(--t-2);
+}
+.coverage-files-scope {
+  color: var(--info);
+  text-transform: capitalize;
+}
+
 /* ---------- Runner login action card + shell banner ---------- */
 
 .runner-login-card {

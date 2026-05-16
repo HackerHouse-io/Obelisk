@@ -159,7 +159,7 @@ function templateCasesFor(feature: string, agentName: AgentName): TestPlanBlock[
 
 /* ---------- Feature discovery ---------- */
 
-function collectFeatures(repoPath: string): string[] {
+export function collectFeatures(repoPath: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
 
