@@ -46,6 +46,21 @@ export function startBusSubscriber(): () => void {
         state.removeRun(event.runId);
         return;
 
+      case 'run.archived':
+        state.removeRun(event.runId);
+        window.dispatchEvent(new CustomEvent('obelisk:archive-changed', { detail: event }));
+        return;
+
+      case 'run.restored':
+        state.upsertRun(event.run);
+        window.dispatchEvent(new CustomEvent('obelisk:archive-changed', { detail: event }));
+        return;
+
+      case 'archive.bulkChanged':
+        for (const id of event.runIds) state.removeRun(id);
+        window.dispatchEvent(new CustomEvent('obelisk:archive-changed', { detail: event }));
+        return;
+
       case 'backlog.changed':
       case 'evidence.missing':
         // Phase 4-5 will refetch the affected slice.

@@ -38,6 +38,12 @@ import {
   handleRunsHistogram,
   handleRunsDelete,
   handleRunsDeleteCompleted,
+  handleRunsArchive,
+  handleRunsArchiveCompleted,
+  handleArchiveList,
+  handleArchiveCount,
+  handleArchiveRestore,
+  handleArchiveDeleteAll,
 } from './runs';
 import {
   handleBacklogList,
@@ -141,6 +147,12 @@ export function registerIpcHandlers(): void {
   register('runs:histogram', handleRunsHistogram);
   register('runs:delete', handleRunsDelete);
   register('runs:deleteCompleted', handleRunsDeleteCompleted);
+  register('runs:archive', handleRunsArchive);
+  register('runs:archiveCompleted', handleRunsArchiveCompleted);
+  register('archive:list', handleArchiveList);
+  register('archive:count', handleArchiveCount);
+  register('archive:restore', handleArchiveRestore);
+  register('archive:deleteAll', handleArchiveDeleteAll);
 
   // Backlog (Phase 4 — real)
   register('backlog:list', handleBacklogList);

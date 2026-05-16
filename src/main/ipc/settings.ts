@@ -7,6 +7,7 @@ const DEFAULTS: Settings = {
   codexModel: '',
   attributionMode: 'user',
   cloudExecutionEnabled: false, // v0.1: cloud execution lands in v0.2
+  cardRemoveAction: 'ask',
 };
 
 export async function handleSettingsGet(): Promise<IpcMap['settings:get']['res']> {
@@ -18,6 +19,9 @@ export async function handleSettingsGet(): Promise<IpcMap['settings:get']['res']
     attributionMode:
       getSetting<Settings['attributionMode']>('app', 'attributionMode') ?? DEFAULTS.attributionMode,
     cloudExecutionEnabled: false,
+    cardRemoveAction:
+      getSetting<Settings['cardRemoveAction']>('app', 'cardRemoveAction') ??
+      DEFAULTS.cardRemoveAction,
   };
 }
 
@@ -35,6 +39,9 @@ export async function handleSettingsUpdate(
   }
   if (payload.attributionMode !== undefined) {
     setSetting('app', 'attributionMode', payload.attributionMode);
+  }
+  if (payload.cardRemoveAction !== undefined) {
+    setSetting('app', 'cardRemoveAction', payload.cardRemoveAction);
   }
   // cloudExecutionEnabled is a v0.1 noop — the toggle is disabled in the UI.
   return handleSettingsGet();

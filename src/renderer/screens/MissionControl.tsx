@@ -15,9 +15,10 @@ import { EmptyState } from '../ui/EmptyState';
 import { FindingPreview } from '../components/FindingPreview';
 import { FileIssueModal } from '../components/FileIssueModal';
 import { UndoToast } from '../components/UndoToast';
+import { RemoveRunDialog, type RemoveAction } from '../components/RemoveRunDialog';
 import { showApiAlert } from '../state/alert-store';
 import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
-import { labelForAgent } from '../format';
+import { labelForAgent, humanizeAgo, humanizeDuration, shortTime } from '../format';
 import type {
   Agent,
   AgentEvent,
@@ -200,20 +201,58 @@ export function MissionControl(): ReactElement {
     [repoRuns],
   );
 
+  const settings = useStore((s) => s.settings);
+  const setSettings = useStore((s) => s.setSettings);
+  const [removeTarget, setRemoveTarget] = useState<{ runId: string; label: string } | null>(null);
+  const [archivedCount, setArchivedCount] = useState<number>(0);
+
+  const refreshArchivedCount = useCallback(async () => {
+    if (!repo) {
+      setArchivedCount(0);
+      return;
+    }
+    const res = await window.obelisk.invoke('archive:count', { repoId: repo.id });
+    if (res.ok) setArchivedCount(res.value.count);
+  }, [repo]);
+
+  useEffect(() => {
+    void refreshArchivedCount();
+    const handler = (): void => {
+      void refreshArchivedCount();
+    };
+    window.addEventListener('obelisk:archive-changed', handler);
+    return () => window.removeEventListener('obelisk:archive-changed', handler);
+  }, [refreshArchivedCount]);
+
+  // Perform the actual removal once we know which action to take (silent path
+  // when the user has set a preference, or after the dialog confirms).
+  const performRemove = useCallback(
+    async (runId: string, action: RemoveAction): Promise<void> => {
+      const channel = action === 'archive' ? 'runs:archive' : 'runs:delete';
+      const res = await window.obelisk.invoke(channel, { runId });
+      if (res.ok) {
+        removeRun(runId);
+        if (selectedRunId === runId) {
+          setSelectedRunId(null);
+          setDrawerOpen(false);
+        }
+        if (action === 'archive') void refreshArchivedCount();
+      } else {
+        showApiAlert(res.error, action === 'archive' ? 'archive run' : 'delete run');
+      }
+    },
+    [removeRun, selectedRunId, refreshArchivedCount],
+  );
+
   const handleDeleteRun = async (runId: string): Promise<void> => {
     const run = runs[runId];
-    const label = run?.taskRef ? `"${run.taskRef}"` : 'this run';
-    if (!confirm(`Delete ${label}? This removes the run, audit log, and saved evidence.`)) return;
-    const res = await window.obelisk.invoke('runs:delete', { runId });
-    if (res.ok) {
-      removeRun(runId);
-      if (selectedRunId === runId) {
-        setSelectedRunId(null);
-        setDrawerOpen(false);
-      }
-    } else {
-      showApiAlert(res.error, 'delete run');
+    const label = run?.taskContext?.trim() || run?.taskRef || 'this run';
+    const pref = settings?.cardRemoveAction ?? 'ask';
+    if (pref === 'archive' || pref === 'delete') {
+      await performRemove(runId, pref);
+      return;
     }
+    setRemoveTarget({ runId, label });
   };
 
   const handleCancelRun = async (runId: string): Promise<void> => {
@@ -228,19 +267,20 @@ export function MissionControl(): ReactElement {
     if (!repo || completedCount === 0) return;
     if (
       !confirm(
-        `Delete ${completedCount} completed run${completedCount === 1 ? '' : 's'} (done + failed) for this repo? Audit logs and evidence will be removed too.`,
+        `Move ${completedCount} completed run${completedCount === 1 ? '' : 's'} (done + failed) to the archive? You can search, restore, or delete them permanently from the archive.`,
       )
     ) {
       return;
     }
-    const res = await window.obelisk.invoke('runs:deleteCompleted', {
+    const res = await window.obelisk.invoke('runs:archiveCompleted', {
       repoId: repo.id,
       states: ['done', 'failed'],
     });
     if (res.ok) {
       removeRunsByRepo(repo.id, ['done', 'failed']);
+      setArchivedCount(res.value.total);
     } else {
-      showApiAlert(res.error, 'clear runs');
+      showApiAlert(res.error, 'archive runs');
     }
   };
 
@@ -297,15 +337,28 @@ export function MissionControl(): ReactElement {
             <button
               type="button"
               className="btn sm"
+              onClick={() => useStore.getState().setRoute('archive')}
+              title={
+                archivedCount === 0
+                  ? 'Open archive (empty)'
+                  : `Open archive (${archivedCount} run${archivedCount === 1 ? '' : 's'})`
+              }
+            >
+              <Icon.Archive size={11} /> Archive
+              {archivedCount > 0 ? ` (${archivedCount})` : ''}
+            </button>
+            <button
+              type="button"
+              className="btn sm"
               onClick={handleClearCompleted}
               disabled={completedCount === 0}
               title={
                 completedCount === 0
-                  ? 'No completed runs to clear'
-                  : `Delete ${completedCount} completed run${completedCount === 1 ? '' : 's'}`
+                  ? 'No completed runs to archive'
+                  : `Move ${completedCount} completed run${completedCount === 1 ? '' : 's'} to the archive`
               }
             >
-              <Icon.Trash size={11} /> Clear completed
+              <Icon.Archive size={11} /> Archive completed
               {completedCount > 0 ? ` (${completedCount})` : ''}
             </button>
             <button
@@ -389,6 +442,23 @@ export function MissionControl(): ReactElement {
           </button>
         </aside>
       )}
+      <RemoveRunDialog
+        open={removeTarget !== null}
+        runLabel={removeTarget?.label ?? ''}
+        onCancel={() => setRemoveTarget(null)}
+        onConfirm={async (choice, remember) => {
+          const target = removeTarget;
+          setRemoveTarget(null);
+          if (!target) return;
+          if (remember) {
+            const res = await window.obelisk.invoke('settings:update', {
+              cardRemoveAction: choice,
+            });
+            if (res.ok) setSettings(res.value);
+          }
+          await performRemove(target.runId, choice);
+        }}
+      />
     </div>
   );
 }
@@ -637,33 +707,6 @@ function describeOutcome(run: Run): string | null {
   }
   if (run.state === 'done' && run.outputSummary) return run.outputSummary;
   return null;
-}
-
-function humanizeAgo(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return '';
-  const diffMs = Date.now() - then;
-  if (diffMs < 0) return 'just now';
-  const sec = Math.round(diffMs / 1000);
-  if (sec < 45) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.round(hr / 24);
-  return `${day}d ago`;
-}
-
-function humanizeDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 60) return remSec ? `${min}m ${remSec}s` : `${min}m`;
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return remMin ? `${hr}h ${remMin}m` : `${hr}h`;
 }
 
 function triggerHelp(trigger: Run['trigger']): string {
@@ -1852,16 +1895,6 @@ function FilesTab({ evidence }: { evidence: EvidenceItem[] }): ReactElement {
 
 function Empty({ children }: { children: ReactNode }): ReactElement {
   return <div className="mc-empty">{children}</div>;
-}
-
-function shortTime(iso: string): string {
-  // HH:MM:SS in local time.
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString('en-US', { hour12: false });
-  } catch {
-    return iso;
-  }
 }
 
 function basename(p: string): string {

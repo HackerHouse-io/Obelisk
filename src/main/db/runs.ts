@@ -23,6 +23,7 @@ interface RunRow {
   output_summary: string | null;
   error_code: string | null;
   worktree_path: string | null;
+  archived_at: string | null;
 }
 
 function mapRow(r: RunRow): Run {
@@ -41,6 +42,7 @@ function mapRow(r: RunRow): Run {
     fallbackUsed: r.fallback_used === 1,
     outputSummary: r.output_summary,
     errorCode: r.error_code,
+    archivedAt: r.archived_at,
   };
 }
 
@@ -163,12 +165,14 @@ export function getRun(id: string): Run | null {
   return row ? mapRow(row) : null;
 }
 
+/** Mission Control list — hides archived rows. Scheduler/stats/dedup queries
+ * read the table directly and still see archived rows on purpose. */
 export function listRuns(repoId: string, limit = 50): Run[] {
   return getDb()
     .prepare<
       [string, number],
       RunRow
-    >('SELECT * FROM runs WHERE repo_id = ? ORDER BY started_at DESC NULLS LAST LIMIT ?')
+    >('SELECT * FROM runs WHERE repo_id = ? AND archived_at IS NULL ORDER BY started_at DESC NULLS LAST LIMIT ?')
     .all(repoId, limit)
     .map(mapRow);
 }
@@ -318,6 +322,10 @@ export function heartbeat(id: string): void {
 const ACTIVE_STATES: RunState[] = ['queued', 'running', 'publishing'];
 const DELETABLE_STATES: RunState[] = ['done', 'failed', 'paused', 'cancelled'];
 
+function filterDeletable(states: RunState[]): RunState[] {
+  return states.filter((s) => DELETABLE_STATES.includes(s));
+}
+
 /**
  * Delete a single run and all its dependent rows. Refuses to delete a run
  * that's still active so an in-flight orchestrator step can't have its rows
@@ -382,7 +390,7 @@ export function deleteRun(runId: string): void {
  * rows actually deleted.
  */
 export function deleteRunsForRepo(repoId: string, states: RunState[]): number {
-  const safe = states.filter((s) => DELETABLE_STATES.includes(s));
+  const safe = filterDeletable(states);
   if (safe.length === 0) return 0;
   const placeholders = safe.map(() => '?').join(',');
   const rows = getDb()
@@ -400,6 +408,137 @@ export function deleteRunsForRepo(repoId: string, states: RunState[]): number {
     }
   }
   return deleted;
+}
+
+/** Soft-delete one run. Active runs are refused — an in-flight orchestrator
+ * step would lose its row otherwise. Idempotent. */
+export function archiveRun(runId: string): void {
+  const run = getRun(runId);
+  if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${runId} not found`);
+  if (ACTIVE_STATES.includes(run.state)) {
+    throw new ObeliskError(
+      'RUN_ACTIVE',
+      `run ${runId} is still ${run.state}; cancel it before archiving.`,
+    );
+  }
+  if (run.archivedAt) return; // already archived; idempotent
+
+  getDb()
+    .prepare('UPDATE runs SET archived_at = ? WHERE id = ?')
+    .run(new Date().toISOString(), runId);
+
+  broadcast({ type: 'run.archived', runId, repoId: run.repoId });
+}
+
+/** Bulk soft-delete. Active states are filtered out; emits one
+ * archive.bulkChanged event instead of N run.archived events. */
+export function archiveRunsForRepo(repoId: string, states: RunState[]): number {
+  const safe = filterDeletable(states);
+  if (safe.length === 0) return 0;
+  const db = getDb();
+  const placeholders = safe.map(() => '?').join(',');
+  const now = new Date().toISOString();
+  const rows = db
+    .prepare<[string, ...string[]], { id: string }>(
+      `SELECT id FROM runs
+        WHERE repo_id = ?
+          AND archived_at IS NULL
+          AND state IN (${placeholders})`,
+    )
+    .all(repoId, ...safe);
+  if (rows.length === 0) return 0;
+  const update = db.prepare('UPDATE runs SET archived_at = ? WHERE id = ?');
+  const tx = db.transaction(() => {
+    for (const r of rows) update.run(now, r.id);
+  });
+  tx();
+  broadcast({
+    type: 'archive.bulkChanged',
+    repoId,
+    runIds: rows.map((r) => r.id),
+  });
+  return rows.length;
+}
+
+/** Restore an archived run by clearing archived_at. Idempotent. */
+export function restoreRun(runId: string): void {
+  const run = getRun(runId);
+  if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${runId} not found`);
+  if (!run.archivedAt) return;
+  getDb().prepare('UPDATE runs SET archived_at = NULL WHERE id = ?').run(runId);
+  const restored = getRun(runId);
+  if (!restored) return;
+  broadcast({ type: 'run.restored', runId, repoId: run.repoId, run: restored });
+}
+
+/** Count archived runs for a repo — used by the Mission Control toolbar pill. */
+export function countArchivedRuns(repoId: string): number {
+  const row = getDb()
+    .prepare<
+      [string],
+      { n: number }
+    >('SELECT COUNT(*) AS n FROM runs WHERE repo_id = ? AND archived_at IS NOT NULL')
+    .get(repoId);
+  return row?.n ?? 0;
+}
+
+/**
+ * Hard-delete every archived run for a repo. Each row goes through deleteRun
+ * so the existing audit/evidence cascade + on-disk cleanup still run.
+ * Returns the number of rows actually removed.
+ */
+export function deleteArchivedRunsForRepo(repoId: string): number {
+  const rows = getDb()
+    .prepare<
+      [string],
+      { id: string }
+    >('SELECT id FROM runs WHERE repo_id = ? AND archived_at IS NOT NULL')
+    .all(repoId);
+  let deleted = 0;
+  for (const r of rows) {
+    try {
+      deleteRun(r.id);
+      deleted += 1;
+    } catch {
+      /* skip rows that race into an active state */
+    }
+  }
+  return deleted;
+}
+
+/**
+ * List archived runs for a repo, newest-archived first. `query` does a
+ * case-insensitive LIKE match across the user-facing fields (task_ref,
+ * task_context snapshot, agent_name) so the Archive search box can find an
+ * old issue by title, by issue number, or by agent kind.
+ */
+export function listArchivedRuns(repoId: string, query = '', limit = 200): Run[] {
+  const trimmed = query.trim();
+  const db = getDb();
+  if (trimmed === '') {
+    return db
+      .prepare<[string, number], RunRow>(
+        `SELECT * FROM runs
+          WHERE repo_id = ? AND archived_at IS NOT NULL
+          ORDER BY archived_at DESC
+          LIMIT ?`,
+      )
+      .all(repoId, limit)
+      .map(mapRow);
+  }
+  const like = `%${trimmed.toLowerCase()}%`;
+  return db
+    .prepare<[string, string, string, string, number], RunRow>(
+      `SELECT * FROM runs
+        WHERE repo_id = ? AND archived_at IS NOT NULL
+          AND (LOWER(IFNULL(task_ref,''))     LIKE ?
+            OR LOWER(IFNULL(task_context,'')) LIKE ?
+            OR LOWER(agent_name)              LIKE ?)
+        ORDER BY archived_at DESC
+        LIMIT ?`,
+    )
+    .all(repoId, like, like, like, limit)
+    .map(mapRow);
 }
 
 export function getWorktreePath(id: string): string | null {

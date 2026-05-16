@@ -133,6 +133,16 @@ export function SettingsScreen(): ReactElement {
     if (res.ok) setLocalSettings(res.value);
   }
 
+  async function changeCardRemoveAction(value: AppSettings['cardRemoveAction']): Promise<void> {
+    const res = await window.obelisk.invoke('settings:update', { cardRemoveAction: value });
+    if (res.ok) {
+      setLocalSettings(res.value);
+      // Keep the global store in sync so Mission Control's silent path picks
+      // up the change without a refetch.
+      useStore.getState().setSettings(res.value);
+    }
+  }
+
   async function addAllowlist(login: string): Promise<void> {
     setAllowlistError(null);
     const trimmed = login.trim().replace(/^@/, '');
@@ -184,6 +194,8 @@ export function SettingsScreen(): ReactElement {
       />
 
       <AttributionCard mode={settings.attributionMode} onChange={changeAttribution} />
+
+      <CardRemoveActionCard value={settings.cardRemoveAction} onChange={changeCardRemoveAction} />
 
       <AllowlistCard
         entries={allowlist}
@@ -400,6 +412,64 @@ function AttributionCard({
             key={opt.value}
             type="button"
             className={`choice-card${mode === opt.value ? ' selected' : ''}`}
+            onClick={() => onChange(opt.value)}
+          >
+            <div className="choice-row">
+              <span className="radio-bullet" />
+              <div className="flex-1">
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{opt.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--t-2)', marginTop: 4 }}>{opt.sub}</div>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const CARD_REMOVE_OPTIONS: {
+  value: AppSettings['cardRemoveAction'];
+  title: string;
+  sub: string;
+}[] = [
+  {
+    value: 'ask',
+    title: 'Ask each time',
+    sub: 'Pick Archive or Delete permanently every time you click Delete on a card.',
+  },
+  {
+    value: 'archive',
+    title: 'Always move to Archive',
+    sub: 'Card deletes silently send runs to the Archive. You can still delete permanently from there.',
+  },
+  {
+    value: 'delete',
+    title: 'Always delete permanently',
+    sub: 'Card deletes immediately remove the run, audit log, and evidence. No recovery.',
+  },
+];
+
+function CardRemoveActionCard({
+  value,
+  onChange,
+}: {
+  value: AppSettings['cardRemoveAction'];
+  onChange: (v: AppSettings['cardRemoveAction']) => void;
+}): ReactElement {
+  return (
+    <div className="settings-card">
+      <div className="settings-card-title">Removing runs from Mission Control</div>
+      <div className="settings-card-sub">
+        What should happen when you click Delete on a Mission Control card. Bulk &ldquo;Archive
+        completed&rdquo; always goes to the Archive regardless of this setting.
+      </div>
+      <div className="col gap-2">
+        {CARD_REMOVE_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            className={`choice-card${value === opt.value ? ' selected' : ''}`}
             onClick={() => onChange(opt.value)}
           >
             <div className="choice-row">

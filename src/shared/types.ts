@@ -136,6 +136,13 @@ export interface Run {
   fallbackUsed: boolean;
   outputSummary: string | null;
   errorCode: string | null;
+  /**
+   * Soft-delete marker for the Archive feature. `null` for live runs visible
+   * in Mission Control; an ISO timestamp once the user has moved the run to
+   * the archive via "Archive completed" or a per-card archive action. Hard
+   * delete clears the row entirely; restoring sets this back to null.
+   */
+  archivedAt: ISO | null;
 }
 
 export interface BugFixerHealth {
@@ -328,6 +335,14 @@ export interface Settings {
   codexModel: string;
   attributionMode: AttributionMode;
   cloudExecutionEnabled: boolean; // v0.1: always false
+  /**
+   * What happens when the user clicks Delete on a Mission Control run card.
+   * 'ask' (default) — prompt with Archive / Delete-permanently radios.
+   * 'archive' — silently move to the Archive.
+   * 'delete'  — silently hard-delete (with cascade).
+   * The dialog itself sets this when the user ticks "always do this".
+   */
+  cardRemoveAction: 'ask' | 'archive' | 'delete';
 }
 
 export interface EvidenceItem {
@@ -590,6 +605,28 @@ export interface IpcMap {
     req: { repoId: string; states?: RunState[] };
     res: { deleted: number };
   };
+  /** Soft-delete a single run by setting archived_at. */
+  'runs:archive': { req: { runId: string }; res: { ok: true } };
+  /**
+   * Soft-delete every completed (done/failed by default) run for a repo.
+   * `total` is the post-archive count of archived rows so the caller can
+   * refresh its toolbar pill without a follow-up `archive:count`.
+   */
+  'runs:archiveCompleted': {
+    req: { repoId: string; states?: RunState[] };
+    res: { archived: number; total: number };
+  };
+  /** List archived runs for a repo, optionally filtered by a free-text query. */
+  'archive:list': {
+    req: { repoId: string; query?: string; limit?: number };
+    res: Run[];
+  };
+  /** Cheap count of archived rows for the Mission Control toolbar pill. */
+  'archive:count': { req: { repoId: string }; res: { count: number } };
+  /** Clear archived_at and return the run to Mission Control. */
+  'archive:restore': { req: { runId: string }; res: { ok: true } };
+  /** Permanently delete every archived run for a repo. */
+  'archive:deleteAll': { req: { repoId: string }; res: { deleted: number } };
 
   // Backlog
   'backlog:list': { req: { repoId: string }; res: BacklogItem[] };
@@ -779,6 +816,9 @@ export type BusEvent =
       status: CaseProgressState;
     }
   | { type: 'run.deleted'; runId: string; repoId: string }
+  | { type: 'run.archived'; runId: string; repoId: string }
+  | { type: 'run.restored'; runId: string; repoId: string; run: Run }
+  | { type: 'archive.bulkChanged'; repoId: string; runIds: string[] }
   | { type: 'backlog.changed'; repoId: string }
   | { type: 'auth.changed'; signedIn: boolean }
   | { type: 'evidence.missing'; runId: string; missing: string[] }

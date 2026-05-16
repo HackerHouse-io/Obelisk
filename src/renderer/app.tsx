@@ -5,6 +5,7 @@ import { startBusSubscriber } from './state/bus-subscriber';
 import { Connect } from './screens/Connect';
 import { Home } from './screens/Home';
 import { MissionControl } from './screens/MissionControl';
+import { Archive } from './screens/Archive';
 import { Backlog } from './screens/Backlog';
 import { AgentsScreen } from './screens/Agents';
 import { Playbook } from './screens/Playbook';
@@ -52,6 +53,8 @@ function renderScreen(route: Route): ReactElement {
       return <Home />;
     case 'mission':
       return <MissionControl />;
+    case 'archive':
+      return <Archive />;
     case 'backlog':
       return <Backlog />;
     case 'agents':

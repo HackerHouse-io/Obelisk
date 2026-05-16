@@ -4,6 +4,7 @@ import type { Agent, AuthStatus, BacklogItem, Repo, Run, Settings } from '../../
 export type Route =
   | 'home'
   | 'mission'
+  | 'archive'
   | 'backlog'
   | 'agents'
   | 'playbook'

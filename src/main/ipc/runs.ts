@@ -1,4 +1,15 @@
-import { listRuns, getRun, deleteRun, deleteRunsForRepo } from '../db/runs';
+import {
+  listRuns,
+  getRun,
+  deleteRun,
+  deleteRunsForRepo,
+  archiveRun,
+  archiveRunsForRepo,
+  restoreRun,
+  listArchivedRuns,
+  countArchivedRuns,
+  deleteArchivedRunsForRepo,
+} from '../db/runs';
 import { listArtifacts } from '../db/evidence';
 import { ObeliskError } from '../../shared/errors';
 import { getDb } from '../db';
@@ -50,6 +61,46 @@ export async function handleRunsDeleteCompleted(
   const states = payload.states ?? ['done', 'failed'];
   const deleted = deleteRunsForRepo(payload.repoId, states);
   return { deleted };
+}
+
+export async function handleRunsArchive(
+  payload: IpcMap['runs:archive']['req'],
+): Promise<IpcMap['runs:archive']['res']> {
+  archiveRun(payload.runId);
+  return { ok: true };
+}
+
+export async function handleRunsArchiveCompleted(
+  payload: IpcMap['runs:archiveCompleted']['req'],
+): Promise<IpcMap['runs:archiveCompleted']['res']> {
+  const states = payload.states ?? ['done', 'failed'];
+  const archived = archiveRunsForRepo(payload.repoId, states);
+  return { archived, total: countArchivedRuns(payload.repoId) };
+}
+
+export async function handleArchiveList(
+  payload: IpcMap['archive:list']['req'],
+): Promise<IpcMap['archive:list']['res']> {
+  return listArchivedRuns(payload.repoId, payload.query ?? '', payload.limit ?? 200);
+}
+
+export async function handleArchiveCount(
+  payload: IpcMap['archive:count']['req'],
+): Promise<IpcMap['archive:count']['res']> {
+  return { count: countArchivedRuns(payload.repoId) };
+}
+
+export async function handleArchiveRestore(
+  payload: IpcMap['archive:restore']['req'],
+): Promise<IpcMap['archive:restore']['res']> {
+  restoreRun(payload.runId);
+  return { ok: true };
+}
+
+export async function handleArchiveDeleteAll(
+  payload: IpcMap['archive:deleteAll']['req'],
+): Promise<IpcMap['archive:deleteAll']['res']> {
+  return { deleted: deleteArchivedRunsForRepo(payload.repoId) };
 }
 
 function safeParse(s: string): unknown {

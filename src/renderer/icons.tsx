@@ -258,6 +258,20 @@ export const Icon = {
       <path d="M7 7v4M9 7v4" />
     </>,
   ),
+  Archive: make(
+    <>
+      <rect x="2" y="3" width="12" height="3" rx="0.5" />
+      <path d="M3 6v6.5a.5.5 0 00.5.5h9a.5.5 0 00.5-.5V6" />
+      <path d="M6.5 9h3" />
+    </>,
+  ),
+  Restore: make(
+    <>
+      <path d="M3 8a5 5 0 109-3" />
+      <path d="M12 2v3h-3" />
+    </>,
+  ),
+  ArrowLeft: make(<path d="M12 8H3M6 5L3 8l3 3" />),
   PanelRight: make(
     <>
       <rect x="2" y="3" width="12" height="10" rx="1.5" />
