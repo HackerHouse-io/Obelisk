@@ -12,6 +12,14 @@ export interface FeatureCandidate {
 
 const MIN_FILES_PER_LABEL = 3;
 const MAX_LABELS = 12;
+/**
+ * If a top-level feature dir has at least this many files AND at least two
+ * sub-dirs that each meet MIN_FILES_PER_LABEL, we split it into sub-features
+ * instead of emitting a single bucket. Lets a repo laid out as
+ * `src/wealthlab/{auth,charts,data}/...` show 3 sub-feature axes on the
+ * radar instead of one giant `wealthlab` bucket.
+ */
+const SUB_FEATURE_SPLIT_THRESHOLD = 8;
 
 const SKIP_LABELS = new Set([
   'node_modules',
@@ -49,13 +57,16 @@ export async function scanRepoFeatures(repoPath: string): Promise<FeatureCandida
 /** Synchronous variant when the caller already has the tracked-files list. */
 export function scanFromTrackedFiles(repoPath: string, trackedFiles: string[]): FeatureCandidate[] {
   const codeFiles = trackedFiles.filter(isCodeFile);
-  const groups = groupBySegment(codeFiles);
+  const { groups, splitParents } = groupBySegment(codeFiles);
 
   const out = new Map<string, FeatureCandidate>();
 
   function push(label: string, globs: string[]): void {
     const norm = normalizeLabel(label);
     if (!norm || SKIP_LABELS.has(norm)) return;
+    // Skip parents we've already split into sub-features — re-emitting them
+    // would clobber the sub-feature labels and undo the split.
+    if (splitParents.has(norm)) return;
     const unique = Array.from(new Set(globs.map((g) => g.trim()).filter(Boolean)));
     if (unique.length === 0) return;
     const filesMatched = trackedFiles.filter((p) => matchesAnyGlob(p, unique)).length;
@@ -100,30 +111,71 @@ interface DirGroup {
   count: number;
 }
 
-function groupBySegment(codeFiles: string[]): DirGroup[] {
-  const counts = new Map<string, { dir: string; count: number }>();
+interface GroupResult {
+  groups: DirGroup[];
+  /** Normalized parent labels that were split into sub-features. */
+  splitParents: Set<string>;
+}
+
+function groupBySegment(codeFiles: string[]): GroupResult {
+  // Count at the natural 2-segment depth first ("feature level"), then at
+  // the 3-segment depth ("sub-feature level"). A big feature gets split
+  // into its sub-features when the parent is large and has enough viable
+  // children — otherwise we keep it whole.
+  const featureCounts = new Map<string, number>(); // dir → file count
+  const subCounts = new Map<string, Map<string, number>>(); // parent → sub-dir → file count
+
   for (const file of codeFiles) {
     const segs = file.split('/');
     if (segs.length < 2) continue;
-    let dir = segs[0]!;
+
+    let dir: string;
     if (
       (segs[0] === 'src' || segs[0] === 'app' || segs[0] === 'apps' || segs[0] === 'lib') &&
       segs.length >= 3
     ) {
       dir = `${segs[0]}/${segs[1]}`;
+      // Record sub-feature when there's enough depth: src/<feature>/<sub>/file.
+      if (segs.length >= 4) {
+        const subDir = `${segs[0]}/${segs[1]}/${segs[2]}`;
+        let bucket = subCounts.get(dir);
+        if (!bucket) {
+          bucket = new Map();
+          subCounts.set(dir, bucket);
+        }
+        bucket.set(subDir, (bucket.get(subDir) ?? 0) + 1);
+      }
+    } else {
+      dir = segs[0]!;
     }
-    const slot = counts.get(dir);
-    if (slot) slot.count += 1;
-    else counts.set(dir, { dir, count: 1 });
+    featureCounts.set(dir, (featureCounts.get(dir) ?? 0) + 1);
   }
+
   const out: DirGroup[] = [];
-  for (const { dir, count } of counts.values()) {
+  const splitParents = new Set<string>();
+  for (const [dir, count] of featureCounts) {
     const segs = dir.split('/');
-    const name = segs.length >= 2 ? segs[1]! : segs[0]!;
-    out.push({ name, dir, count });
+    const parentName = segs.length >= 2 ? segs[1]! : segs[0]!;
+
+    // Should we split this feature into sub-features?
+    const subs = subCounts.get(dir);
+    const viableSubs = subs
+      ? Array.from(subs.entries()).filter(([, c]) => c >= MIN_FILES_PER_LABEL)
+      : [];
+    if (count >= SUB_FEATURE_SPLIT_THRESHOLD && viableSubs.length >= 2) {
+      splitParents.add(normalizeLabel(parentName));
+      for (const [subDir, subCount] of viableSubs) {
+        const subSegs = subDir.split('/');
+        const subName = subSegs[subSegs.length - 1]!;
+        out.push({ name: subName, dir: subDir, count: subCount });
+      }
+    } else {
+      out.push({ name: parentName, dir, count });
+    }
   }
+
   out.sort((a, b) => b.count - a.count);
-  return out;
+  return { groups: out, splitParents };
 }
 
 function proposeGlobsForFeature(repoPath: string, feature: string): string[] {

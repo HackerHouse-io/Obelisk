@@ -103,45 +103,98 @@ test('Every detected feature dir is on the radar — even with zero test plans',
   for (const p of pcts) expect(p.trim()).toBe('0%');
 });
 
-test('Regenerate map rewrites qa/coverage-map.md from a fresh scan', async () => {
+test('Regenerate map: branded dialog, force-overwrite, no "already exists" alert', async () => {
   ctx = await launchApp({
     seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
   });
   const page = ctx.window;
   seedCodeFiles(ctx.repoDir);
 
-  // Plant a small hand-edited map so the screen comes up with hasCoverageMap=true
-  // and the Regenerate button is visible.
+  // Plant a hand-edited map so the Regenerate button is visible.
   const mapDir = join(ctx.repoDir, 'qa');
+  const mapPath = join(mapDir, 'coverage-map.md');
   mkdirSync(mapDir, { recursive: true });
-  writeFileSync(join(mapDir, 'coverage-map.md'), '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
+  writeFileSync(mapPath, '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
+  const before = readFileSync(mapPath, 'utf8');
 
-  // Auto-accept the window.confirm() the button triggers.
-  await page.evaluate(() => {
-    window.confirm = () => true;
+  // Fail the test the moment any native dialog is shown — we should never
+  // surface macOS-native confirms.
+  let nativeDialogSeen = false;
+  ctx.app.on('window', (w) => {
+    w.on('dialog', () => {
+      nativeDialogSeen = true;
+    });
   });
 
   await page.getByRole('button', { name: 'Coverage' }).first().click();
 
-  const regenBtn = page.getByRole('button', { name: /Regenerate map/ });
+  const regenBtn = page.getByTestId('coverage-regenerate-btn');
   await expect(regenBtn).toBeVisible({ timeout: 10_000 });
   await regenBtn.click();
 
-  // After regenerate, the legacy label is gone and the live-scanned features
-  // are in the file.
-  await expect
-    .poll(() => readFileSync(join(mapDir, 'coverage-map.md'), 'utf8'), { timeout: 15_000 })
-    .not.toContain('`legacy`');
-  const fresh = readFileSync(join(mapDir, 'coverage-map.md'), 'utf8');
-  expect(fresh).toMatch(/`main`/);
-  expect(fresh).toMatch(/`renderer`/);
+  // The branded ConfirmDialog appears with our own classes (modal-overlay
+  // + role="alertdialog"), NOT the OS confirm.
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await expect(dialog).toContainText(/Regenerate.*coverage-map\.md/i);
 
-  // And the radar visibly contains the live-scanned features.
+  // Click the branded Regenerate confirm button (NOT the trigger button — both
+  // contain the word "Regenerate", so disambiguate by role+name within the dialog).
+  await dialog.getByRole('button', { name: /Regenerate/i }).click();
+
+  // Wait for the file to be overwritten on disk. force:true MUST replace the
+  // legacy hand-edit with the live-scanned labels.
+  await expect
+    .poll(() => readFileSync(mapPath, 'utf8'), { timeout: 15_000 })
+    .not.toBe(before);
+  const after = readFileSync(mapPath, 'utf8');
+  expect(after).not.toContain('`legacy`');
+  expect(after).toMatch(/`main`/);
+  expect(after).toMatch(/`renderer`/);
+
+  // A success alert appears confirming the regenerate ran — this is the
+  // load-bearing visible feedback (without it, the user thinks the button
+  // is dead when the live scan returns the same labels as before).
+  const successAlert = page.getByText(/Regenerated qa\/coverage-map\.md/);
+  await expect(successAlert).toBeVisible({ timeout: 5_000 });
+
+  // The "Coverage map already exists" alert must NOT appear — that text
+  // means the backend rejected the write, which would be the bug the user hit.
+  const errorAlert = page.getByText('Coverage map already exists');
+  await expect(errorAlert).toHaveCount(0);
+
+  // No native macOS dialog was ever shown.
+  expect(nativeDialogSeen).toBe(false);
+
+  // Radar visibly reflects the new labels.
   const cards = page.locator('.coverage-feature-card-label');
   await expect(cards.first()).toBeVisible({ timeout: 10_000 });
   const labels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
   expect(labels).toContain('main');
   expect(labels).toContain('renderer');
+});
+
+test('Regenerate cancel keeps the existing map intact', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(mapPath, '# Coverage map\n\n- `keep-me`: `src/**`\n');
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-regenerate-btn').click();
+
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden({ timeout: 5_000 });
+
+  // File untouched.
+  expect(readFileSync(mapPath, 'utf8')).toContain('`keep-me`');
 });
 
 test('Bootstrap overrides a stale/empty coverage-map.md and populates the radar', async () => {

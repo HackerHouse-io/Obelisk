@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from 're
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { showApiAlert, showAlert } from '../state/alert-store';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { CoverageRadar } from './coverage/CoverageRadar';
 import { FeatureCard, type RunnerInstalled } from './coverage/FeatureCard';
@@ -38,6 +39,7 @@ export function Coverage(): ReactElement {
   const [installed, setInstalled] = useState<RunnerInstalled | null>(null);
   const [filesOpen, setFilesOpen] = useState(false);
   const [bootstrapBusy, setBootstrapBusy] = useState(false);
+  const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
 
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -172,6 +174,7 @@ export function Coverage(): ReactElement {
 
   async function bootstrapMap(force = false): Promise<void> {
     if (!repo || bootstrapBusy) return;
+    const previousLabels = new Set(report?.features.map((f) => f.label) ?? []);
     setBootstrapBusy(true);
     try {
       const res = await window.obelisk.invoke('coverage:bootstrapMap', {
@@ -183,6 +186,14 @@ export function Coverage(): ReactElement {
         showApiAlert(res.error, force ? 'regenerate coverage map' : 'bootstrap coverage map');
         return;
       }
+      // Await the refresh so the busy state stays visible until the radar
+      // is actually ready to render the new features.
+      await load();
+
+      const newLabels = res.value.proposals.map((p) => p.label);
+      const added = newLabels.filter((l) => !previousLabels.has(l));
+      const removed = [...previousLabels].filter((l) => !newLabels.includes(l));
+
       if (!res.value.written) {
         showAlert({
           title: 'Coverage map already exists',
@@ -190,23 +201,37 @@ export function Coverage(): ReactElement {
             res.value.reason ??
             'qa/coverage-map.md is already present — open it in your editor to tweak labels.',
         });
+        return;
       }
-      // Await the refresh so the busy state stays visible until the radar
-      // is actually ready to render the new features.
-      await load();
+
+      // Always confirm the write happened — without a toast, a same-labels
+      // regenerate looks like a no-op even though the file was rewritten.
+      const noun = force ? 'Regenerated' : 'Wrote';
+      const title =
+        added.length > 0
+          ? `${noun} qa/coverage-map.md · +${added.length} new label${added.length === 1 ? '' : 's'}`
+          : removed.length > 0
+            ? `${noun} qa/coverage-map.md · removed ${removed.length} label${removed.length === 1 ? '' : 's'}`
+            : `${noun} qa/coverage-map.md · ${newLabels.length} label${newLabels.length === 1 ? '' : 's'} (unchanged)`;
+      const summary =
+        newLabels.slice(0, 8).join(', ') +
+        (newLabels.length > 8 ? `, +${newLabels.length - 8} more` : '');
+      showAlert({
+        title,
+        body: summary,
+      });
     } finally {
       setBootstrapBusy(false);
     }
   }
 
-  function regenerateMap(): void {
+  function openRegenerateConfirm(): void {
     if (!repo || bootstrapBusy) return;
-    const ok = window.confirm(
-      'Regenerate qa/coverage-map.md from a fresh scan?\n\n' +
-        'This rewrites the file from the current codebase layout. Any hand edits to ' +
-        'labels or globs will be lost.',
-    );
-    if (!ok) return;
+    setRegenConfirmOpen(true);
+  }
+
+  function onRegenerateConfirmed(): void {
+    setRegenConfirmOpen(false);
     void bootstrapMap(true);
   }
 
@@ -242,9 +267,10 @@ export function Coverage(): ReactElement {
             <button
               type="button"
               className="btn sm"
-              onClick={regenerateMap}
+              onClick={openRegenerateConfirm}
               disabled={bootstrapBusy || loading}
               title="Rewrite qa/coverage-map.md from a fresh codebase scan"
+              data-testid="coverage-regenerate-btn"
             >
               {bootstrapBusy ? (
                 <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
@@ -475,6 +501,21 @@ export function Coverage(): ReactElement {
           coverage report…
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={regenConfirmOpen}
+        title="Regenerate qa/coverage-map.md from a fresh scan?"
+        body={
+          <>
+            This rewrites the file from the current codebase layout. Any hand edits to labels or
+            globs will be lost.
+          </>
+        }
+        confirmLabel="Regenerate"
+        confirmIcon="Sparkles"
+        onCancel={() => setRegenConfirmOpen(false)}
+        onConfirm={onRegenerateConfirmed}
+      />
     </div>
   );
 }
