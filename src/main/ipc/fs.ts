@@ -22,7 +22,7 @@ export async function handleFsListDir(
   try {
     dirents = await fsp.readdir(resolved, { withFileTypes: true });
   } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
+    const code = (e as { code?: string }).code;
     if (code === 'ENOENT') {
       throw new ObeliskError('NOT_FOUND', `Directory does not exist: ${resolved}`);
     }
