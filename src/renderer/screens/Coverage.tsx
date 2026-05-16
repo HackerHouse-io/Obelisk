@@ -233,7 +233,8 @@ export function Coverage(): ReactElement {
           <div className="coverage-title">Coverage</div>
           <div className="coverage-sub">
             One score per feature, driven by your test plans and runs. Each QA Hunter / iOS Pilot /
-            Manual QA run nudges its feature's axis outward — churn and open findings pull it in.
+            Manual QA run nudges its feature&apos;s axis outward — churn and open findings pull it
+            in.
           </div>
         </div>
         <div className="coverage-header-actions">
