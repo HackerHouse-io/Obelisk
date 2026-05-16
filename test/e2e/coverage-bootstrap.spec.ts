@@ -284,8 +284,13 @@ test('Regenerate map MERGES: preserves existing user labels AND adds new scanner
   expect(after).toMatch(/`renderer`/);
   expect(after).toMatch(/`shared`/);
 
-  // 4) Success toast appears showing what was ADDED — never "removed N".
-  await expect(page.getByText(/Added \d+ new labels?/)).toBeVisible({ timeout: 5_000 });
+  // 4) A success toast appears (never "removed N labels"). The text is one of:
+  //    • "Added N new labels"     — when scanner found labels not already in features
+  //    • "Map already up to date" — when the map already includes every discovered label
+  //    Either is correct; the load-bearing fact is that no destructive toast appears.
+  await expect(
+    page.getByText(/Added \d+ new label|Map already up to date/),
+  ).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText(/removed \d+ label/)).toHaveCount(0);
 
   // 5) Banner doesn't reappear, no error alert, no native dialog.

@@ -12,6 +12,7 @@ import type {
   CoverageFeature,
   CoverageMapGenerationJob,
   CoverageReport,
+  TestPlanGenerationJob,
 } from '../../shared/types';
 
 type Filter = 'all' | 'uncovered' | 'recent-churn' | 'has-findings';
@@ -48,6 +49,14 @@ export function Coverage(): ReactElement {
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
   /** Live LLM-generation job, if any. Drives the progress card. */
   const [genJob, setGenJob] = useState<CoverageMapGenerationJob | null>(null);
+  /**
+   * All in-flight test plan generation jobs for this repo. Keyed by jobId
+   * so updates from the bus replace rather than append. Passed to each
+   * FeatureCard so it can disable its "Generate test plan" button when a
+   * job for that feature is in flight — even after the user navigates
+   * away and back (hydrated from `testPlans:generationJobs` on mount).
+   */
+  const [planJobs, setPlanJobs] = useState<Record<string, TestPlanGenerationJob>>({});
 
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -125,6 +134,17 @@ export function Coverage(): ReactElement {
         refresh();
       } else if (event.type === 'previews.changed' && event.repoId === repo.id) {
         refresh();
+      } else if (event.type === 'testPlanGeneration.progress' && event.job.repoId === repo.id) {
+        const job = event.job;
+        setPlanJobs((cur) => {
+          if (job.stage === 'done' || job.stage === 'failed') {
+            const next = { ...cur };
+            delete next[job.jobId];
+            return next;
+          }
+          return { ...cur, [job.jobId]: job };
+        });
+        if (job.stage === 'done') refresh();
       } else if (event.type === 'coverageMapGeneration.progress' && event.job.repoId === repo.id) {
         setGenJob(event.job);
         if (event.job.stage === 'done') {
@@ -156,6 +176,18 @@ export function Coverage(): ReactElement {
       if (cancelled || !res.ok) return;
       const inflight = res.value.find((j) => j.stage !== 'done' && j.stage !== 'failed');
       if (inflight) setGenJob(inflight);
+    });
+    // Hydrate in-flight test plan generation jobs so the FeatureCard
+    // buttons reflect background work that started before this mount
+    // (e.g. user clicked Generate, navigated to Mission Control, came back).
+    void window.obelisk.invoke('testPlans:generationJobs', { repoId: repo.id }).then((res) => {
+      if (cancelled || !res.ok) return;
+      const next: Record<string, TestPlanGenerationJob> = {};
+      for (const j of res.value) {
+        if (j.stage === 'done' || j.stage === 'failed') continue;
+        next[j.jobId] = j;
+      }
+      setPlanJobs(next);
     });
     return () => {
       cancelled = true;
@@ -447,17 +479,23 @@ export function Coverage(): ReactElement {
 
           {features.length > 0 ? (
             <div className="coverage-feature-grid">
-              {features.map((f) => (
-                <FeatureCard
-                  key={f.label}
-                  repoId={repo.id}
-                  feature={f}
-                  selected={selectedFeature === f.label}
-                  installed={installed}
-                  onSelect={() => setSelectedFeature((cur) => (cur === f.label ? null : f.label))}
-                  onChange={() => void load()}
-                />
-              ))}
+              {features.map((f) => {
+                const job = Object.values(planJobs).find(
+                  (j) => (j.feature ?? '').toLowerCase() === f.label.toLowerCase(),
+                );
+                return (
+                  <FeatureCard
+                    key={f.label}
+                    repoId={repo.id}
+                    feature={f}
+                    selected={selectedFeature === f.label}
+                    installed={installed}
+                    planJob={job ?? null}
+                    onSelect={() => setSelectedFeature((cur) => (cur === f.label ? null : f.label))}
+                    onChange={() => void load()}
+                  />
+                );
+              })}
             </div>
           ) : null}
 

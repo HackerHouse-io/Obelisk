@@ -36,6 +36,21 @@ export function startJob(opts: {
   featureName?: string;
 }): TestPlanGenerationJob {
   pruneStale();
+  // Defense in depth: refuse to spawn a duplicate job for the same scope
+  // while one is still running. The UI already disables the button, but a
+  // race (or a stale renderer) could otherwise kick off parallel LLM
+  // spawns for the same feature. Returning the existing job preserves
+  // idempotency for the caller.
+  const featureKey = opts.featureName?.trim().toLowerCase() ?? null;
+  for (const existing of jobs.values()) {
+    if (existing.repoId !== opts.repoId) continue;
+    if (existing.scope !== opts.scope) continue;
+    if (existing.agentName !== opts.agentName) continue;
+    const existingFeature = existing.feature?.toLowerCase() ?? null;
+    if (existingFeature !== featureKey) continue;
+    if (existing.stage === 'done' || existing.stage === 'failed') continue;
+    return { ...existing };
+  }
   const jobId = `tpg-${ulid().slice(-12).toLowerCase()}`;
   const job: TestPlanGenerationJob = {
     jobId,

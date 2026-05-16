@@ -94,11 +94,32 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
 
   for (const plan of plans) {
     const filesForPlan = new Set<string>();
+    // Feature-scoped plans are owned by `frontmatter.feature` regardless of
+    // what scope tags the LLM happened to put on individual cases. Without
+    // this, a `feature: wealthlab` plan whose cases tag `["smoke"]` would
+    // leave the wealthlab card stuck on "Generate test plan" even after
+    // the plan was successfully written.
+    const planFeatureLabel =
+      plan.frontmatter.scope === 'feature' && plan.frontmatter.feature
+        ? plan.frontmatter.feature.toLowerCase()
+        : null;
+    if (planFeatureLabel) {
+      const s = scratchFor(planFeatureLabel);
+      s.planRefs.set(plan.frontmatter.id, {
+        id: plan.frontmatter.id,
+        name: plan.frontmatter.name,
+        agentNames: plan.frontmatter.agentNames,
+        updatedAt: plan.updatedAt,
+      });
+    }
     for (const block of plan.blocks) {
       if (block.kind !== 'case') continue;
       const scope = block.scope ?? [];
-      if (scope.length === 0) continue;
-      for (const label of scope) {
+      // Even if a case has no explicit scope, count it toward the plan's
+      // owning feature so the planRefs / caseCount aren't empty.
+      const effectiveLabels = scope.length > 0 ? scope : planFeatureLabel ? [planFeatureLabel] : [];
+      if (effectiveLabels.length === 0) continue;
+      for (const label of effectiveLabels) {
         const lower = label.toLowerCase();
         const s = scratchFor(lower);
         s.planRefs.set(plan.frontmatter.id, {
@@ -115,7 +136,7 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
         }
         byPlan.add(block.id);
       }
-      const globs = resolveScopeToGlobs(scope, coverageMap);
+      const globs = resolveScopeToGlobs(effectiveLabels, coverageMap);
       for (const file of trackedFiles) {
         if (matchesAnyGlob(file, globs)) {
           caseCount.set(file, (caseCount.get(file) ?? 0) + 1);
@@ -239,9 +260,12 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     for (const file of trackedFiles) {
       if (matchesAnyGlob(file, globs)) filesInGlob.push(file);
     }
+    // Surface labels with 0 matching files on the radar (at 0%) instead of
+    // hiding them — when the LLM proposes a label whose glob doesn't match
+    // actual paths, the user needs to SEE it so they can fix the glob in
+    // qa/coverage-map.md. Silently dropping makes Regenerate look broken.
     if (filesInGlob.length === 0) {
       staleLabels.push(label);
-      continue;
     }
 
     let filesWithCases = 0;

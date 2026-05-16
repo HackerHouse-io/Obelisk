@@ -2,7 +2,12 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
 import { showApiAlert } from '../../state/alert-store';
 import { runAgentByName } from '../../state/agent-actions';
-import type { AgentName, CoverageFeature, IpcMap } from '../../../shared/types';
+import type {
+  AgentName,
+  CoverageFeature,
+  IpcMap,
+  TestPlanGenerationJob,
+} from '../../../shared/types';
 
 export type RunnerInstalled = IpcMap['runners:installed']['res'];
 
@@ -11,6 +16,13 @@ interface Props {
   feature: CoverageFeature;
   selected: boolean;
   installed: RunnerInstalled | null;
+  /**
+   * In-flight test plan generation job for this feature, if any. When set,
+   * the "Generate test plan" button is disabled and shows the stage label
+   * (e.g. "Reading codebase…") so the user can't kick off duplicate jobs
+   * and stale tabs reflect background work that started elsewhere.
+   */
+  planJob: TestPlanGenerationJob | null;
   onSelect: () => void;
   onChange: () => void;
 }
@@ -27,10 +39,13 @@ export function FeatureCard({
   feature,
   selected,
   installed,
+  planJob,
   onSelect,
   onChange,
 }: Props): ReactElement {
   const [busy, setBusy] = useState<string | null>(null);
+  const generating = planJob !== null;
+  const generateLabel = generating ? stageLabel(planJob) : 'Generate test plan';
 
   const hasPlan = feature.planRefs.length > 0;
   const agentNamesInPlans = useMemo(() => {
@@ -46,6 +61,7 @@ export function FeatureCard({
       : null;
 
   async function handleGenerate(): Promise<void> {
+    if (generating) return; // hard guard against double-clicks
     setBusy('generate');
     try {
       const res = await window.obelisk.invoke('testPlans:generate', {
@@ -130,16 +146,22 @@ export function FeatureCard({
           <button
             type="button"
             className="btn primary sm"
-            disabled={busy !== null || installed === null || !runnersOk}
+            disabled={busy !== null || generating || installed === null || !runnersOk}
             onClick={handleGenerate}
-            title={runnersHint ?? 'Generate a test plan scoped to this feature'}
+            title={
+              generating
+                ? `Already generating a test plan for ${feature.label} — ${planJob!.status}`
+                : (runnersHint ?? 'Generate a test plan scoped to this feature')
+            }
+            data-testid={`feature-card-generate-${feature.label}`}
+            data-generating={generating ? 'true' : 'false'}
           >
-            {busy === 'generate' ? (
+            {busy === 'generate' || generating ? (
               <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
             ) : (
               <Icon.Sparkles size={11} />
             )}{' '}
-            Generate test plan
+            {generateLabel}
           </button>
         ) : (
           <>
@@ -199,6 +221,23 @@ function Stat({
       <div className="coverage-feature-card-stat-value">{value}</div>
     </div>
   );
+}
+
+function stageLabel(job: TestPlanGenerationJob): string {
+  switch (job.stage) {
+    case 'queued':
+      return 'Queued…';
+    case 'spawning':
+      return 'Starting…';
+    case 'reading':
+      return 'Reading codebase…';
+    case 'drafting':
+      return 'Drafting cases…';
+    case 'writing':
+      return 'Saving plan…';
+    default:
+      return 'Generating…';
+  }
 }
 
 function toneForPct(pct: number): 'ok' | 'mid' | 'bad' {
