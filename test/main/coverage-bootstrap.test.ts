@@ -142,6 +142,24 @@ describe('coverage:bootstrapMap', () => {
     expect(res.written).toBe(true);
     expect(readFileSync(mapPath, 'utf8')).toContain('# Coverage map');
   });
+
+  it('force:true overwrites a user-edited map (Regenerate button path)', async () => {
+    const mapPath = join(repoPath, 'qa', 'coverage-map.md');
+    mkdirSync(join(repoPath, 'qa'), { recursive: true });
+    writeFileSync(mapPath, '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
+
+    // Without force: refuses to overwrite a parseable user-edited map.
+    const noForce = await handleCoverageBootstrapMap({ repoId, commit: true });
+    expect(noForce.written).toBe(false);
+    expect(readFileSync(mapPath, 'utf8')).toContain('legacy');
+
+    // With force: overwrites and the freshly-scanned labels replace the edit.
+    const forced = await handleCoverageBootstrapMap({ repoId, commit: true, force: true });
+    expect(forced.written).toBe(true);
+    const fresh = readFileSync(mapPath, 'utf8');
+    expect(fresh).not.toContain('`legacy`');
+    expect(fresh).toMatch(/`[\w-]+`:\s*`[^`]+`/);
+  });
 });
 
 describe('coverage:list after bootstrap (end-to-end)', () => {

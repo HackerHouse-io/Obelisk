@@ -103,6 +103,47 @@ test('Every detected feature dir is on the radar — even with zero test plans',
   for (const p of pcts) expect(p.trim()).toBe('0%');
 });
 
+test('Regenerate map rewrites qa/coverage-map.md from a fresh scan', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Plant a small hand-edited map so the screen comes up with hasCoverageMap=true
+  // and the Regenerate button is visible.
+  const mapDir = join(ctx.repoDir, 'qa');
+  mkdirSync(mapDir, { recursive: true });
+  writeFileSync(join(mapDir, 'coverage-map.md'), '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
+
+  // Auto-accept the window.confirm() the button triggers.
+  await page.evaluate(() => {
+    window.confirm = () => true;
+  });
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+
+  const regenBtn = page.getByRole('button', { name: /Regenerate map/ });
+  await expect(regenBtn).toBeVisible({ timeout: 10_000 });
+  await regenBtn.click();
+
+  // After regenerate, the legacy label is gone and the live-scanned features
+  // are in the file.
+  await expect
+    .poll(() => readFileSync(join(mapDir, 'coverage-map.md'), 'utf8'), { timeout: 15_000 })
+    .not.toContain('`legacy`');
+  const fresh = readFileSync(join(mapDir, 'coverage-map.md'), 'utf8');
+  expect(fresh).toMatch(/`main`/);
+  expect(fresh).toMatch(/`renderer`/);
+
+  // And the radar visibly contains the live-scanned features.
+  const cards = page.locator('.coverage-feature-card-label');
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  const labels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
+  expect(labels).toContain('main');
+  expect(labels).toContain('renderer');
+});
+
 test('Bootstrap overrides a stale/empty coverage-map.md and populates the radar', async () => {
   ctx = await launchApp({
     seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },

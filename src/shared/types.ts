@@ -771,9 +771,13 @@ export interface IpcMap {
   };
   // Bootstrap `qa/coverage-map.md` from a heuristic + filesystem scan.
   // - `commit: false / omitted` → return proposed entries for preview only.
-  // - `commit: true`            → write the file (refuses to overwrite).
+  // - `commit: true`            → write the file (refuses to overwrite a
+  //                                user-edited map unless `force: true`).
+  // - `force: true`             → overwrite any existing map; used by the
+  //                                "Regenerate map" button after the user
+  //                                confirms losing any hand edits.
   'coverage:bootstrapMap': {
-    req: { repoId: string; commit?: boolean };
+    req: { repoId: string; commit?: boolean; force?: boolean };
     res: {
       proposals: { label: string; globs: string[]; filesMatched: number }[];
       written: boolean;

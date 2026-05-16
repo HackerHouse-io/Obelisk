@@ -170,16 +170,17 @@ export function Coverage(): ReactElement {
     return [...filtered].sort(cmp);
   }, [report, filter, search, sortKey, sortDir, filteredFeature]);
 
-  async function bootstrapMap(): Promise<void> {
+  async function bootstrapMap(force = false): Promise<void> {
     if (!repo || bootstrapBusy) return;
     setBootstrapBusy(true);
     try {
       const res = await window.obelisk.invoke('coverage:bootstrapMap', {
         repoId: repo.id,
         commit: true,
+        force,
       });
       if (!res.ok) {
-        showApiAlert(res.error, 'bootstrap coverage map');
+        showApiAlert(res.error, force ? 'regenerate coverage map' : 'bootstrap coverage map');
         return;
       }
       if (!res.value.written) {
@@ -196,6 +197,17 @@ export function Coverage(): ReactElement {
     } finally {
       setBootstrapBusy(false);
     }
+  }
+
+  function regenerateMap(): void {
+    if (!repo || bootstrapBusy) return;
+    const ok = window.confirm(
+      'Regenerate qa/coverage-map.md from a fresh scan?\n\n' +
+        'This rewrites the file from the current codebase layout. Any hand edits to ' +
+        'labels or globs will be lost.',
+    );
+    if (!ok) return;
+    void bootstrapMap(true);
   }
 
   if (!repo) {
@@ -224,14 +236,32 @@ export function Coverage(): ReactElement {
             Manual QA run nudges its feature's axis outward — churn and open findings pull it in.
           </div>
         </div>
-        <button type="button" className="btn sm" onClick={() => void load()} disabled={loading}>
-          {loading ? (
-            <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
-          ) : (
-            <Icon.Refresh size={11} />
-          )}{' '}
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div className="coverage-header-actions">
+          {report?.hasCoverageMap ? (
+            <button
+              type="button"
+              className="btn sm"
+              onClick={regenerateMap}
+              disabled={bootstrapBusy || loading}
+              title="Rewrite qa/coverage-map.md from a fresh codebase scan"
+            >
+              {bootstrapBusy ? (
+                <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+              ) : (
+                <Icon.Sparkles size={11} />
+              )}{' '}
+              {bootstrapBusy ? 'Regenerating…' : 'Regenerate map'}
+            </button>
+          ) : null}
+          <button type="button" className="btn sm" onClick={() => void load()} disabled={loading}>
+            {loading ? (
+              <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+            ) : (
+              <Icon.Refresh size={11} />
+            )}{' '}
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </header>
 
       {error ? (

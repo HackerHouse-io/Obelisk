@@ -6064,6 +6064,12 @@ body {
   text-align: center;
 }
 
+.coverage-header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 /* ---------- Coverage by feature: banner / radar / cards ---------- */
 
 .coverage-banner-info {

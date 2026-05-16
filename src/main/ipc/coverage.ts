@@ -46,7 +46,7 @@ export async function handleCoverageBootstrapMap(
 
   const mapDir = join(repo.localPath, 'qa');
   const mapPath = join(mapDir, 'coverage-map.md');
-  if (existsSync(mapPath)) {
+  if (existsSync(mapPath) && !payload.force) {
     let usable = false;
     try {
       usable = parseCoverageMap(readFileSync(mapPath, 'utf8')).size > 0;
