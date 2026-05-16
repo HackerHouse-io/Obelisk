@@ -6082,6 +6082,21 @@ body {
 .coverage-banner-info svg {
   color: var(--info);
 }
+.coverage-banner-ok {
+  background: var(--ok-soft);
+  color: var(--t-1);
+  border: 1px solid oklch(70% 0.14 152 / 0.4);
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+}
+.coverage-banner-ok svg {
+  color: var(--ok);
+}
+.coverage-banner-sub {
+  font-size: 11px;
+  color: var(--t-2);
+  margin-top: 2px;
+}
 
 .coverage-radar-section {
   display: grid;

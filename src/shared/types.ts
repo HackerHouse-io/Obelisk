@@ -326,6 +326,29 @@ export interface TestPlanGenerationJob {
   errorHint: string | null;
 }
 
+export type CoverageMapGenerationStage =
+  | 'queued'
+  | 'spawning'
+  | 'reading'
+  | 'writing'
+  | 'done'
+  | 'failed';
+
+export interface CoverageMapGenerationJob {
+  jobId: string;
+  repoId: string;
+  stage: CoverageMapGenerationStage;
+  status: string;
+  startedAt: ISO;
+  finishedAt: ISO | null;
+  /** Number of labels in the final map when stage='done'. */
+  labelCount: number | null;
+  /** Labels added relative to the previous map (stage='done'). */
+  addedLabels: string[] | null;
+  errorMessage: string | null;
+  errorHint: string | null;
+}
+
 export interface Settings {
   defaultRunner: RunnerKind;
   /**
@@ -773,9 +796,8 @@ export interface IpcMap {
   // - `commit: false / omitted` → return proposed entries for preview only.
   // - `commit: true`            → write the file (refuses to overwrite a
   //                                user-edited map unless `force: true`).
-  // - `force: true`             → overwrite any existing map; used by the
-  //                                "Regenerate map" button after the user
-  //                                confirms losing any hand edits.
+  // - `force: true`             → MERGE: write the union of existing labels
+  //                                and newly-detected scanner labels.
   'coverage:bootstrapMap': {
     req: { repoId: string; commit?: boolean; force?: boolean };
     res: {
@@ -784,6 +806,24 @@ export interface IpcMap {
       reason?: string;
     };
   };
+  // LLM-driven feature analysis. Spawns Claude / Codex CLI to read the
+  // entire codebase (the same pattern test plan generation uses) and
+  // produce a comprehensive list of features. Returns immediately with a
+  // jobId; the actual work runs in the background and reports progress via
+  // the `coverageMapGeneration.progress` bus event.
+  'coverage:generateMap': {
+    req: {
+      repoId: string;
+      runnerOverride?: RunnerKind;
+      modelOverride?: string;
+    };
+    res: { jobId: string };
+  };
+  'coverage:generationJobs': {
+    req: { repoId?: string };
+    res: CoverageMapGenerationJob[];
+  };
+  'coverage:dismissJob': { req: { jobId: string }; res: { ok: true } };
 
   // iOS QA Pilot
   'qa:list': { req: { repoId: string }; res: QaFlow[] };
@@ -912,6 +952,7 @@ export type BusEvent =
   | { type: 'previews.changed'; repoId: string }
   | { type: 'testPlans.changed'; repoId: string }
   | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }
+  | { type: 'coverageMapGeneration.progress'; job: CoverageMapGenerationJob }
   | {
       type: 'agent.autoPaused';
       repoId: string;

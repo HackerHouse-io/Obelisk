@@ -4,8 +4,10 @@ import { simpleGit } from 'simple-git';
 import type { IpcMap } from '../../shared/types';
 import { ObeliskError } from '../../shared/errors';
 import { buildCoverageReport } from '../coverage/aggregate';
-import { parseCoverageMap } from '../coverage/coverage-map';
+import { matchesAnyGlob, parseCoverageMap } from '../coverage/coverage-map';
 import { scanFromTrackedFiles } from '../coverage/feature-scan';
+import { startMapGenerationJob } from '../coverage/generate-map';
+import { dismissJob, listJobs } from '../coverage/jobs';
 import { getRepo } from '../db/repos';
 
 export async function handleCoverageList(
@@ -15,13 +17,20 @@ export async function handleCoverageList(
 }
 
 /**
- * Bootstrap `qa/coverage-map.md` from a heuristic + filesystem scan.
+ * Bootstrap or regenerate `qa/coverage-map.md`.
  *
- *   - `commit: false / omitted` → returns proposed entries for preview only
- *   - `commit: true`            → writes `qa/coverage-map.md` directly
+ *   - `commit: false / omitted` → return proposed entries for preview only
+ *   - `commit: true, no map yet` → write the scanner's proposals
+ *   - `commit: true, force: true, map exists` → MERGE: write the union of
+ *       the existing map entries (preserved verbatim) and any newly-detected
+ *       features from the live scan. Existing entries win on label collisions
+ *       so user edits to globs are preserved.
+ *   - `commit: true, no force, map exists with content` → refuse to overwrite
+ *       (initial bootstrap path; safe default)
  *
- * Refuses to overwrite a user-edited map that parses to ≥1 label. A stale
- * file that parses to 0 labels is treated as absent and replaced.
+ * Regenerate is **additive by design** — clicking it never drops the labels
+ * the user already curated, only layers new ones on top. Removing a stale
+ * label means editing `qa/coverage-map.md` directly.
  */
 export async function handleCoverageBootstrapMap(
   payload: IpcMap['coverage:bootstrapMap']['req'],
@@ -30,13 +39,60 @@ export async function handleCoverageBootstrapMap(
   if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
 
   const trackedFiles = await listTrackedFiles(repo.localPath);
-  const proposals = scanFromTrackedFiles(repo.localPath, trackedFiles);
+  const scanned = scanFromTrackedFiles(repo.localPath, trackedFiles);
 
   if (!payload.commit) {
-    return { proposals, written: false };
+    return { proposals: scanned, written: false };
   }
 
-  if (proposals.length === 0) {
+  const mapDir = join(repo.localPath, 'qa');
+  const mapPath = join(mapDir, 'coverage-map.md');
+
+  // Read the existing map (if any) so we can preserve labels the user
+  // already curated. parseCoverageMap returns an empty Map for stale /
+  // unparseable / missing files — those are safe to overwrite.
+  let existingEntries: { label: string; globs: string[] }[] = [];
+  let existingIsUsable = false;
+  if (existsSync(mapPath)) {
+    try {
+      const existing = parseCoverageMap(readFileSync(mapPath, 'utf8'));
+      if (existing.size > 0) {
+        existingIsUsable = true;
+        for (const [label, globs] of existing) existingEntries.push({ label, globs });
+      }
+    } catch {
+      // unparseable → treat as absent.
+    }
+  }
+
+  // Non-force write against a usable existing map: refuse (initial bootstrap
+  // path won't clobber a hand-edited file).
+  if (existingIsUsable && !payload.force) {
+    return {
+      proposals: scanned,
+      written: false,
+      reason: 'coverage-map.md already exists — edit it directly to refine globs.',
+    };
+  }
+
+  // Build the final proposal list:
+  //   - existing entries (preserved verbatim — globs and all)
+  //   - + any scanner-detected labels NOT already in the map
+  const finalByLabel = new Map<string, { label: string; globs: string[]; filesMatched: number }>();
+  for (const e of existingEntries) {
+    const filesMatched = trackedFiles.filter((p) => matchesAnyGlob(p, e.globs)).length;
+    finalByLabel.set(e.label, { label: e.label, globs: e.globs, filesMatched });
+  }
+  for (const s of scanned) {
+    if (finalByLabel.has(s.label)) continue;
+    finalByLabel.set(s.label, s);
+  }
+
+  const finalProposals = Array.from(finalByLabel.values()).sort(
+    (a, b) => b.filesMatched - a.filesMatched,
+  );
+
+  if (finalProposals.length === 0) {
     throw new ObeliskError(
       'INVALID_INPUT',
       "Couldn't detect any feature areas — the repo appears to have no tracked source files yet.",
@@ -44,23 +100,6 @@ export async function handleCoverageBootstrapMap(
     );
   }
 
-  const mapDir = join(repo.localPath, 'qa');
-  const mapPath = join(mapDir, 'coverage-map.md');
-  if (existsSync(mapPath) && !payload.force) {
-    let usable = false;
-    try {
-      usable = parseCoverageMap(readFileSync(mapPath, 'utf8')).size > 0;
-    } catch {
-      usable = false;
-    }
-    if (usable) {
-      return {
-        proposals,
-        written: false,
-        reason: 'coverage-map.md already exists — edit it directly to refine globs.',
-      };
-    }
-  }
   try {
     mkdirSync(mapDir, { recursive: true });
   } catch {
@@ -68,7 +107,7 @@ export async function handleCoverageBootstrapMap(
   }
 
   try {
-    writeFileSync(mapPath, renderCoverageMap(proposals), 'utf8');
+    writeFileSync(mapPath, renderCoverageMap(finalProposals), 'utf8');
   } catch (e) {
     throw new ObeliskError(
       'IO',
@@ -76,7 +115,7 @@ export async function handleCoverageBootstrapMap(
       'Make sure the repo is writable and the qa/ directory can be created.',
     );
   }
-  return { proposals, written: true };
+  return { proposals: finalProposals, written: true };
 }
 
 function renderCoverageMap(
@@ -96,6 +135,32 @@ function renderCoverageMap(
   }
   lines.push('');
   return lines.join('\n');
+}
+
+export async function handleCoverageGenerateMap(
+  payload: IpcMap['coverage:generateMap']['req'],
+): Promise<IpcMap['coverage:generateMap']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  const jobId = startMapGenerationJob({
+    repo,
+    ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
+    ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+  });
+  return { jobId };
+}
+
+export async function handleCoverageGenerationJobs(
+  payload: IpcMap['coverage:generationJobs']['req'],
+): Promise<IpcMap['coverage:generationJobs']['res']> {
+  return listJobs(payload.repoId);
+}
+
+export async function handleCoverageDismissJob(
+  payload: IpcMap['coverage:dismissJob']['req'],
+): Promise<IpcMap['coverage:dismissJob']['res']> {
+  dismissJob(payload.jobId);
+  return { ok: true };
 }
 
 async function listTrackedFiles(repoPath: string): Promise<string[]> {

@@ -143,22 +143,40 @@ describe('coverage:bootstrapMap', () => {
     expect(readFileSync(mapPath, 'utf8')).toContain('# Coverage map');
   });
 
-  it('force:true overwrites a user-edited map (Regenerate button path)', async () => {
+  it('force:true MERGES a user-edited map with newly scanned labels (preserves existing)', async () => {
     const mapPath = join(repoPath, 'qa', 'coverage-map.md');
     mkdirSync(join(repoPath, 'qa'), { recursive: true });
-    writeFileSync(mapPath, '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
+    writeFileSync(mapPath, '# Coverage map\n\n- `legacy`: `**/*.legacy`\n- `auth`: `src/auth/**`\n');
 
     // Without force: refuses to overwrite a parseable user-edited map.
     const noForce = await handleCoverageBootstrapMap({ repoId, commit: true });
     expect(noForce.written).toBe(false);
     expect(readFileSync(mapPath, 'utf8')).toContain('legacy');
 
-    // With force: overwrites and the freshly-scanned labels replace the edit.
+    // With force: writes a UNION of existing labels + newly scanned labels.
+    // Existing labels are NEVER dropped, even if they no longer match files.
     const forced = await handleCoverageBootstrapMap({ repoId, commit: true, force: true });
     expect(forced.written).toBe(true);
     const fresh = readFileSync(mapPath, 'utf8');
-    expect(fresh).not.toContain('`legacy`');
-    expect(fresh).toMatch(/`[\w-]+`:\s*`[^`]+`/);
+    // Existing labels preserved verbatim.
+    expect(fresh).toContain('`legacy`');
+    expect(fresh).toContain('`auth`');
+    // Newly scanned labels added.
+    expect(fresh).toMatch(/`main`/);
+    expect(fresh).toMatch(/`renderer`/);
+  });
+
+  it('force:true preserves the existing globs even if the scanner would write different ones', async () => {
+    const mapPath = join(repoPath, 'qa', 'coverage-map.md');
+    mkdirSync(join(repoPath, 'qa'), { recursive: true });
+    // User customised the `main` glob — must be preserved through regenerate.
+    writeFileSync(mapPath, '# Coverage map\n\n- `main`: `src/main/ipc/**`\n');
+
+    const forced = await handleCoverageBootstrapMap({ repoId, commit: true, force: true });
+    expect(forced.written).toBe(true);
+    const fresh = readFileSync(mapPath, 'utf8');
+    expect(fresh).toContain('`main`: `src/main/ipc/**`');
+    expect(fresh).not.toContain('`main`: `src/main/**`');
   });
 });
 

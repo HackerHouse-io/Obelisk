@@ -6,7 +6,13 @@ import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { CoverageRadar } from './coverage/CoverageRadar';
 import { FeatureCard, type RunnerInstalled } from './coverage/FeatureCard';
-import type { BusEvent, CoverageEntry, CoverageReport, CoverageFeature } from '../../shared/types';
+import type {
+  BusEvent,
+  CoverageEntry,
+  CoverageFeature,
+  CoverageMapGenerationJob,
+  CoverageReport,
+} from '../../shared/types';
 
 type Filter = 'all' | 'uncovered' | 'recent-churn' | 'has-findings';
 type SortKey = 'path' | 'cases' | 'findings' | 'lastPass' | 'churn';
@@ -40,6 +46,8 @@ export function Coverage(): ReactElement {
   const [filesOpen, setFilesOpen] = useState(false);
   const [bootstrapBusy, setBootstrapBusy] = useState(false);
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
+  /** Live LLM-generation job, if any. Drives the progress card. */
+  const [genJob, setGenJob] = useState<CoverageMapGenerationJob | null>(null);
 
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -117,9 +125,42 @@ export function Coverage(): ReactElement {
         refresh();
       } else if (event.type === 'previews.changed' && event.repoId === repo.id) {
         refresh();
+      } else if (event.type === 'coverageMapGeneration.progress' && event.job.repoId === repo.id) {
+        setGenJob(event.job);
+        if (event.job.stage === 'done') {
+          refresh();
+          const n = event.job.addedLabels?.length ?? 0;
+          showAlert({
+            title: n > 0 ? `Added ${n} new label${n === 1 ? '' : 's'}` : 'Map already up to date',
+            body:
+              n > 0
+                ? (event.job.addedLabels ?? []).join(', ')
+                : `qa/coverage-map.md already covers every feature Claude found (${event.job.labelCount ?? 0} label${event.job.labelCount === 1 ? '' : 's'}).`,
+          });
+        } else if (event.job.stage === 'failed') {
+          showAlert({
+            title: 'Coverage map generation failed',
+            body:
+              event.job.errorMessage + (event.job.errorHint ? '\n\n' + event.job.errorHint : ''),
+          });
+        }
       }
     });
   }, [repo, load]);
+
+  // Hydrate any in-flight job on mount so the progress card survives a route change.
+  useEffect(() => {
+    if (!repo) return;
+    let cancelled = false;
+    void window.obelisk.invoke('coverage:generationJobs', { repoId: repo.id }).then((res) => {
+      if (cancelled || !res.ok) return;
+      const inflight = res.value.find((j) => j.stage !== 'done' && j.stage !== 'failed');
+      if (inflight) setGenJob(inflight);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [repo]);
 
   const filteredFeature = useMemo<CoverageFeature | null>(() => {
     if (!report || !selectedFeature) return null;
@@ -172,53 +213,70 @@ export function Coverage(): ReactElement {
     return [...filtered].sort(cmp);
   }, [report, filter, search, sortKey, sortDir, filteredFeature]);
 
-  async function bootstrapMap(force = false): Promise<void> {
-    if (!repo || bootstrapBusy) return;
+  /**
+   * Spawn the LLM-driven coverage-map generator. Same flow test plan
+   * generation uses: fire-and-forget job, progress streamed via the bus.
+   * If no CLI is installed, fall back to the heuristic file scan so the
+   * user still gets *something* without a runner on PATH.
+   */
+  async function generateMap(): Promise<void> {
+    if (!repo || bootstrapBusy || genJob !== null) return;
+    setBootstrapBusy(true);
+    try {
+      // Resolve the installed state at click time — `installed` may still be
+      // null if the user clicks before the initial probe completes.
+      let inst = installed;
+      if (!inst) {
+        const probe = await window.obelisk.invoke('runners:installed', {});
+        if (probe.ok) {
+          inst = probe.value;
+          setInstalled(probe.value);
+        }
+      }
+      const runnerOk = inst?.claude.installed || inst?.codex.installed;
+      if (!runnerOk) {
+        // No CLI on PATH — fall back to the file-scan heuristic so the user
+        // isn't dead-ended on a fresh machine.
+        await heuristicBootstrap();
+        return;
+      }
+      const res = await window.obelisk.invoke('coverage:generateMap', { repoId: repo.id });
+      if (!res.ok) {
+        showApiAlert(res.error, 'generate coverage map');
+      }
+      // Progress / completion lands via the bus subscription above.
+    } finally {
+      setBootstrapBusy(false);
+    }
+  }
+
+  /** Fallback bootstrap when no LLM CLI is available. */
+  async function heuristicBootstrap(): Promise<void> {
+    if (!repo) return;
     const previousLabels = new Set(report?.features.map((f) => f.label) ?? []);
     setBootstrapBusy(true);
     try {
       const res = await window.obelisk.invoke('coverage:bootstrapMap', {
         repoId: repo.id,
         commit: true,
-        force,
+        force: true,
       });
       if (!res.ok) {
-        showApiAlert(res.error, force ? 'regenerate coverage map' : 'bootstrap coverage map');
+        showApiAlert(res.error, 'bootstrap coverage map');
         return;
       }
-      // Await the refresh so the busy state stays visible until the radar
-      // is actually ready to render the new features.
       await load();
-
       const newLabels = res.value.proposals.map((p) => p.label);
       const added = newLabels.filter((l) => !previousLabels.has(l));
-      const removed = [...previousLabels].filter((l) => !newLabels.includes(l));
-
-      if (!res.value.written) {
-        showAlert({
-          title: 'Coverage map already exists',
-          body:
-            res.value.reason ??
-            'qa/coverage-map.md is already present — open it in your editor to tweak labels.',
-        });
-        return;
-      }
-
-      // Always confirm the write happened — without a toast, a same-labels
-      // regenerate looks like a no-op even though the file was rewritten.
-      const noun = force ? 'Regenerated' : 'Wrote';
-      const title =
-        added.length > 0
-          ? `${noun} qa/coverage-map.md · +${added.length} new label${added.length === 1 ? '' : 's'}`
-          : removed.length > 0
-            ? `${noun} qa/coverage-map.md · removed ${removed.length} label${removed.length === 1 ? '' : 's'}`
-            : `${noun} qa/coverage-map.md · ${newLabels.length} label${newLabels.length === 1 ? '' : 's'} (unchanged)`;
-      const summary =
-        newLabels.slice(0, 8).join(', ') +
-        (newLabels.length > 8 ? `, +${newLabels.length - 8} more` : '');
       showAlert({
-        title,
-        body: summary,
+        title:
+          added.length > 0
+            ? `Added ${added.length} new label${added.length === 1 ? '' : 's'} (heuristic scan)`
+            : 'Map already up to date',
+        body:
+          added.length > 0
+            ? added.join(', ')
+            : `${newLabels.length} label${newLabels.length === 1 ? '' : 's'} match the filesystem scan. Install Claude Code or Codex for a deeper LLM-driven scan.`,
       });
     } finally {
       setBootstrapBusy(false);
@@ -226,13 +284,20 @@ export function Coverage(): ReactElement {
   }
 
   function openRegenerateConfirm(): void {
-    if (!repo || bootstrapBusy) return;
+    if (!repo || bootstrapBusy || genJob !== null) return;
     setRegenConfirmOpen(true);
   }
 
   function onRegenerateConfirmed(): void {
     setRegenConfirmOpen(false);
-    void bootstrapMap(true);
+    void generateMap();
+  }
+
+  function dismissJobToast(): void {
+    if (!genJob) return;
+    const jobId = genJob.jobId;
+    setGenJob(null);
+    void window.obelisk.invoke('coverage:dismissJob', { jobId });
   }
 
   if (!repo) {
@@ -298,7 +363,7 @@ export function Coverage(): ReactElement {
         </div>
       ) : null}
 
-      {report && !report.hasCoverageMap ? (
+      {report && !report.hasCoverageMap && !genJob ? (
         <div className="coverage-banner coverage-banner-info">
           {bootstrapBusy ? (
             <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
@@ -307,33 +372,34 @@ export function Coverage(): ReactElement {
           )}
           <div>
             {bootstrapBusy ? (
-              <>
-                Scanning the repo and writing <span className="mono">qa/coverage-map.md</span>…
-              </>
+              <>Asking Claude / Codex to analyze the codebase…</>
             ) : (
               <>
-                No <span className="mono">qa/coverage-map.md</span> yet — the radar reads features
-                from that file.
+                No <span className="mono">qa/coverage-map.md</span> yet — Claude / Codex will read
+                your codebase and propose feature labels.
               </>
             )}
           </div>
           <button
             type="button"
             className="btn sm primary"
-            onClick={() => void bootstrapMap()}
+            onClick={() => void generateMap()}
             disabled={bootstrapBusy}
+            data-testid="coverage-bootstrap-btn"
           >
             {bootstrapBusy ? (
               <>
                 <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
-                Bootstrapping…
+                Generating…
               </>
             ) : (
-              'Bootstrap coverage map'
+              'Generate coverage map'
             )}
           </button>
         </div>
       ) : null}
+
+      {genJob ? <CoverageGenProgress job={genJob} onDismiss={dismissJobToast} /> : null}
 
       {report ? (
         <>
@@ -504,11 +570,12 @@ export function Coverage(): ReactElement {
 
       <ConfirmDialog
         open={regenConfirmOpen}
-        title="Regenerate qa/coverage-map.md from a fresh scan?"
+        title="Regenerate qa/coverage-map.md?"
         body={
           <>
-            This rewrites the file from the current codebase layout. Any hand edits to labels or
-            globs will be lost.
+            Claude (or Codex) will read your codebase end-to-end and propose feature labels.
+            Anything already in <span className="mono">qa/coverage-map.md</span> is kept verbatim;
+            newly discovered labels are appended. Typically takes 30–90 seconds.
           </>
         }
         confirmLabel="Regenerate"
@@ -590,5 +657,68 @@ function short(iso: string): string {
     });
   } catch {
     return iso;
+  }
+}
+
+function CoverageGenProgress({
+  job,
+  onDismiss,
+}: {
+  job: CoverageMapGenerationJob;
+  onDismiss: () => void;
+}): ReactElement {
+  const terminal = job.stage === 'done' || job.stage === 'failed';
+  const tone =
+    job.stage === 'failed'
+      ? 'coverage-banner-error'
+      : job.stage === 'done'
+        ? 'coverage-banner-ok'
+        : 'coverage-banner-info';
+  return (
+    <div
+      className={`coverage-banner ${tone}`}
+      data-testid="coverage-gen-progress"
+      data-stage={job.stage}
+    >
+      {!terminal ? (
+        <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
+      ) : job.stage === 'failed' ? (
+        <Icon.AlertTri size={12} />
+      ) : (
+        <Icon.Check size={12} />
+      )}
+      <div>
+        <strong>{stageHeadline(job.stage)}</strong>
+        <div className="coverage-banner-sub">{job.status}</div>
+        {job.stage === 'failed' && job.errorMessage ? (
+          <div className="coverage-banner-sub">{job.errorMessage}</div>
+        ) : null}
+        {job.stage === 'done' && (job.addedLabels?.length ?? 0) > 0 ? (
+          <div className="coverage-banner-sub">Added: {(job.addedLabels ?? []).join(', ')}</div>
+        ) : null}
+      </div>
+      {terminal ? (
+        <button type="button" className="btn sm" onClick={onDismiss}>
+          Dismiss
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function stageHeadline(stage: CoverageMapGenerationJob['stage']): string {
+  switch (stage) {
+    case 'queued':
+      return 'Queued';
+    case 'spawning':
+      return 'Starting Claude/Codex…';
+    case 'reading':
+      return 'Analyzing the codebase…';
+    case 'writing':
+      return 'Writing coverage-map.md…';
+    case 'done':
+      return 'Coverage map ready';
+    case 'failed':
+      return 'Coverage map generation failed';
   }
 }

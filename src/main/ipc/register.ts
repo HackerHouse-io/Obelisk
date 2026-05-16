@@ -70,7 +70,13 @@ import {
   handleTestPlansDismissJob,
   handleTestPlansDelete,
 } from './test-plans';
-import { handleCoverageList, handleCoverageBootstrapMap } from './coverage';
+import {
+  handleCoverageList,
+  handleCoverageBootstrapMap,
+  handleCoverageGenerateMap,
+  handleCoverageGenerationJobs,
+  handleCoverageDismissJob,
+} from './coverage';
 import {
   handleQaDoctor,
   handleQaDoctorSetup,
@@ -189,6 +195,9 @@ export function registerIpcHandlers(): void {
   // Coverage map (Phase 12 — file × case × finding × churn report)
   register('coverage:list', handleCoverageList);
   register('coverage:bootstrapMap', handleCoverageBootstrapMap);
+  register('coverage:generateMap', handleCoverageGenerateMap);
+  register('coverage:generationJobs', handleCoverageGenerationJobs);
+  register('coverage:dismissJob', handleCoverageDismissJob);
 
   // iOS QA Pilot
   register('qa:list', handleQaList);

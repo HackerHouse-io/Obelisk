@@ -1,8 +1,41 @@
 import { test, expect } from '@playwright/test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launchApp, type LaunchedApp } from './fixtures/launch';
+
+const STUB_COVERAGE_MAP_OUTPUT = `BEGIN_COVERAGE_MAP
+{
+  "features": [
+    { "label": "auth", "globs": ["src/auth/**"] },
+    { "label": "renderer-screens", "globs": ["src/renderer/screens/**"] },
+    { "label": "main-agents", "globs": ["src/main/agents/**"] },
+    { "label": "main-ipc", "globs": ["src/main/ipc/**"] },
+    { "label": "shared-types", "globs": ["src/shared/**"] }
+  ]
+}
+END_COVERAGE_MAP`;
+
+function stubClaude(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'obelisk-stub-cov-'));
+  const stub = join(dir, 'claude');
+  writeFileSync(
+    stub,
+    `#!/bin/sh
+case "$1" in
+  --version) echo "claude 0.0.0-stub"; exit 0 ;;
+esac
+cat <<'EOF'
+${STUB_COVERAGE_MAP_OUTPUT}
+EOF
+exit 0
+`,
+    'utf8',
+  );
+  chmodSync(stub, 0o755);
+  return dir;
+}
 
 /**
  * End-to-end test of the Coverage bootstrap button.
@@ -20,9 +53,12 @@ import { launchApp, type LaunchedApp } from './fixtures/launch';
  */
 
 let ctx: LaunchedApp;
+let stubDir: string | null = null;
 
 test.afterEach(async () => {
   if (ctx) await ctx.cleanup();
+  if (stubDir) rmSync(stubDir, { recursive: true, force: true });
+  stubDir = null;
 });
 
 function seedCodeFiles(repoDir: string): void {
@@ -62,7 +98,7 @@ test('Bootstrap coverage map writes the file, the banner disappears, and feature
 
   await expect(existsSync(join(ctx.repoDir, 'qa', 'coverage-map.md'))).toBe(false);
 
-  await page.getByRole('button', { name: /Bootstrap coverage map/ }).click();
+  await page.getByTestId('coverage-bootstrap-btn').click();
 
   await expect(banner).toBeHidden({ timeout: 15_000 });
 
@@ -103,22 +139,108 @@ test('Every detected feature dir is on the radar — even with zero test plans',
   for (const p of pcts) expect(p.trim()).toBe('0%');
 });
 
-test('Regenerate map: branded dialog, force-overwrite, no "already exists" alert', async () => {
+test('Regenerate spawns Claude CLI, writes LLM-proposed labels, shows progress, refreshes radar', async () => {
+  stubDir = stubClaude();
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+    pathOverride: `${stubDir}:/usr/bin:/bin`,
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Plant an existing map with a custom label that MUST survive the regen.
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(mapPath, '# Coverage map\n\n- `custom-keep-me`: `src/**`\n');
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-regenerate-btn').click();
+  // Branded confirm dialog.
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await dialog.getByRole('button', { name: /^Regenerate$/ }).click();
+
+  // Progress card appears with the running stage.
+  const progress = page.getByTestId('coverage-gen-progress');
+  await expect(progress).toBeVisible({ timeout: 5_000 });
+
+  // Job reaches "done" stage (stub returns immediately).
+  await expect(progress).toHaveAttribute('data-stage', 'done', { timeout: 30_000 });
+
+  // The map on disk now contains the stub's LLM-proposed labels AND the
+  // user-customised "custom-keep-me" label (merged, not destroyed).
+  const after = readFileSync(mapPath, 'utf8');
+  expect(after).toContain('`custom-keep-me`');
+  expect(after).toContain('`auth`');
+  expect(after).toContain('`renderer-screens`');
+  expect(after).toContain('`main-agents`');
+  expect(after).toContain('`main-ipc`');
+  expect(after).toContain('`shared-types`');
+
+  // Toast confirms what was added.
+  await expect(page.getByText(/Added \d+ new label/)).toBeVisible({ timeout: 5_000 });
+
+  // Radar reflects the new labels (only those with matching tracked files —
+  // `auth` has no src/auth in the seed so it's stale; the rest are visible).
+  const cards = page.locator('.coverage-feature-card-label');
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  const labels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
+  expect(labels).toContain('main-agents');
+  expect(labels).toContain('main-ipc');
+});
+
+test('Bootstrap (no map yet) uses Claude CLI when it is installed', async () => {
+  stubDir = stubClaude();
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+    pathOverride: `${stubDir}:/usr/bin:/bin`,
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+
+  // The banner now reads "Generate coverage map" (LLM-driven), not "Bootstrap".
+  const genBtn = page.getByTestId('coverage-bootstrap-btn');
+  await expect(genBtn).toBeVisible({ timeout: 10_000 });
+  await expect(genBtn).toContainText(/Generate coverage map/i);
+  await genBtn.click();
+
+  // Progress card streams through stages and reaches done.
+  const progress = page.getByTestId('coverage-gen-progress');
+  await expect(progress).toBeVisible({ timeout: 5_000 });
+  await expect(progress).toHaveAttribute('data-stage', 'done', { timeout: 30_000 });
+
+  // qa/coverage-map.md exists with the stub's labels.
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  expect(existsSync(mapPath)).toBe(true);
+  const content = readFileSync(mapPath, 'utf8');
+  expect(content).toContain('`auth`');
+  expect(content).toContain('`renderer-screens`');
+});
+
+test('Regenerate map MERGES: preserves existing user labels AND adds new scanner labels', async () => {
   ctx = await launchApp({
     seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
   });
   const page = ctx.window;
   seedCodeFiles(ctx.repoDir);
 
-  // Plant a hand-edited map so the Regenerate button is visible.
+  // Plant a hand-edited map with custom labels (`wealthlab`, `lessons`)
+  // that the SCANNER WOULD NOT FIND because there's no src/wealthlab/ or
+  // src/lessons/ in the seed. They're plan-only / user-only labels and
+  // regenerate must preserve them.
   const mapDir = join(ctx.repoDir, 'qa');
   const mapPath = join(mapDir, 'coverage-map.md');
   mkdirSync(mapDir, { recursive: true });
-  writeFileSync(mapPath, '# Coverage map\n\n- `legacy`: `**/*.legacy`\n');
-  const before = readFileSync(mapPath, 'utf8');
+  writeFileSync(
+    mapPath,
+    '# Coverage map\n\n' +
+      '- `wealthlab`: `**/wealthlab/**`\n' +
+      '- `lessons`: `**/lessons/**`\n' +
+      '- `main`: `src/main/ipc/**`\n', // user customised the main glob
+  );
 
-  // Fail the test the moment any native dialog is shown — we should never
-  // surface macOS-native confirms.
   let nativeDialogSeen = false;
   ctx.app.on('window', (w) => {
     w.on('dialog', () => {
@@ -127,51 +249,137 @@ test('Regenerate map: branded dialog, force-overwrite, no "already exists" alert
   });
 
   await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-regenerate-btn').click();
 
-  const regenBtn = page.getByTestId('coverage-regenerate-btn');
-  await expect(regenBtn).toBeVisible({ timeout: 10_000 });
-  await regenBtn.click();
-
-  // The branded ConfirmDialog appears with our own classes (modal-overlay
-  // + role="alertdialog"), NOT the OS confirm.
   const dialog = page.locator('[role="alertdialog"]');
   await expect(dialog).toBeVisible({ timeout: 5_000 });
-  await expect(dialog).toContainText(/Regenerate.*coverage-map\.md/i);
+  await dialog.getByRole('button', { name: /^Regenerate$/ }).click();
 
-  // Click the branded Regenerate confirm button (NOT the trigger button — both
-  // contain the word "Regenerate", so disambiguate by role+name within the dialog).
-  await dialog.getByRole('button', { name: /Regenerate/i }).click();
-
-  // Wait for the file to be overwritten on disk. force:true MUST replace the
-  // legacy hand-edit with the live-scanned labels.
+  // Wait for the file to be rewritten.
   await expect
-    .poll(() => readFileSync(mapPath, 'utf8'), { timeout: 15_000 })
-    .not.toBe(before);
+    .poll(
+      () => {
+        const txt = readFileSync(mapPath, 'utf8');
+        // The scanner adds `renderer` etc — wait until the file has more
+        // labels than we planted.
+        const labelLines = txt.split('\n').filter((l) => /^-\s+`/.test(l));
+        return labelLines.length;
+      },
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(3);
+
   const after = readFileSync(mapPath, 'utf8');
-  expect(after).not.toContain('`legacy`');
-  expect(after).toMatch(/`main`/);
+
+  // 1) USER LABELS PRESERVED — the heart of the merge bug.
+  expect(after).toContain('`wealthlab`');
+  expect(after).toContain('`lessons`');
+
+  // 2) USER-CUSTOMISED GLOB PRESERVED — the scanner would have written
+  //    `src/main/**` but the user's `src/main/ipc/**` must win.
+  expect(after).toContain('`main`: `src/main/ipc/**`');
+  expect(after).not.toContain('`main`: `src/main/**`');
+
+  // 3) NEW SCANNER LABELS ADDED.
   expect(after).toMatch(/`renderer`/);
+  expect(after).toMatch(/`shared`/);
 
-  // A success alert appears confirming the regenerate ran — this is the
-  // load-bearing visible feedback (without it, the user thinks the button
-  // is dead when the live scan returns the same labels as before).
-  const successAlert = page.getByText(/Regenerated qa\/coverage-map\.md/);
-  await expect(successAlert).toBeVisible({ timeout: 5_000 });
+  // 4) Success toast appears showing what was ADDED — never "removed N".
+  await expect(page.getByText(/Added \d+ new labels?/)).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText(/removed \d+ label/)).toHaveCount(0);
 
-  // The "Coverage map already exists" alert must NOT appear — that text
-  // means the backend rejected the write, which would be the bug the user hit.
-  const errorAlert = page.getByText('Coverage map already exists');
-  await expect(errorAlert).toHaveCount(0);
-
-  // No native macOS dialog was ever shown.
+  // 5) Banner doesn't reappear, no error alert, no native dialog.
+  await expect(page.getByText('Coverage map already exists')).toHaveCount(0);
   expect(nativeDialogSeen).toBe(false);
 
-  // Radar visibly reflects the new labels.
+  // 6) Radar reflects the scanner-added labels (the user's wealthlab/lessons
+  //    don't have matching dirs in this fixture so they're stale — that's
+  //    correct behavior, just not what we assert here).
   const cards = page.locator('.coverage-feature-card-label');
   await expect(cards.first()).toBeVisible({ timeout: 10_000 });
   const labels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
   expect(labels).toContain('main');
   expect(labels).toContain('renderer');
+});
+
+test('Regenerate adds a brand-new feature dir to the existing map', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Initial map with the labels the scanner would find on seed (main, renderer, shared).
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(
+    mapPath,
+    '# Coverage map\n\n- `main`: `src/main/**`\n- `renderer`: `src/renderer/**`\n- `shared`: `src/shared/**`\n',
+  );
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  // Count features BEFORE.
+  const cards = page.locator('.coverage-feature-card-label');
+  await expect(cards.first()).toBeVisible({ timeout: 10_000 });
+  const before = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
+
+  // User adds a brand-new feature directory after the initial bootstrap.
+  const newFeatureDir = join(ctx.repoDir, 'src', 'analytics');
+  mkdirSync(newFeatureDir, { recursive: true });
+  for (const f of ['index.ts', 'collector.ts', 'reporter.ts']) {
+    writeFileSync(join(newFeatureDir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "add analytics feature"', { cwd: ctx.repoDir });
+
+  // Regenerate.
+  await page.getByTestId('coverage-regenerate-btn').click();
+  await page.locator('[role="alertdialog"]').getByRole('button', { name: /^Regenerate$/ }).click();
+
+  // Toast confirms the new label was added.
+  await expect(page.getByText(/Added 1 new label/)).toBeVisible({ timeout: 5_000 });
+
+  // File on disk contains BOTH old and new labels.
+  const after = readFileSync(mapPath, 'utf8');
+  expect(after).toContain('`main`');
+  expect(after).toContain('`renderer`');
+  expect(after).toContain('`shared`');
+  expect(after).toContain('`analytics`');
+
+  // Radar now has analytics in addition to everything before.
+  // (Use poll because the toast + load() are async.)
+  await expect
+    .poll(
+      async () => {
+        const labels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
+        return labels.includes('analytics');
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  const finalLabels = (await cards.allInnerTexts()).map((s) => s.trim().toLowerCase());
+  for (const old of before) expect(finalLabels).toContain(old);
+});
+
+test('Regenerate on an up-to-date map shows "already up to date" toast', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // First bootstrap (initial), then regenerate immediately — nothing changed.
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-bootstrap-btn').click();
+  await expect(page.getByTestId('coverage-regenerate-btn')).toBeVisible({ timeout: 10_000 });
+  // Dismiss the "Wrote..." toast.
+  const wroteOk = page.getByRole('button', { name: 'OK' });
+  if (await wroteOk.count()) await wroteOk.click();
+
+  await page.getByTestId('coverage-regenerate-btn').click();
+  await page.locator('[role="alertdialog"]').getByRole('button', { name: /^Regenerate$/ }).click();
+
+  await expect(page.getByText(/Map already up to date/i)).toBeVisible({ timeout: 5_000 });
 });
 
 test('Regenerate cancel keeps the existing map intact', async () => {
@@ -215,7 +423,7 @@ test('Bootstrap overrides a stale/empty coverage-map.md and populates the radar'
   const banner = page.locator('.coverage-banner-info');
   await expect(banner).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole('button', { name: /Bootstrap coverage map/ }).click();
+  await page.getByTestId('coverage-bootstrap-btn').click();
 
   // Banner disappears (hasCoverageMap flips true) and features appear.
   await expect(banner).toBeHidden({ timeout: 15_000 });
