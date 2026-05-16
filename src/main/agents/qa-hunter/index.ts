@@ -68,6 +68,7 @@ export const qaHunterHandler: AgentHandler = {
       task: {
         ref: `plan:${plan.frontmatter.id}`,
         kind: 'sweep',
+        summary: `Run ${plan.frontmatter.name} on ${input.repo.githubFullName}`,
         context:
           `Run ${plan.frontmatter.name} against ${input.repo.githubFullName}. Execute every test case in the assigned plan and emit findings as JSON.\n\nGenerated at ${ts}.` +
           knownBlock,

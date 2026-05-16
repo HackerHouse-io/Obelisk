@@ -7,6 +7,8 @@ import { AgentEnabledToast } from '../components/AgentEnabledToast';
 import { AgentAutoPausedToast } from '../components/AgentAutoPausedToast';
 import { RunnerAuthBanner } from '../components/RunnerAuthBanner';
 import { GlobalAlert } from '../components/GlobalAlert';
+import { GlobalConfirm } from '../components/GlobalConfirm';
+import { GlobalFolderPicker } from '../components/GlobalFolderPicker';
 
 interface Props {
   children: ReactNode;
@@ -26,6 +28,8 @@ export function Shell({ children }: Props): ReactElement {
       <AgentEnabledToast />
       <AgentAutoPausedToast />
       <GlobalAlert />
+      <GlobalConfirm />
+      <GlobalFolderPicker />
     </div>
   );
 }

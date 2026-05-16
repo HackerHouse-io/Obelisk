@@ -272,6 +272,7 @@ function wrap(item: NonNullable<ReturnType<typeof getBacklogItem>>): SelectedTas
     task: {
       ref: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
       kind: 'bug',
+      summary: item.title,
       context: item.title,
       ...(item.githubIssue ? { githubNumber: item.githubIssue } : {}),
     },

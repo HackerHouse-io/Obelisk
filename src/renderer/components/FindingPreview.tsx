@@ -15,6 +15,12 @@ interface Props {
    */
   onUndismiss?: (finding: PreviewedFinding) => void;
   defaultExpanded?: boolean;
+  /**
+   * Hide write controls (Review & open, Not a bug, Undismiss, the X
+   * dismiss button). The "Published #N" GitHub link stays — that's a
+   * read-only navigation. Used by the Archive screen.
+   */
+  readOnly?: boolean;
 }
 
 const SEVERITY_TONE: Record<FindingSeverity, string> = {
@@ -29,6 +35,7 @@ export function FindingPreview({
   onDismiss,
   onUndismiss,
   defaultExpanded = false,
+  readOnly = false,
 }: Props): ReactElement {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const isPublished = finding.published !== null;
@@ -86,6 +93,15 @@ export function FindingPreview({
               <Icon.GitHub size={11} /> #{finding.published.issueNumber}
               <Icon.External size={10} />
             </a>
+          ) : readOnly ? (
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => onOpen(finding)}
+              title="Read the full finding (read-only)"
+            >
+              <Icon.Doc size={11} /> View
+            </button>
           ) : (
             <>
               <button
@@ -121,7 +137,7 @@ export function FindingPreview({
               ) : null}
             </>
           )}
-          {onDismiss && !finding.dismissed ? (
+          {!readOnly && onDismiss && !finding.dismissed ? (
             <button
               type="button"
               className="btn ghost icon"

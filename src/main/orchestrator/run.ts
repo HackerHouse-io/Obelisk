@@ -175,7 +175,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       agentId: agentRow?.id ?? null,
       trigger: input.trigger,
       taskRef: selected.task.ref,
-      taskContext: selected.task.context ?? null,
+      taskContext: summaryForRun(selected.task),
       runnerUsed: runnerKind,
     });
   } catch (e) {
@@ -213,7 +213,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       input.onStarted({
         runId: run.id,
         taskRef: selected.task.ref ?? null,
-        taskContext: selected.task.context ?? null,
+        taskContext: summaryForRun(selected.task),
       });
     } catch {
       // ignore
@@ -326,24 +326,35 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     // 6) Run with auto-fallback policy. The CLI authenticates itself —
     //    Obelisk doesn't pass credentials. The shared abort signal lets
     //    `agents:cancel` terminate the spawn from the IPC layer.
+    //
+    // Markers whose `caseId` is not in the assigned plan's `caseRefs` are
+    // recorded as `case_progress_orphan` instead — the renderer's Plan tab
+    // surfaces them as a small "untracked markers" footnote and does NOT
+    // count them against the plan's pass/fail/skipped tallies. This catches
+    // prompt drift (agent inventing or truncating ids) without losing the
+    // signal entirely.
+    const planCaseIdSet = new Set<string>(
+      (selected.task.assignedPlan?.caseRefs ?? []).map((c) => c.caseId),
+    );
     const caseTracker = new CaseProgressTracker((evt) => {
-      // Persist a per-case audit row + broadcast so the Plan Progress tab
-      // updates live. The renderer derives the per-case grid from these rows.
+      const inPlan = planCaseIdSet.size === 0 || planCaseIdSet.has(evt.caseId);
       appendAudit({
         runId: run.id,
-        kind: 'case_progress',
+        kind: inPlan ? 'case_progress' : 'case_progress_orphan',
         payload: {
           caseId: evt.caseId,
           status: evt.status,
           ...(evt.detail ? { detail: evt.detail } : {}),
         },
       });
-      broadcast({
-        type: 'run.caseProgress',
-        runId: run.id,
-        caseId: evt.caseId,
-        status: evt.status,
-      });
+      if (inPlan) {
+        broadcast({
+          type: 'run.caseProgress',
+          runId: run.id,
+          caseId: evt.caseId,
+          status: evt.status,
+        });
+      }
     });
     const runResult = await runWithFallback({
       runId: run.id,
@@ -809,6 +820,24 @@ async function readCommitsOnBranch(
 }
 
 /**
+ * Single-line, ≤120-char label for run rows. Agents that set
+ * `task.summary` get it verbatim (subject to truncation); otherwise we
+ * derive a label from the first non-empty line of `task.context`. The
+ * fallback exists so a future agent that forgets `summary` can't leak
+ * a multi-paragraph prompt body into the run-started toast / Mission
+ * Control card title.
+ */
+const SUMMARY_MAX_LEN = 120;
+function summaryForRun(task: import('../prompt-compiler').TaskPayload): string | null {
+  const raw = task.summary ?? task.context ?? '';
+  const firstLine = raw.split(/\r?\n/).find((line) => line.trim().length > 0) ?? '';
+  const trimmed = firstLine.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length <= SUMMARY_MAX_LEN) return trimmed;
+  return trimmed.slice(0, SUMMARY_MAX_LEN - 1).trimEnd() + '…';
+}
+
+/**
  * Assemble a SelectedTask for a CI-retry resumed run. The orchestrator uses
  * this in place of `handler.selectTask` so the retry doesn't pop a different
  * issue off the backlog.
@@ -836,6 +865,7 @@ function buildResumedSelectedTask(
     task: {
       ref: ctx.taskRef,
       kind: 'bug',
+      summary: `CI retry: ${ctx.originalTitle}`,
       context,
       ...(ctx.githubNumber ? { githubNumber: ctx.githubNumber } : {}),
     },

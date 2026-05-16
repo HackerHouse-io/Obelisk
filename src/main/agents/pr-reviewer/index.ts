@@ -133,6 +133,7 @@ export const prReviewerHandler: AgentHandler = {
           task: {
             ref: taskRef,
             kind: 'review',
+            summary: `Reviewing PR #${pr.number}: ${pr.title}`,
             context: prContextFor(pr, {
               fixMode: false,
               hasConflicts: false,
@@ -186,6 +187,7 @@ export const prReviewerHandler: AgentHandler = {
         task: {
           ref: taskRef,
           kind: 'review',
+          summary: `${fixMode ? 'Fixing' : 'Reviewing'} PR #${pr.number}: ${pr.title}`,
           context: prContextFor(pr, { fixMode, hasConflicts, baseBranch }),
           githubNumber: pr.number,
         },

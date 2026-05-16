@@ -148,6 +148,7 @@ export const featureBuilderHandler: AgentHandler = {
         task: {
           ref: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
           kind: 'feature',
+          summary: item.title,
           context: item.title,
           ...(item.githubIssue ? { githubNumber: item.githubIssue } : {}),
         },

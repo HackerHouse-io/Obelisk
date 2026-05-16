@@ -1,4 +1,4 @@
-import { app, dialog } from 'electron';
+import { app } from 'electron';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -185,19 +185,6 @@ export async function handleReposBugFixerSettings(
     mergeQueueEnabled: getSetting<boolean>(scope, 'merge_queue_enabled') ?? false,
     cap: getSetting<number>(scope, 'bug_fixer_cap') ?? 3,
   };
-}
-
-/**
- * Surface OS folder-picker through IPC. Returns null if the user cancels.
- */
-export async function handleReposPickFolder(): Promise<IpcMap['repos:pickFolder']['res']> {
-  const result = await dialog.showOpenDialog({
-    properties: ['openDirectory', 'showHiddenFiles'],
-    title: 'Pick the root of a local git clone',
-    buttonLabel: 'Connect this folder',
-  });
-  if (result.canceled || result.filePaths.length === 0) return { path: null };
-  return { path: result.filePaths[0] ?? null };
 }
 
 /**

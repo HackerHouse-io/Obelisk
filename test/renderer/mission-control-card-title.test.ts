@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeTaskRef } from '../../src/renderer/screens/MissionControl';
+import { formatCardCounts } from '../../src/renderer/screens/mission-control-helpers';
 
 const NO_PLANS = new Map<string, string>();
 
@@ -76,5 +77,56 @@ describe('describeTaskRef', () => {
       expect(out.title).toBe('weird-shape:abc');
       expect(out.subtitle).toBeNull();
     });
+  });
+});
+
+describe('formatCardCounts', () => {
+  it('returns null when no counts are available', () => {
+    expect(formatCardCounts(null)).toBeNull();
+  });
+
+  it('returns null when every count is zero (e.g. live run with no markers yet)', () => {
+    expect(
+      formatCardCounts({ passed: 0, failed: 0, skipped: 0, inconclusive: 0, untracked: 0 }),
+    ).toBeNull();
+  });
+
+  it('produces just pass + fail pills when skipped/inconclusive/untracked are zero', () => {
+    const out = formatCardCounts({
+      passed: 28,
+      failed: 4,
+      skipped: 0,
+      inconclusive: 0,
+      untracked: 0,
+    });
+    expect(out?.text).toBe('✓ 28 · ✗ 4');
+    expect(out?.pills.map((p) => p.state)).toEqual(['passed', 'failed']);
+  });
+
+  it('includes a skipped pill only when skipped > 0', () => {
+    const out = formatCardCounts({
+      passed: 5,
+      failed: 1,
+      skipped: 3,
+      inconclusive: 0,
+      untracked: 0,
+    });
+    expect(out?.pills.map((p) => p.state)).toEqual(['passed', 'failed', 'skipped']);
+    expect(out?.text).toContain('3 skipped');
+  });
+
+  it('surfaces untracked agent markers as a trailing pill', () => {
+    // The screenshot scenario: the agent emitted markers with non-plan ids
+    // so the plan totals are zero, but the card should still tell the user
+    // the agent did do work.
+    const out = formatCardCounts({
+      passed: 0,
+      failed: 0,
+      skipped: 32,
+      inconclusive: 0,
+      untracked: 32,
+    });
+    expect(out?.pills.map((p) => p.state)).toEqual(['skipped', 'untracked']);
+    expect(out?.text).toBe('32 skipped · +32 untracked');
   });
 });

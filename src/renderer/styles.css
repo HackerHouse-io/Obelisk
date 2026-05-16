@@ -1277,6 +1277,40 @@ body {
   border-bottom-color: var(--t-3);
 }
 
+.mc-card-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.mc-card-count-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+.mc-card-count-pill-passed {
+  background: var(--ok-soft, rgba(76, 175, 80, 0.12));
+  color: var(--ok, #4caf50);
+  border-color: var(--ok-line, rgba(76, 175, 80, 0.28));
+}
+.mc-card-count-pill-failed {
+  background: var(--bad-soft, rgba(239, 83, 80, 0.12));
+  color: var(--bad, #ef5350);
+  border-color: var(--bad-line, rgba(239, 83, 80, 0.28));
+}
+.mc-card-count-pill-skipped,
+.mc-card-count-pill-untracked,
+.mc-card-count-pill-inconclusive {
+  background: var(--bg-2);
+  color: var(--t-2);
+  border-color: var(--line);
+}
 .mc-card-foot {
   display: flex;
   align-items: baseline;
@@ -3707,11 +3741,8 @@ body {
 }
 
 .mc-plan-case {
-  display: grid;
-  grid-template-columns: 18px 30px 1fr;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 6px 6px;
+  display: flex;
+  flex-direction: column;
   border-radius: var(--r-2);
   border: 1px solid transparent;
 }
@@ -3724,6 +3755,88 @@ body {
 }
 .mc-plan-case:hover {
   background: var(--bg-2);
+}
+.mc-plan-case-failed:hover {
+  background: var(--bad-soft);
+}
+
+.mc-plan-case-head {
+  display: grid;
+  grid-template-columns: 18px 30px 1fr auto;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 6px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+}
+.mc-plan-case-head-clickable {
+  cursor: pointer;
+}
+.mc-plan-case-head-clickable:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+  border-radius: var(--r-2);
+}
+.mc-plan-case-chevron {
+  align-self: center;
+  display: inline-flex;
+  transition: transform 0.12s ease;
+  color: var(--t-3);
+}
+
+.mc-plan-case-detail {
+  padding: 8px 10px 10px 10px;
+  border-top: 1px dashed var(--bad-line, var(--line));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mc-plan-case-detail-body {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--t-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+.mc-plan-case-detail-reason {
+  font-size: 12px;
+  color: var(--t-1);
+  line-height: 1.5;
+}
+.mc-plan-case-detail-key {
+  color: var(--t-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  margin-right: 4px;
+}
+.mc-plan-case-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mc-plan-untracked {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--t-3);
+  line-height: 1.4;
+}
+.mc-plan-untracked .mono {
+  font-family: var(--font-mono, monospace);
+  color: var(--t-2);
 }
 
 .mc-plan-case-icon {
@@ -4852,6 +4965,167 @@ body {
   }
 }
 
+/* ---------- Folder picker (replaces native OS folder dialog) ---------- */
+
+.modal-panel.folder-picker {
+  width: min(560px, calc(100vw - 80px));
+  padding: 14px 14px 12px;
+  gap: 10px;
+}
+
+.folder-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.folder-picker-header .modal-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-picker-pathbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 30px;
+}
+
+.folder-picker-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--t-2);
+  scrollbar-width: none;
+}
+
+.folder-picker-breadcrumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.folder-picker-crumb {
+  display: inline-flex;
+  align-items: center;
+}
+
+.folder-picker-crumb-btn {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--t-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.folder-picker-crumb-btn:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--t-0);
+}
+
+.folder-picker-crumb-btn.current {
+  color: var(--t-0);
+  cursor: default;
+}
+
+.folder-picker-crumb-sep {
+  color: var(--t-3);
+  padding: 0 2px;
+}
+
+.folder-picker-list {
+  max-height: 320px;
+  min-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-0);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.folder-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--t-1);
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+
+.folder-picker-row:hover {
+  background: var(--bg-3);
+  color: var(--t-0);
+}
+
+.folder-picker-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-row svg:last-child {
+  color: var(--t-3);
+  opacity: 0.6;
+}
+
+.folder-picker-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--t-3);
+}
+
+.folder-picker-empty.folder-picker-error {
+  color: oklch(80% 0.14 18);
+}
+
+.folder-picker-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.folder-picker-footer .modal-actions {
+  flex: 1;
+  margin-top: 0;
+}
+
+.folder-picker-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--t-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.folder-picker-hidden-toggle input {
+  accent-color: var(--brand);
+}
+
 /* ---------- Remove-run dialog ---------- */
 
 .modal-panel.remove-run-dialog {
@@ -5146,12 +5420,73 @@ body {
 }
 
 .archive-detail {
-  width: 380px;
+  width: 560px;
   border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-1);
+}
+
+.archive-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px 0 12px;
+}
+
+.archive-detail-meta .archive-detail-timeline {
+  font-size: 11px;
+  color: var(--t-3);
+  margin-left: 4px;
+}
+
+/* Shared inspector embedded in both .mc-drawer and .archive-detail —
+   must take the remaining column space and let .mc-tab-body scroll. */
+.run-inspector {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-inspector-outcome {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.run-inspector-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--t-2);
+  font-size: 11.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.run-inspector-chip-link {
+  color: var(--t-1);
+  cursor: pointer;
+  transition:
+    border-color 80ms ease,
+    background 80ms ease;
+}
+
+.run-inspector-chip-link:hover {
+  border-color: var(--brand);
+  background: var(--bg-2);
 }
 
 .archive-detail-header {

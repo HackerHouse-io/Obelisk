@@ -174,6 +174,10 @@ export interface AuditLine {
    * - `stdout` / `stderr` — payload is a raw string line (Codex, plain text fallback).
    * - `state` — orchestrator stage transition.
    * - `case_progress`, `reasoning`, `evidence_check` — orchestrator markers.
+   * - `case_progress_orphan` — same payload shape as `case_progress` but the
+   *   `caseId` wasn't in the run's assigned plan. Recorded for diagnostics so
+   *   prompt-drift (agent echoing the wrong id) is visible to the user as a
+   *   footnote without inflating plan counts.
    */
   kind: string;
   payload: unknown;
@@ -457,6 +461,16 @@ export interface IpcMap {
   'auth:capabilities': { req: void; res: { deviceFlow: boolean } };
   'auth:signOut': { req: void; res: { ok: true } };
 
+  // Filesystem (read-only directory listing for the branded folder picker)
+  'fs:listDir': {
+    req: { path?: string; showHidden?: boolean };
+    res: {
+      path: string;
+      parent: string | null;
+      entries: { name: string; isDir: boolean; isHidden: boolean }[];
+    };
+  };
+
   // Repos
   'repos:list': { req: void; res: Repo[] };
   'repos:connect': { req: { localPath?: string; githubFullName?: string }; res: Repo };
@@ -473,7 +487,6 @@ export interface IpcMap {
     };
     res: { mergeQueueEnabled: boolean; cap: number };
   };
-  'repos:pickFolder': { req: void; res: { path: string | null } };
   'repos:listGitHubRepos': {
     req: void;
     res: {
@@ -671,6 +684,26 @@ export interface IpcMap {
   };
   'previews:dismiss': { req: { previewId: number }; res: { ok: true } };
   'previews:undismiss': { req: { previewId: number }; res: { ok: true } };
+  /**
+   * Synthesize a preview row from a failed plan case when the QA agent
+   * emitted CASE_FAIL but did not produce a finding. Returns the new
+   * preview so the renderer can hand it straight to FileIssueModal —
+   * the existing `previews:fileIssue` flow then publishes it like any
+   * other preview. Manual drafts are saved with `fingerprint: null`
+   * so they don't dedupe against future agent findings.
+   */
+  'previews:createDraftFromCase': {
+    req: {
+      runId: string;
+      caseId: string;
+      caseTitle: string;
+      expected: string | null;
+      repro: string | null;
+      severity: FindingSeverity | null;
+      failureDetail: string | null;
+    };
+    res: PreviewedFinding;
+  };
   // Foreground sync against GitHub for the Command Center "Task previews"
   // card. Drives the refresh button: triggers the same sweep that runs every
   // ~2 min in the background (additive backlog upserts + closed-issue reaper

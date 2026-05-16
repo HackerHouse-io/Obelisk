@@ -15,10 +15,10 @@ import {
   handleReposList,
   handleReposConnect,
   handleReposSetMode,
-  handleReposPickFolder,
   handleReposListGitHubRepos,
   handleReposBugFixerSettings,
 } from './repos';
+import { handleFsListDir } from './fs';
 import { handleAllowlistList, handleAllowlistAdd, handleAllowlistRemove } from './allowlist';
 import {
   handleAgentsList,
@@ -59,6 +59,7 @@ import {
   handlePreviewsDismiss,
   handlePreviewsUndismiss,
   handlePreviewsRefresh,
+  handlePreviewsCreateDraftFromCase,
 } from './previews';
 import {
   handleTestPlansList,
@@ -121,8 +122,10 @@ export function registerIpcHandlers(): void {
   register('repos:connect', handleReposConnect);
   register('repos:setMode', handleReposSetMode);
   register('repos:bugFixerSettings', handleReposBugFixerSettings);
-  register('repos:pickFolder', handleReposPickFolder);
   register('repos:listGitHubRepos', handleReposListGitHubRepos);
+
+  // Filesystem (read-only — drives the branded folder picker)
+  register('fs:listDir', handleFsListDir);
 
   // Allowlist (Phase 2 — real)
   register('allowlist:list', handleAllowlistList);
@@ -172,6 +175,7 @@ export function registerIpcHandlers(): void {
   register('previews:dismiss', handlePreviewsDismiss);
   register('previews:undismiss', handlePreviewsUndismiss);
   register('previews:refresh', handlePreviewsRefresh);
+  register('previews:createDraftFromCase', handlePreviewsCreateDraftFromCase);
 
   // Test plans (gate the QA agent run flow)
   register('testPlans:list', handleTestPlansList);

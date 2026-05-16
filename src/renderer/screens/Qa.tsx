@@ -3,6 +3,7 @@ import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { EmptyState } from '../ui/EmptyState';
 import { DoctorPanel } from '../components/DoctorPanel';
+import { showConfirm } from '../state/confirm-store';
 import type { DoctorReport, QaFlow, QaFlowStatus } from '../../shared/types';
 
 export function Qa(): ReactElement {
@@ -117,14 +118,16 @@ export function Qa(): ReactElement {
 
   async function reset(scope: 'unverified' | 'all'): Promise<void> {
     if (!repo) return;
-    if (
-      !confirm(
+    const ok = await showConfirm({
+      title: scope === 'all' ? 'Reset all flows?' : 'Reset all unverified flows?',
+      body:
         scope === 'all'
-          ? 'Reset ALL flows including any currently running? Running runs continue but their writes are dropped.'
-          : 'Reset all unverified flows? Running flows continue and may write back results.',
-      )
-    )
-      return;
+          ? 'Includes any currently running flows. Running runs continue, but their writes are dropped.'
+          : 'Running flows continue and may write back results.',
+      confirmLabel: 'Reset',
+      tone: 'danger',
+    });
+    if (!ok) return;
     const res = await window.obelisk.invoke('qa:reset', { repoId: repo.id, scope });
     if (!res.ok) setError(res.error.message);
     void refreshFlows();

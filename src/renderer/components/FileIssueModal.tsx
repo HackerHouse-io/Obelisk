@@ -19,6 +19,13 @@ interface Props {
   onClose: () => void;
   /** Called after the issue is filed; parent should refresh its list. */
   onFiled: (issueNumber: number, htmlUrl: string) => void;
+  /**
+   * Read-only mode: inputs stay editable for local exploration but the
+   * submit button is disabled with an explanatory label. Used by the
+   * Archive screen so users can read a finding's full body without
+   * accidentally filing an issue from an archived run.
+   */
+  readOnly?: boolean;
 }
 
 interface PostState {
@@ -27,7 +34,13 @@ interface PostState {
   issue?: { issueNumber: number; htmlUrl: string };
 }
 
-export function FileIssueModal({ open, finding, onClose, onFiled }: Props): ReactElement | null {
+export function FileIssueModal({
+  open,
+  finding,
+  onClose,
+  onFiled,
+  readOnly = false,
+}: Props): ReactElement | null {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [labels, setLabels] = useState<string[]>([]);
@@ -100,6 +113,7 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
+    if (readOnly) return;
     if (!finding || !title.trim() || post.status === 'sending') return;
     setPost({ status: 'sending' });
     const res = await window.obelisk.invoke('previews:fileIssue', {
@@ -257,14 +271,19 @@ export function FileIssueModal({ open, finding, onClose, onFiled }: Props): Reac
 
           <div className="modal-actions file-issue-actions">
             <button type="button" className="btn ghost" onClick={onClose} disabled={sending}>
-              Cancel
+              {readOnly ? 'Close' : 'Cancel'}
             </button>
             <button
               type="submit"
               className="btn primary"
-              disabled={!title.trim() || sending || sent}
+              disabled={readOnly || !title.trim() || sending || sent}
+              title={readOnly ? 'Restore this run to file the issue from here' : undefined}
             >
-              {sending ? (
+              {readOnly ? (
+                <>
+                  <Icon.GitHub size={12} /> Read-only (restore to file)
+                </>
+              ) : sending ? (
                 <>
                   <Icon.Spinner size={12} /> Opening…
                 </>

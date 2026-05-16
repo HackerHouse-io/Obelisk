@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { EmptyState } from '../ui/EmptyState';
+import { RunInspector } from '../components/RunInspector';
 import { showApiAlert } from '../state/alert-store';
-import { labelForAgent, humanizeAgo, shortTime, formatBytes } from '../format';
+import { showConfirm } from '../state/confirm-store';
+import { labelForAgent, humanizeAgo } from '../format';
 import { describeTaskRef } from './MissionControl';
-import type { AuditLine, EvidenceItem, Run, RunState, TestPlanSummary } from '../../shared/types';
+import type { Run, RunState, TestPlanSummary } from '../../shared/types';
 
 function stateClassFor(state: RunState): string {
   if (state === 'done') return 'done';
@@ -27,10 +29,6 @@ export function Archive(): ReactElement {
   const [rows, setRows] = useState<Run[]>([]);
   const [query, setQuery] = useState('');
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [details, setDetails] = useState<{
-    auditLog: AuditLine[];
-    evidence: EvidenceItem[];
-  } | null>(null);
   const [planSummaries, setPlanSummaries] = useState<TestPlanSummary[]>([]);
 
   const planNames = useMemo(() => {
@@ -82,24 +80,6 @@ export function Archive(): ReactElement {
     return () => window.removeEventListener('obelisk:archive-changed', handler);
   }, [refresh, query]);
 
-  // Load detail panel when a row is selected. The cancelled flag guards
-  // against the user clicking rapidly through rows: a slow response for an
-  // earlier row must not overwrite the fresh row's details.
-  useEffect(() => {
-    if (!selectedRunId) {
-      setDetails(null);
-      return;
-    }
-    let cancelled = false;
-    void window.obelisk.invoke('runs:get', { runId: selectedRunId }).then((res) => {
-      if (cancelled) return;
-      if (res.ok) setDetails({ auditLog: res.value.auditLog, evidence: res.value.evidence });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRunId]);
-
   const handleRestore = async (runId: string): Promise<void> => {
     const res = await window.obelisk.invoke('archive:restore', { runId });
     if (!res.ok) {
@@ -111,12 +91,14 @@ export function Archive(): ReactElement {
   };
 
   const handleDeletePermanent = async (runId: string, label: string): Promise<void> => {
-    if (
-      !confirm(
-        `Delete ${label} permanently? The run, audit log, and saved evidence are gone for good.`,
-      )
-    )
-      return;
+    const ok = await showConfirm({
+      title: `Delete ${label} permanently?`,
+      body: 'The run, audit log, and saved evidence are gone for good.',
+      confirmLabel: 'Delete',
+      confirmIcon: 'Trash',
+      tone: 'danger',
+    });
+    if (!ok) return;
     const res = await window.obelisk.invoke('runs:delete', { runId });
     if (!res.ok) {
       showApiAlert(res.error, 'delete run');
@@ -128,13 +110,14 @@ export function Archive(): ReactElement {
 
   const handleDeleteAll = async (): Promise<void> => {
     if (rows.length === 0 || !repo) return;
-    if (
-      !confirm(
-        `Delete ${rows.length} archived run${rows.length === 1 ? '' : 's'} permanently? Their audit logs and evidence will be removed too.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await showConfirm({
+      title: `Delete ${rows.length} archived run${rows.length === 1 ? '' : 's'} permanently?`,
+      body: 'Their audit logs and evidence will be removed too.',
+      confirmLabel: 'Delete all',
+      confirmIcon: 'Trash',
+      tone: 'danger',
+    });
+    if (!ok) return;
     const res = await window.obelisk.invoke('archive:deleteAll', { repoId: repo.id });
     if (!res.ok) {
       showApiAlert(res.error, 'delete all');
@@ -285,7 +268,7 @@ export function Archive(): ReactElement {
         {selectedRow ? (
           <ArchiveDetail
             run={selectedRow}
-            details={details}
+            repoFullName={repo.githubFullName}
             onClose={() => setSelectedRunId(null)}
           />
         ) : null}
@@ -296,11 +279,11 @@ export function Archive(): ReactElement {
 
 function ArchiveDetail({
   run,
-  details,
+  repoFullName,
   onClose,
 }: {
   run: Run;
-  details: { auditLog: AuditLine[]; evidence: EvidenceItem[] } | null;
+  repoFullName: string | null;
   onClose: () => void;
 }): ReactElement {
   return (
@@ -312,63 +295,19 @@ function ArchiveDetail({
           <Icon.Close size={11} />
         </button>
       </div>
-
-      <div className="archive-detail-body">
-        <div className="archive-detail-pills">
-          <span className="pill">{labelForAgent(run.agentName)}</span>
-          <span className="pill">{run.runnerUsed}</span>
-          {run.fallbackUsed ? <span className="pill warn">fallback</span> : null}
-          {run.errorCode ? <span className="pill bad">{run.errorCode}</span> : null}
-        </div>
-
-        {run.outputSummary ? (
-          <div className="archive-detail-summary">{run.outputSummary}</div>
-        ) : null}
-
-        <div className="archive-detail-timeline">
+      <div className="archive-detail-meta">
+        <span className="pill">{labelForAgent(run.agentName)}</span>
+        <span className="pill">{run.runnerUsed}</span>
+        {run.fallbackUsed ? <span className="pill warn">fallback</span> : null}
+        {run.errorCode ? <span className="pill bad">{run.errorCode}</span> : null}
+        <span className="archive-detail-timeline">
           {run.startedAt ? `Started ${humanizeAgo(run.startedAt)}` : 'Never started'}
           {run.finishedAt ? ` · Finished ${humanizeAgo(run.finishedAt)}` : ''}
           {run.archivedAt ? ` · Archived ${humanizeAgo(run.archivedAt)}` : ''}
-        </div>
-
-        <div>
-          <div className="archive-detail-section-label">
-            Evidence ({details?.evidence.length ?? 0})
-          </div>
-          {details && details.evidence.length > 0 ? (
-            <ul className="archive-detail-list">
-              {details.evidence.map((e) => (
-                <li key={e.path} className="archive-detail-evidence-row">
-                  <span>
-                    {e.kind} · {e.path.split('/').pop()}
-                  </span>
-                  <span className="archive-detail-bytes">{formatBytes(e.bytes)}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="archive-detail-empty">No evidence saved.</div>
-          )}
-        </div>
-
-        <div>
-          <div className="archive-detail-section-label">
-            Audit log ({details?.auditLog.length ?? 0})
-          </div>
-          {details && details.auditLog.length > 0 ? (
-            <ol className="archive-detail-list archive-detail-audit">
-              {details.auditLog.map((line) => (
-                <li key={line.id}>
-                  <span className="archive-detail-audit-at">{shortTime(line.at)} </span>
-                  <span className="archive-detail-audit-kind">{line.kind}</span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <div className="archive-detail-empty">No audit lines.</div>
-          )}
-        </div>
+        </span>
       </div>
+      {run.outputSummary ? <div className="archive-detail-summary">{run.outputSummary}</div> : null}
+      <RunInspector run={run} readOnly repoFullName={repoFullName} />
     </aside>
   );
 }

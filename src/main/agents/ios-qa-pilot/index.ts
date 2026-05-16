@@ -166,6 +166,7 @@ export const iosQaPilotHandler: AgentHandler = {
           planId: plan.frontmatter.id,
         }),
         kind: 'qa',
+        summary: `Run iOS flow "${flow.title}"`,
         context: buildPromptContext({
           flow,
           cfg,

@@ -46,6 +46,7 @@ export const manualQaHandler: AgentHandler = {
       task: {
         ref: `plan:${plan.frontmatter.id}`,
         kind: 'qa',
+        summary: `Run "${plan.frontmatter.name}" against base URL`,
         context: `Run Playwright against the configured base URL and execute every test case in "${plan.frontmatter.name}". Generated at ${ts}.`,
         assignedPlan: assigned,
       },

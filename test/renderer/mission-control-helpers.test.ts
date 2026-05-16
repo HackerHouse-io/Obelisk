@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildActivityRows,
+  buildFailureContexts,
+  caseIdFromBody,
   countByState,
   derivePerCaseState,
 } from '../../src/renderer/screens/mission-control-helpers';
@@ -49,7 +51,7 @@ function counts(
   runState: RunState,
   findings: PreviewedFinding[] = [],
 ) {
-  return countByState(derivePerCaseState({ plan, auditLog, findings, runState }));
+  return countByState(derivePerCaseState({ plan, auditLog, findings, runState }).byCase);
 }
 
 describe('derivePerCaseState', () => {
@@ -171,6 +173,219 @@ describe('derivePerCaseState', () => {
     const c = counts(plan, log, 'running');
     expect(c.passed).toBe(1);
     expect(c.running).toBe(0);
+  });
+
+  // Reproduces the screenshot bug: the agent emitted CASE_PASS / CASE_FAIL
+  // markers whose ids didn't match the plan's case ids. Pre-fix, the map
+  // ended up with `plan.caseCount + off-plan-marker-count` entries — the
+  // user saw "28 Pass · 4 Fail · 32 Skipped" for a 32-case plan because
+  // every plan id fell through to `skipped` while every off-plan id kept
+  // its `passed` / `failed` state in the same map.
+  it('off-plan CASE_PASS / CASE_FAIL markers do not count against plan totals', () => {
+    const planIds = Array.from({ length: 32 }, (_, i) => `plan-${i}`);
+    const plan = makePlan(planIds);
+    const log: AuditLine[] = [];
+    // Agent emitted 28 passes and 4 fails with IDs that aren't in the plan.
+    for (let i = 0; i < 28; i++) log.push(progress(`agent-pass-${i}`, 'passed'));
+    for (let i = 0; i < 4; i++) log.push(progress(`agent-fail-${i}`, 'failed'));
+    const state = derivePerCaseState({ plan, auditLog: log, findings: [], runState: 'done' });
+    const c = countByState(state.byCase);
+    expect(c.passed).toBe(0);
+    expect(c.failed).toBe(0);
+    expect(c.skipped).toBe(32);
+    expect(c.passed + c.failed + c.skipped + c.queued + c.running + c.inconclusive).toBe(32);
+    // Off-plan markers surface in `untracked` so the user sees the agent
+    // did emit them (footnote in the Plan tab).
+    expect(state.untracked).toHaveLength(32);
+    expect(state.untracked.filter((u) => u.status === 'passed')).toHaveLength(28);
+    expect(state.untracked.filter((u) => u.status === 'failed')).toHaveLength(4);
+  });
+
+  it('count sum equals plan.caseCount across mixed inputs', () => {
+    const planIds = ['p1', 'p2', 'p3', 'p4', 'p5'];
+    const plan = makePlan(planIds);
+    const scenarios: { log: AuditLine[]; findings: PreviewedFinding[]; runState: RunState }[] = [
+      { log: [], findings: [], runState: 'done' },
+      {
+        log: [progress('p1', 'passed'), progress('orphan-1', 'passed')],
+        findings: [],
+        runState: 'done',
+      },
+      {
+        log: [progress('p1', 'failed'), progress('p2', 'running')],
+        findings: [
+          { id: 1, runId: 'r1', body: 'case_id: p3', dismissed: false } as unknown as PreviewedFinding,
+          {
+            id: 2,
+            runId: 'r1',
+            body: 'case_id: not-in-plan',
+            dismissed: false,
+          } as unknown as PreviewedFinding,
+        ],
+        runState: 'done',
+      },
+      {
+        log: [progress('p1', 'passed')],
+        findings: [],
+        runState: 'running',
+      },
+    ];
+    for (const s of scenarios) {
+      const state = derivePerCaseState({
+        plan,
+        auditLog: s.log,
+        findings: s.findings,
+        runState: s.runState,
+      });
+      const c = countByState(state.byCase);
+      expect(c.passed + c.failed + c.skipped + c.inconclusive + c.queued + c.running).toBe(5);
+    }
+  });
+
+  it('a finding with a case_id not in the plan does not flip any plan case to failed', () => {
+    const plan = makePlan(['p1', 'p2']);
+    const findings = [
+      {
+        id: 1,
+        runId: 'r1',
+        body: 'case_id: not-in-plan',
+        dismissed: false,
+      } as unknown as PreviewedFinding,
+    ];
+    const state = derivePerCaseState({
+      plan,
+      auditLog: [progress('p1', 'passed')],
+      findings,
+      runState: 'done',
+    });
+    const c = countByState(state.byCase);
+    expect(c.failed).toBe(0);
+    expect(c.passed).toBe(1);
+    expect(c.skipped).toBe(1);
+    expect(state.untracked).toHaveLength(1);
+    expect(state.untracked[0]?.caseId).toBe('not-in-plan');
+    expect(state.untracked[0]?.status).toBe('failed');
+  });
+
+  it('reads `case_progress_orphan` rows into untracked (orchestrator-emitted)', () => {
+    const plan = makePlan(['p1']);
+    const orphan: AuditLine = {
+      id: 'audit-orphan-1',
+      runId: 'r1',
+      at: '2026-05-08T00:00:00Z',
+      kind: 'case_progress_orphan',
+      payload: { caseId: 'phantom', status: 'failed', detail: 'no fixture' },
+    } as unknown as AuditLine;
+    const state = derivePerCaseState({
+      plan,
+      auditLog: [progress('p1', 'passed'), orphan],
+      findings: [],
+      runState: 'done',
+    });
+    const c = countByState(state.byCase);
+    expect(c.passed).toBe(1);
+    expect(c.failed).toBe(0);
+    expect(state.untracked).toHaveLength(1);
+    expect(state.untracked[0]?.detail).toBe('no fixture');
+  });
+});
+
+describe('caseIdFromBody', () => {
+  it('extracts case_id from the qa-hunter HTML comment trailer', () => {
+    const body = '## Desc\nbad\n\n<!-- obelisk:case_id=01H1 -->';
+    expect(caseIdFromBody(body)).toBe('01H1');
+  });
+
+  it('extracts case_id from the legacy free-text form', () => {
+    expect(caseIdFromBody('case_id: abc-123\nFooBar')).toBe('abc-123');
+    expect(caseIdFromBody('case-id = "foo_bar"')).toBe('foo_bar');
+  });
+
+  it('returns null when no case_id is present', () => {
+    expect(caseIdFromBody('## Desc\njust prose')).toBeNull();
+  });
+});
+
+function failingPlan(blocks: {
+  id: string;
+  title: string;
+  expected?: string | null;
+  repro?: string | null;
+  severity?: 'P0' | 'P1' | 'P2' | null;
+}[]): TestPlan {
+  return {
+    frontmatter: { id: 'p1', title: 'Plan', version: 1 },
+    blocks: blocks.map((b) => ({
+      kind: 'case' as const,
+      id: b.id,
+      title: b.title,
+      expected: b.expected ?? null,
+      repro: b.repro ?? null,
+      severity: b.severity ?? null,
+    })),
+  } as unknown as TestPlan;
+}
+
+describe('buildFailureContexts', () => {
+  it('joins failed cases against their matching finding via case_id', () => {
+    const plan = failingPlan([
+      { id: 'c1', title: 'Login flow' },
+      { id: 'c2', title: 'Refund flow' },
+    ]);
+    const log = [progress('c1', 'failed'), progress('c2', 'passed')];
+    const findings = [
+      {
+        id: 1,
+        runId: 'r1',
+        body: '## Desc\nbroken\n<!-- obelisk:case_id=c1 -->',
+        dismissed: false,
+      } as unknown as PreviewedFinding,
+    ];
+    const { byCase } = derivePerCaseState({ plan, auditLog: log, findings, runState: 'done' });
+    const ctxs = buildFailureContexts({ plan, byCase, auditLog: log, findings });
+    expect(ctxs.size).toBe(1);
+    const ctx = ctxs.get('c1');
+    expect(ctx?.caseTitle).toBe('Login flow');
+    expect(ctx?.finding?.id).toBe(1);
+  });
+
+  it('falls back to CASE_FAIL detail when no finding exists for the case', () => {
+    const plan = failingPlan([{ id: 'c1', title: 'Login flow', expected: 'lands on home' }]);
+    const failWithDetail: AuditLine = {
+      id: 'a1',
+      runId: 'r1',
+      at: '2026-05-08T00:00:00Z',
+      kind: 'case_progress',
+      payload: { caseId: 'c1', status: 'failed', detail: 'redirects to /login instead' },
+    } as unknown as AuditLine;
+    const { byCase } = derivePerCaseState({
+      plan,
+      auditLog: [failWithDetail],
+      findings: [],
+      runState: 'done',
+    });
+    const ctxs = buildFailureContexts({
+      plan,
+      byCase,
+      auditLog: [failWithDetail],
+      findings: [],
+    });
+    const ctx = ctxs.get('c1')!;
+    expect(ctx.finding).toBeNull();
+    expect(ctx.auditDetail).toBe('redirects to /login instead');
+    expect(ctx.expected).toBe('lands on home');
+  });
+
+  it('does not include passed / skipped / queued cases', () => {
+    const plan = failingPlan([
+      { id: 'c1', title: 'A' },
+      { id: 'c2', title: 'B' },
+      { id: 'c3', title: 'C' },
+    ]);
+    const log = [progress('c1', 'passed'), progress('c2', 'failed')];
+    const { byCase } = derivePerCaseState({ plan, auditLog: log, findings: [], runState: 'done' });
+    const ctxs = buildFailureContexts({ plan, byCase, auditLog: log, findings: [] });
+    expect(Array.from(ctxs.keys())).toEqual(['c2']);
   });
 });
 

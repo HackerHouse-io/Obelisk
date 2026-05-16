@@ -8,6 +8,37 @@ import type {
 } from '../../shared/types';
 
 /**
+ * Extract a case id from a finding body. Matches both the historical
+ * `case_id: <id>` free-text form and the `<!-- obelisk:case_id=<id> -->`
+ * HTML comment that `qa-hunter`'s `bodyFor` emits.
+ */
+export function caseIdFromBody(body: string): string | null {
+  const m = /case[_-]?id\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/i.exec(body);
+  return m && m[1] ? m[1] : null;
+}
+
+export interface UntrackedMarker {
+  caseId: string;
+  status: CaseProgressState;
+  detail?: string;
+}
+
+export interface PerCaseState {
+  /**
+   * Per-plan-case state. Domain is exactly the set of plan-block case ids.
+   * `sum(countByState(byCase))` always equals `plan.caseCount`.
+   */
+  byCase: Map<string, CaseProgressState>;
+  /**
+   * `CASE_*` markers (or finding case_ids) the agent emitted whose ids
+   * don't appear in the plan. Surfaced as a footnote in the Plan tab so
+   * the user can see the agent did work, without inflating the counts.
+   * Latest-wins per `caseId`.
+   */
+  untracked: UntrackedMarker[];
+}
+
+/**
  * Project audit-log + findings + run state into a per-case status map.
  *
  * Rules, in priority order:
@@ -28,31 +59,46 @@ import type {
  * `passed` once `runState === 'done'` inflates the pass count by every
  * case the agent never reached, doubling the visible "Pass" total at
  * completion.
+ *
+ * Markers whose `caseId` is not in `plan.blocks` (agent emitted an id we
+ * never assigned) are diverted into `untracked` — they don't count
+ * against plan totals, but the Plan tab surfaces them so the agent's
+ * work isn't silently dropped.
  */
 export function derivePerCaseState(opts: {
   plan: TestPlan;
   auditLog: AuditLine[];
   findings: PreviewedFinding[];
   runState: RunState;
-}): Map<string, CaseProgressState> {
-  const map = new Map<string, CaseProgressState>();
+}): PerCaseState {
+  const planCaseIds = new Set<string>();
+  for (const b of opts.plan.blocks) {
+    if (b.kind === 'case') planCaseIds.add(b.id);
+  }
+
+  const byCase = new Map<string, CaseProgressState>();
+  const untrackedLatest = new Map<string, UntrackedMarker>();
   for (const line of opts.auditLog) {
-    if (line.kind !== 'case_progress') continue;
-    const payload = line.payload as { caseId?: unknown; status?: unknown };
-    if (typeof payload.caseId === 'string' && typeof payload.status === 'string') {
-      map.set(payload.caseId, payload.status as CaseProgressState);
+    if (line.kind !== 'case_progress' && line.kind !== 'case_progress_orphan') continue;
+    const payload = line.payload as { caseId?: unknown; status?: unknown; detail?: unknown };
+    if (typeof payload.caseId !== 'string' || typeof payload.status !== 'string') continue;
+    const status = payload.status as CaseProgressState;
+    if (planCaseIds.has(payload.caseId)) {
+      byCase.set(payload.caseId, status);
+    } else {
+      const marker: UntrackedMarker = { caseId: payload.caseId, status };
+      if (typeof payload.detail === 'string' && payload.detail) marker.detail = payload.detail;
+      untrackedLatest.set(payload.caseId, marker);
     }
   }
 
-  const failedByFinding = new Set<string>();
   for (const f of opts.findings) {
-    const m = /case[_-]?id\s*[:=]\s*['"]?([A-Za-z0-9_-]+)/i.exec(f.body);
-    if (m && m[1]) failedByFinding.add(m[1]);
-  }
-  for (const block of opts.plan.blocks) {
-    if (block.kind !== 'case') continue;
-    if (failedByFinding.has(block.id)) {
-      map.set(block.id, 'failed');
+    const id = caseIdFromBody(f.body);
+    if (!id) continue;
+    if (planCaseIds.has(id)) {
+      byCase.set(id, 'failed');
+    } else if (!untrackedLatest.has(id)) {
+      untrackedLatest.set(id, { caseId: id, status: 'failed' });
     }
   }
 
@@ -65,25 +111,21 @@ export function derivePerCaseState(opts: {
   // their `running` status is stale. Promote to `inconclusive` so the
   // counts don't show a "live" running case in a finished run.
   if (isTerminal) {
-    for (const [caseId, state] of map) {
-      if (state === 'running') map.set(caseId, 'inconclusive');
+    for (const [caseId, state] of byCase) {
+      if (state === 'running') byCase.set(caseId, 'inconclusive');
     }
   }
 
-  for (const block of opts.plan.blocks) {
-    if (block.kind !== 'case') continue;
-    if (map.has(block.id)) continue;
-    if (isTerminal) {
-      map.set(block.id, 'skipped');
-    } else {
-      map.set(block.id, 'queued');
-    }
+  for (const id of planCaseIds) {
+    if (byCase.has(id)) continue;
+    byCase.set(id, isTerminal ? 'skipped' : 'queued');
   }
-  return map;
+
+  return { byCase, untracked: Array.from(untrackedLatest.values()) };
 }
 
 export function countByState(
-  map: Map<string, CaseProgressState>,
+  byCase: Map<string, CaseProgressState>,
 ): Record<CaseProgressState, number> {
   const counts: Record<CaseProgressState, number> = {
     queued: 0,
@@ -93,8 +135,115 @@ export function countByState(
     inconclusive: 0,
     skipped: 0,
   };
-  for (const s of map.values()) counts[s] += 1;
+  for (const s of byCase.values()) counts[s] += 1;
   return counts;
+}
+
+/* ---------- RunCard footer counts (Mission Control list view) ---------- */
+
+export interface PlanCardCounts {
+  passed: number;
+  failed: number;
+  skipped: number;
+  inconclusive: number;
+  /**
+   * Markers the agent emitted whose ids weren't in the plan. Surfaces as a
+   * compact "+N untracked" pill so the user knows the agent did work even
+   * when the ids didn't match up.
+   */
+  untracked: number;
+}
+
+/**
+ * Format pass/fail/skipped pill labels for a plan-driven RunCard footer.
+ * Returns null when there's nothing meaningful to show (e.g. a non-plan
+ * run or a run whose plan has zero cases). The returned array preserves
+ * left-to-right order: pass, fail, then any non-zero modifier pills.
+ */
+export function formatCardCounts(counts: PlanCardCounts | null): {
+  text: string;
+  pills: { state: CaseProgressState | 'untracked'; label: string }[];
+} | null {
+  if (!counts) return null;
+  const { passed, failed, skipped, inconclusive, untracked } = counts;
+  const pills: { state: CaseProgressState | 'untracked'; label: string }[] = [];
+  if (passed > 0) pills.push({ state: 'passed', label: `✓ ${passed}` });
+  if (failed > 0) pills.push({ state: 'failed', label: `✗ ${failed}` });
+  if (skipped > 0) pills.push({ state: 'skipped', label: `${skipped} skipped` });
+  if (inconclusive > 0)
+    pills.push({ state: 'inconclusive', label: `${inconclusive} inconclusive` });
+  if (untracked > 0) pills.push({ state: 'untracked', label: `+${untracked} untracked` });
+  if (pills.length === 0) return null;
+  return {
+    text: pills.map((p) => p.label).join(' · '),
+    pills,
+  };
+}
+
+/* ---------- Per-case failure detail (Plan tab expansion) ---------- */
+
+export interface FailureContext {
+  caseId: string;
+  caseTitle: string;
+  expected: string | null;
+  severity: 'P0' | 'P1' | 'P2' | null;
+  repro: string | null;
+  /** Linked preview row if a finding's `case_id` matches this case. */
+  finding: PreviewedFinding | null;
+  /** Latest CASE_FAIL marker detail (`CASE_FAIL <id> (reason)`). */
+  auditDetail: string | null;
+}
+
+/**
+ * Join failed plan cases against their finding (if any) and the latest
+ * CASE_FAIL audit row's `detail` text. Used by the Plan tab to render
+ * the expanded panel under each failed case.
+ */
+export function buildFailureContexts(opts: {
+  plan: TestPlan;
+  byCase: Map<string, CaseProgressState>;
+  auditLog: AuditLine[];
+  findings: PreviewedFinding[];
+}): Map<string, FailureContext> {
+  // Index latest CASE_FAIL detail per caseId from the audit log.
+  const auditDetailByCase = new Map<string, string>();
+  for (const line of opts.auditLog) {
+    if (line.kind !== 'case_progress') continue;
+    const p = line.payload as { caseId?: unknown; status?: unknown; detail?: unknown };
+    if (typeof p.caseId !== 'string' || p.status !== 'failed') continue;
+    if (typeof p.detail === 'string' && p.detail.trim()) {
+      auditDetailByCase.set(p.caseId, p.detail.trim());
+    } else {
+      // No detail on this row, but a later CASE_FAIL might have one;
+      // record an empty-string placeholder so we don't accidentally
+      // surface a stale detail from an earlier row.
+      if (!auditDetailByCase.has(p.caseId)) auditDetailByCase.set(p.caseId, '');
+    }
+  }
+
+  // Index findings by their case_id.
+  const findingByCase = new Map<string, PreviewedFinding>();
+  for (const f of opts.findings) {
+    const id = caseIdFromBody(f.body);
+    if (id) findingByCase.set(id, f);
+  }
+
+  const out = new Map<string, FailureContext>();
+  for (const block of opts.plan.blocks) {
+    if (block.kind !== 'case') continue;
+    if (opts.byCase.get(block.id) !== 'failed') continue;
+    const detail = auditDetailByCase.get(block.id);
+    out.set(block.id, {
+      caseId: block.id,
+      caseTitle: block.title,
+      expected: block.expected,
+      severity: block.severity,
+      repro: block.repro,
+      finding: findingByCase.get(block.id) ?? null,
+      auditDetail: detail && detail.length > 0 ? detail : null,
+    });
+  }
+  return out;
 }
 
 /* ---------- Activity timeline ---------- */

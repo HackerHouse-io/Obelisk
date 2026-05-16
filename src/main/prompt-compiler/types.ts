@@ -5,6 +5,13 @@ export interface TaskPayload {
   ref: string;
   /** What kind of task this is — drives the agent's output decision. */
   kind: 'bug' | 'feature' | 'review' | 'sweep' | 'qa' | 'manual';
+  /**
+   * One-line, user-facing label for this run. Surfaced in the run-started
+   * toast, Mission Control card title, and Archive list — keep it short
+   * (≤120 chars, single line). Optional: if omitted the orchestrator
+   * derives one from the first line of `context`.
+   */
+  summary?: string;
   /** Free-form context: GitHub issue body, PR diff link, manual prompt, etc. */
   context: string;
   /** GitHub issue or PR number, if applicable. */

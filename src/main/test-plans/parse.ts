@@ -87,6 +87,14 @@ function renderBody(blocks: TestPlanBlock[]): string {
     const scopeTag =
       b.scope && b.scope.length > 0 ? ` scope:${b.scope.map((s) => s.trim()).join(',')}` : '';
     lines.push(`- [ ] ${b.title.trim()}${sevTag}${scopeTag}`);
+    // Stable per-case id. Without it: every parse allocates a fresh ULID
+    // so ids drift across save→reload, and the QA agent (which only sees
+    // this body in its prompt) has no way to echo a real id back in
+    // CASE_PASS/FAIL or finding `case_id`. Distinct from the
+    // `<!-- obelisk:case_id=… -->` marker `qa-hunter/bodyFor` writes
+    // into issue *bodies* — that one is reader-side via `caseIdFromBody`
+    // and uses a different key by design.
+    lines.push(`  <!-- obelisk:id=${b.id} -->`);
     if (b.expected && b.expected.trim()) {
       lines.push(`  - **Expected:** ${b.expected.trim()}`);
     }
@@ -96,6 +104,8 @@ function renderBody(blocks: TestPlanBlock[]): string {
   }
   return lines.join('\n').trim();
 }
+
+const ID_COMMENT = /^\s*<!--\s*obelisk:id\s*=\s*([A-Za-z0-9_-]+)\s*-->\s*$/;
 
 function parseBody(content: string): TestPlanBlock[] {
   const blocks: TestPlanBlock[] = [];
@@ -141,6 +151,11 @@ function parseBody(content: string): TestPlanBlock[] {
       continue;
     }
     if (!lastCase) continue;
+    const idMatch = ID_COMMENT.exec(line);
+    if (idMatch && idMatch[1]) {
+      lastCase.id = idMatch[1];
+      continue;
+    }
     const expectedMatch = /^\s*-\s+\*\*Expected:\*\*\s*(.*)$/i.exec(line);
     if (expectedMatch) {
       lastCase.expected = expectedMatch[1]!.trim();

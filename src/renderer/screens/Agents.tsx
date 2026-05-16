@@ -22,6 +22,7 @@ import { SchedulePresetCard } from './agents/SchedulePresetCard';
 import { scheduleSummary } from './agents/schedule-helpers';
 import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
 import { showApiAlert } from '../state/alert-store';
+import { showConfirm } from '../state/confirm-store';
 
 interface AgentMeta {
   name: AgentName;
@@ -183,12 +184,14 @@ export function AgentsScreen(): ReactElement {
   }
 
   async function deleteInstance(agentId: string, displayName: string): Promise<void> {
-    if (
-      !confirm(
-        `Delete ${displayName}? This removes the instance and its scheduling. Run history is kept.`,
-      )
-    )
-      return;
+    const ok = await showConfirm({
+      title: `Delete ${displayName}?`,
+      body: 'This removes the instance and its scheduling. Run history is kept.',
+      confirmLabel: 'Delete',
+      confirmIcon: 'Trash',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setActionError(null);
     const res = await window.obelisk.invoke('agents:delete', { agentId });
     if (!res.ok) {

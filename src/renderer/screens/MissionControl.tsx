@@ -1,43 +1,23 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
 import { runAgentByName } from '../state/agent-actions';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { EmptyState } from '../ui/EmptyState';
-import { FindingPreview } from '../components/FindingPreview';
-import { FileIssueModal } from '../components/FileIssueModal';
-import { UndoToast } from '../components/UndoToast';
 import { RemoveRunDialog, type RemoveAction } from '../components/RemoveRunDialog';
 import { showApiAlert } from '../state/alert-store';
+import { showConfirm } from '../state/confirm-store';
 import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
-import { labelForAgent, humanizeAgo, humanizeDuration, shortTime } from '../format';
-import type {
-  Agent,
-  AgentEvent,
-  AuditLine,
-  CaseProgressState,
-  EvidenceItem,
-  Run,
-  RunState,
-  PreviewedFinding,
-  TestPlan,
-  TestPlanSummary,
-} from '../../shared/types';
+import { RunInspector } from '../components/RunInspector';
+import { labelForAgent, humanizeAgo, humanizeDuration } from '../format';
+import type { Agent, Run, RunState, TestPlan, TestPlanSummary } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
 import { parsePlanIdFromTaskRef } from '../../shared/task-refs';
 import {
-  buildActivityRows,
   countByState,
   derivePerCaseState,
-  type ActivityRow as ActivityRowData,
+  formatCardCounts,
+  type PlanCardCounts,
 } from './mission-control-helpers';
 
 // Re-export so test files importing from this module path keep working.
@@ -196,6 +176,71 @@ export function MissionControl(): ReactElement {
     return Object.values(runs).filter((r) => r.repoId === repo.id);
   }, [runs, repo]);
 
+  const [planCounts, setPlanCounts] = useState<Map<string, PlanCardCounts>>(new Map());
+  const planCache = useRef<Map<string, TestPlan | null>>(new Map());
+
+  const fetchPlanCountsForRun = useCallback(async (run: Run): Promise<void> => {
+    const planId = parsePlanIdFromTaskRef(run.taskRef);
+    if (!planId) return;
+    // Kick both fetches in parallel — they're independent: testPlans:get
+    // only needs planId, runs:get only needs runId. Cached plans skip
+    // the testPlans:get round-trip entirely.
+    const cachedPlan = planCache.current.get(planId);
+    const planPromise =
+      cachedPlan !== undefined
+        ? Promise.resolve(cachedPlan)
+        : window.obelisk.invoke('testPlans:get', { planId, repoId: run.repoId }).then((res) => {
+            const p = res.ok ? res.value : null;
+            planCache.current.set(planId, p);
+            return p;
+          });
+    const runPromise = window.obelisk.invoke('runs:get', { runId: run.id });
+    const [plan, runRes] = await Promise.all([planPromise, runPromise]);
+    if (!plan || !runRes.ok) return;
+    const { byCase, untracked } = derivePerCaseState({
+      plan,
+      auditLog: runRes.value.auditLog,
+      findings: [],
+      runState: run.state,
+    });
+    const c = countByState(byCase);
+    setPlanCounts((prev) => {
+      const next = new Map(prev);
+      next.set(run.id, {
+        passed: c.passed,
+        failed: c.failed,
+        skipped: c.skipped,
+        inconclusive: c.inconclusive,
+        untracked: untracked.length,
+      });
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    for (const run of repoRuns) {
+      if (!parsePlanIdFromTaskRef(run.taskRef)) continue;
+      if (run.state !== 'done' && run.state !== 'failed' && run.state !== 'cancelled') continue;
+      if (planCounts.has(run.id)) continue;
+      void fetchPlanCountsForRun(run);
+    }
+  }, [repoRuns, planCounts, fetchPlanCountsForRun]);
+
+  // Refetch on terminal transition. Reads `runs` via store.getState() so
+  // this effect doesn't re-subscribe on every audit-tick re-render — the
+  // subscription is registered once per repo change.
+  useEffect(() => {
+    if (!repo) return;
+    return window.obelisk.subscribe((evt) => {
+      if (evt.type !== 'run.transition') return;
+      if (evt.state !== 'done' && evt.state !== 'failed' && evt.state !== 'cancelled') return;
+      const run = useStore.getState().runs[evt.runId];
+      if (!run || run.repoId !== repo.id) return;
+      if (!parsePlanIdFromTaskRef(run.taskRef)) return;
+      void fetchPlanCountsForRun(run);
+    });
+  }, [repo, fetchPlanCountsForRun]);
+
   const completedCount = useMemo(
     () => repoRuns.filter((r) => r.state === 'done' || r.state === 'failed').length,
     [repoRuns],
@@ -232,6 +277,12 @@ export function MissionControl(): ReactElement {
       const res = await window.obelisk.invoke(channel, { runId });
       if (res.ok) {
         removeRun(runId);
+        setPlanCounts((prev) => {
+          if (!prev.has(runId)) return prev;
+          const next = new Map(prev);
+          next.delete(runId);
+          return next;
+        });
         if (selectedRunId === runId) {
           setSelectedRunId(null);
           setDrawerOpen(false);
@@ -265,19 +316,30 @@ export function MissionControl(): ReactElement {
 
   const handleClearCompleted = async (): Promise<void> => {
     if (!repo || completedCount === 0) return;
-    if (
-      !confirm(
-        `Move ${completedCount} completed run${completedCount === 1 ? '' : 's'} (done + failed) to the archive? You can search, restore, or delete them permanently from the archive.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await showConfirm({
+      title: `Move ${completedCount} completed run${completedCount === 1 ? '' : 's'} to the archive?`,
+      body: 'You can search, restore, or delete them permanently from the archive.',
+      confirmLabel: 'Archive',
+      confirmIcon: 'Archive',
+    });
+    if (!ok) return;
     const res = await window.obelisk.invoke('runs:archiveCompleted', {
       repoId: repo.id,
       states: ['done', 'failed'],
     });
     if (res.ok) {
+      const archivedIds = new Set(
+        repoRuns.filter((r) => r.state === 'done' || r.state === 'failed').map((r) => r.id),
+      );
       removeRunsByRepo(repo.id, ['done', 'failed']);
+      setPlanCounts((prev) => {
+        let mutated = false;
+        const next = new Map(prev);
+        for (const id of archivedIds) {
+          if (next.delete(id)) mutated = true;
+        }
+        return mutated ? next : prev;
+      });
       setArchivedCount(res.value.total);
     } else {
       showApiAlert(res.error, 'archive runs');
@@ -406,6 +468,7 @@ export function MissionControl(): ReactElement {
                         repoFullName={repo?.githubFullName ?? null}
                         stageColor={stage.color}
                         selected={run.id === selectedRunId}
+                        planCounts={planCounts.get(run.id) ?? null}
                         onClick={() => {
                           setSelectedRunId(run.id);
                           setDrawerOpen(true);
@@ -470,6 +533,7 @@ function RunCard({
   repoFullName,
   stageColor,
   selected,
+  planCounts,
   onClick,
   onDelete,
   onCancel,
@@ -480,6 +544,7 @@ function RunCard({
   repoFullName: string | null;
   stageColor: string;
   selected: boolean;
+  planCounts: PlanCardCounts | null;
   onClick: () => void;
   onDelete: () => void;
   onCancel: () => void;
@@ -504,6 +569,7 @@ function RunCard({
   );
   const timeLine = describeRunTime(run);
   const summaryLine = describeOutcome(run);
+  const cardCounts = formatCardCounts(planCounts);
 
   return (
     <div
@@ -625,6 +691,15 @@ function RunCard({
           </span>
         ) : null}
       </div>
+      {cardCounts ? (
+        <div className="mc-card-counts" title={cardCounts.text}>
+          {cardCounts.pills.map((p) => (
+            <span key={p.state} className={`mc-card-count-pill mc-card-count-pill-${p.state}`}>
+              {p.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
       {timeLine || summaryLine ? (
         <div className="mc-card-foot">
           {timeLine ? <span className="mc-card-time">{timeLine}</span> : null}
@@ -797,8 +872,6 @@ function runStateHelp(state: RunState): string {
   }
 }
 
-type Tab = 'plan' | 'findings' | 'activity' | 'evidence' | 'reasoning' | 'files';
-
 function RunDrawer({
   run,
   onClose,
@@ -812,101 +885,11 @@ function RunDrawer({
   onDelete: (runId: string) => void;
   onCancel: (runId: string) => void;
 }): ReactElement {
-  const [tab, setTab] = useState<Tab>('activity');
-  const [details, setDetails] = useState<{
-    auditLog: AuditLine[];
-    evidence: EvidenceItem[];
-  } | null>(null);
-  const [findings, setFindings] = useState<PreviewedFinding[]>([]);
-  const [modalFinding, setModalFinding] = useState<PreviewedFinding | null>(null);
-  const [plan, setPlan] = useState<TestPlan | null>(null);
-  const [undoToasts, setUndoToasts] = useState<{ id: number; title: string }[]>([]);
-
-  const refreshFindings = useCallback(async (runId: string, repoId: string) => {
-    const res = await window.obelisk.invoke('previews:list', { repoId });
-    if (!res.ok) return;
-    setFindings(res.value.findings.filter((f) => f.runId === runId));
-  }, []);
-
-  const refreshDetails = useCallback(async (runId: string) => {
-    const res = await window.obelisk.invoke('runs:get', { runId });
-    if (res.ok) setDetails({ auditLog: res.value.auditLog, evidence: res.value.evidence });
-  }, []);
-
-  useEffect(() => {
-    if (!run) {
-      setDetails(null);
-      setFindings([]);
-      setPlan(null);
-      return;
-    }
-    void refreshDetails(run.id);
-    void refreshFindings(run.id, run.repoId);
-    // If this run is plan-driven (taskRef = "plan:<id>"), load the plan so
-    // the Plan Progress tab can render the grid.
-    const planId = parsePlanIdFromTaskRef(run.taskRef);
-    if (planId) {
-      void window.obelisk
-        .invoke('testPlans:get', { planId, repoId: run.repoId })
-        .then((res) => setPlan(res.ok ? res.value : null));
-    } else {
-      setPlan(null);
-    }
-  }, [run, refreshFindings, refreshDetails]);
-
-  useEffect(() => {
-    if (!run) return;
-    return window.obelisk.subscribe((evt) => {
-      if (evt.type === 'previews.changed' && evt.repoId === run.repoId) {
-        void refreshFindings(run.id, run.repoId);
-        return;
-      }
-      // Live audit + case-progress streaming — refetch on every event for
-      // this run so the Plan Progress tab updates as CASE_PASS/FAIL fire.
-      // Cheap (single SQLite read), and we only refetch when the event
-      // matches this run.
-      if (
-        (evt.type === 'run.audit' && evt.runId === run.id) ||
-        (evt.type === 'run.caseProgress' && evt.runId === run.id) ||
-        (evt.type === 'run.transition' && evt.runId === run.id)
-      ) {
-        void refreshDetails(run.id);
-      }
-    });
-  }, [run, refreshFindings, refreshDetails]);
-
-  const hasFindings = findings.filter((f) => !f.dismissed).length > 0;
-  const isTerminal = run?.state === 'done' || run?.state === 'failed' || run?.state === 'cancelled';
-  const tabSetForRun = useRef<string | null>(null);
-  useEffect(() => {
-    if (!run) return;
-    if (tabSetForRun.current === run.id) return;
-    tabSetForRun.current = run.id;
-    // Failed runs go straight to activity so the runner output of the broken
-    // CLI invocation is the first thing the user sees — no clicking around
-    // a "plan" tab to find the diagnostic. For other states, prefer:
-    //   Plan > Findings (if terminal) > Activity.
-    if (run.state === 'failed') setTab('activity');
-    else if (plan) setTab('plan');
-    else if (hasFindings && isTerminal) setTab('findings');
-    else setTab('activity');
-  }, [run, plan, hasFindings, isTerminal]);
-
-  async function dismissFinding(f: PreviewedFinding): Promise<void> {
-    const res = await window.obelisk.invoke('previews:dismiss', { previewId: f.id });
-    if (!res.ok) {
-      showApiAlert(res.error, 'dismiss finding');
-      return;
-    }
-    // Stack toasts: if multiple "Not a bug" clicks land in quick
-    // succession, each gets its own row so any of them can be undone.
-    setUndoToasts((prev) => [...prev, { id: f.id, title: f.title }]);
-  }
-
-  async function undismissPreview(previewId: number): Promise<void> {
-    const res = await window.obelisk.invoke('previews:undismiss', { previewId });
-    if (!res.ok) showApiAlert(res.error, 'restore finding');
-  }
+  const repos = useStore((s) => s.repos);
+  const repoFullName = useMemo(() => {
+    if (!run) return null;
+    return repos.find((r) => r.id === run.repoId)?.githubFullName ?? null;
+  }, [run, repos]);
 
   const toggleBtn = (
     <button
@@ -1006,898 +989,7 @@ function RunDrawer({
           />
         ) : null}
       </div>
-      <div className="mc-tabs">
-        {[
-          ...(plan ? (['plan'] as Tab[]) : []),
-          ...(hasFindings ? (['findings'] as Tab[]) : []),
-          ...(['activity', 'evidence', 'reasoning', 'files'] as Tab[]),
-        ].map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`mc-tab${tab === t ? ' active' : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t === 'findings'
-              ? `findings (${findings.filter((f) => !f.dismissed).length})`
-              : t === 'plan' && plan
-                ? `plan (${plan.caseCount})`
-                : t}
-          </button>
-        ))}
-      </div>
-      <div className="mc-tab-body">
-        {tab === 'plan' && plan && (
-          <PlanProgressTab
-            plan={plan}
-            auditLog={details?.auditLog ?? []}
-            findings={findings}
-            runState={run.state}
-          />
-        )}
-        {tab === 'findings' && (
-          <FindingsTab
-            findings={findings}
-            onOpen={setModalFinding}
-            onDismiss={dismissFinding}
-            onUndismiss={(f) => void undismissPreview(f.id)}
-          />
-        )}
-        {tab === 'activity' && <ActivityTab lines={details?.auditLog ?? []} runState={run.state} />}
-        {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
-        {tab === 'reasoning' && <ReasoningTab lines={details?.auditLog ?? []} />}
-        {tab === 'files' && <FilesTab evidence={details?.evidence ?? []} />}
-      </div>
-      <FileIssueModal
-        open={modalFinding !== null}
-        finding={modalFinding}
-        onClose={() => setModalFinding(null)}
-        onFiled={() => {
-          // Bus broadcast triggers refresh.
-        }}
-      />
-      {undoToasts.length > 0 ? (
-        <div className="undo-toast-stack" aria-live="polite">
-          {undoToasts.map((t) => (
-            <UndoToast
-              key={t.id}
-              message={`Marked "${t.title}" as not a bug`}
-              onUndo={() => void undismissPreview(t.id)}
-              onClose={() => setUndoToasts((prev) => prev.filter((x) => x.id !== t.id))}
-            />
-          ))}
-        </div>
-      ) : null}
+      <RunInspector run={run} repoFullName={repoFullName} />
     </aside>
   );
-}
-
-/**
- * "Plan" tab — live test-suite view. For each case in the assigned plan,
- * render a row with its current state derived from:
- *   1. The latest `case_progress` audit row matching this case_id.
- *   2. If terminal-state and a finding mentions this case_id → 'failed'.
- *   3. If terminal-state and no marker / no finding → 'passed' (the agent
- *      finished without flagging this case).
- *   4. If the run was cancelled before reaching the case → 'skipped'.
- *   5. Otherwise → 'queued'.
- *
- * Live: the parent subscribes to bus events and refreshes details, so this
- * component repaints as markers stream in.
- */
-function PlanProgressTab({
-  plan,
-  auditLog,
-  findings,
-  runState,
-}: {
-  plan: TestPlan;
-  auditLog: AuditLine[];
-  findings: PreviewedFinding[];
-  runState: RunState;
-}): ReactElement {
-  const stateByCase = derivePerCaseState({ plan, auditLog, findings, runState });
-
-  const counts = countByState(stateByCase);
-  const total = plan.caseCount;
-  const groups = groupBlocks(plan);
-
-  return (
-    <div className="mc-plan">
-      <header className="mc-plan-summary">
-        <div className="mc-plan-summary-title">{plan.frontmatter.name}</div>
-        <div className="mc-plan-summary-counts">
-          <CaseStatePill state="passed" count={counts.passed} />
-          <CaseStatePill state="failed" count={counts.failed} />
-          <CaseStatePill state="running" count={counts.running} />
-          <CaseStatePill state="inconclusive" count={counts.inconclusive} />
-          <CaseStatePill state="queued" count={counts.queued} />
-          <CaseStatePill state="skipped" count={counts.skipped} />
-        </div>
-        <div className="mc-plan-progress-bar">
-          <div
-            className="mc-plan-progress-fill"
-            style={{
-              width: `${total === 0 ? 0 : Math.round(((counts.passed + counts.failed + counts.inconclusive + counts.skipped) / total) * 100)}%`,
-            }}
-          />
-        </div>
-      </header>
-
-      <div className="mc-plan-body">
-        {groups.map((g) => (
-          <section className="mc-plan-section" key={g.section?.id ?? `unsec-${g.cases[0]?.id}`}>
-            {g.section ? (
-              <div className="mc-plan-section-head">
-                <div className="mc-plan-section-title">{g.section.title}</div>
-                <div className="mc-plan-section-count">
-                  {g.cases.length} case{g.cases.length === 1 ? '' : 's'}
-                </div>
-              </div>
-            ) : null}
-            <ol className="mc-plan-cases">
-              {g.cases.map((c) => {
-                const state = stateByCase.get(c.id) ?? 'queued';
-                return (
-                  <li key={c.id} className={`mc-plan-case mc-plan-case-${state}`}>
-                    <CaseStateIcon state={state} />
-                    {c.severity ? (
-                      <span className={`pill sev-${c.severity.toLowerCase()}`}>{c.severity}</span>
-                    ) : (
-                      <span className="mc-plan-case-sev-spacer" aria-hidden="true" />
-                    )}
-                    <div className="mc-plan-case-body">
-                      <div className="mc-plan-case-title">{c.title}</div>
-                      {c.expected ? (
-                        <div className="mc-plan-case-meta">
-                          <span className="mc-plan-case-meta-key">Expected:</span> {c.expected}
-                        </div>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </section>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const CASE_STATE_LABEL: Record<CaseProgressState, string> = {
-  queued: 'Queued',
-  running: 'Running',
-  passed: 'Pass',
-  failed: 'Fail',
-  inconclusive: 'Inconclusive',
-  skipped: 'Skipped',
-};
-
-function CaseStatePill({
-  state,
-  count,
-}: {
-  state: CaseProgressState;
-  count: number;
-}): ReactElement | null {
-  if (count === 0) return null;
-  return (
-    <span className={`mc-plan-pill mc-plan-pill-${state}`}>
-      {count} {CASE_STATE_LABEL[state]}
-    </span>
-  );
-}
-
-function CaseStateIcon({ state }: { state: CaseProgressState }): ReactElement {
-  if (state === 'running') {
-    return (
-      <span className="mc-plan-case-icon" aria-label="Running">
-        <Icon.Spinner size={12} style={{ animation: 'spin 1s linear infinite' }} />
-      </span>
-    );
-  }
-  if (state === 'passed') {
-    return (
-      <span className="mc-plan-case-icon mc-plan-case-icon-passed" aria-label="Passed">
-        <Icon.Check size={12} />
-      </span>
-    );
-  }
-  if (state === 'failed') {
-    return (
-      <span className="mc-plan-case-icon mc-plan-case-icon-failed" aria-label="Failed">
-        <Icon.AlertTri size={12} />
-      </span>
-    );
-  }
-  if (state === 'inconclusive') {
-    return (
-      <span className="mc-plan-case-icon mc-plan-case-icon-inconclusive" aria-label="Inconclusive">
-        <Icon.Help size={12} />
-      </span>
-    );
-  }
-  if (state === 'skipped') {
-    return (
-      <span className="mc-plan-case-icon mc-plan-case-icon-skipped" aria-label="Skipped">
-        <Icon.Close size={12} />
-      </span>
-    );
-  }
-  return (
-    <span className="mc-plan-case-icon mc-plan-case-icon-queued" aria-label="Queued">
-      <Icon.Dot size={10} />
-    </span>
-  );
-}
-
-interface PlanGroup {
-  section: { id: string; title: string } | null;
-  cases: {
-    id: string;
-    title: string;
-    expected: string | null;
-    severity: 'P0' | 'P1' | 'P2' | null;
-  }[];
-}
-
-function groupBlocks(plan: TestPlan): PlanGroup[] {
-  const groups: PlanGroup[] = [];
-  let current: PlanGroup | null = null;
-  for (const b of plan.blocks) {
-    if (b.kind === 'section') {
-      current = { section: { id: b.id, title: b.title }, cases: [] };
-      groups.push(current);
-    } else {
-      if (!current) {
-        current = { section: null, cases: [] };
-        groups.push(current);
-      }
-      current.cases.push({
-        id: b.id,
-        title: b.title,
-        expected: b.expected,
-        severity: b.severity,
-      });
-    }
-  }
-  return groups;
-}
-
-function FindingsTab({
-  findings,
-  onOpen,
-  onDismiss,
-  onUndismiss,
-}: {
-  findings: PreviewedFinding[];
-  onOpen: (f: PreviewedFinding) => void;
-  onDismiss: (f: PreviewedFinding) => void;
-  onUndismiss: (f: PreviewedFinding) => void;
-}): ReactElement {
-  const [showDismissed, setShowDismissed] = useState(false);
-  const dismissedCount = findings.filter((f) => f.dismissed).length;
-  const visible = showDismissed ? findings : findings.filter((f) => !f.dismissed);
-
-  if (visible.length === 0 && dismissedCount === 0) {
-    return <Empty>No findings to review.</Empty>;
-  }
-
-  return (
-    <div className="mc-findings col gap-1">
-      {dismissedCount > 0 ? (
-        <button
-          type="button"
-          className="btn ghost sm mc-findings-toggle"
-          onClick={() => setShowDismissed((v) => !v)}
-        >
-          {showDismissed
-            ? `Hide dismissed (${dismissedCount})`
-            : `Show dismissed (${dismissedCount})`}
-        </button>
-      ) : null}
-      {visible.length === 0 ? (
-        <Empty>No findings to review.</Empty>
-      ) : (
-        visible.map((f) => (
-          <FindingPreview
-            key={f.id}
-            finding={f}
-            onOpen={onOpen}
-            onDismiss={onDismiss}
-            onUndismiss={onUndismiss}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
-/**
- * Activity panel — a Goose-style stack of expandable cards.
- *
- * Each tool call is a bordered card whose chevron reveals input + output;
- * thinking turns render as borderless prose; session start / final result
- * collapse into compact one-line pills. There is no rail and no internal
- * scroll on the content — the panel itself scrolls.
- *
- * For runs that pre-date the structured event format the renderer falls
- * back to re-parsing each persisted stdout line as a stream-json event so
- * old runs surface tool calls and results too.
- */
-function ActivityTab({
-  lines,
-  runState,
-}: {
-  lines: AuditLine[];
-  runState: RunState;
-}): ReactElement {
-  const isLive = runState === 'queued' || runState === 'running' || runState === 'publishing';
-  const [showAll, setShowAll] = useState(false);
-
-  const rows = useMemo(() => buildActivityRows(lines, showAll), [lines, showAll]);
-
-  return (
-    <div className="mc-audit-wrap">
-      <div className="mc-audit-header">
-        {isLive ? <LivePill /> : <span className="mc-audit-status-idle">Settled</span>}
-        <span className="mc-audit-count">
-          {rows.length} {rows.length === 1 ? 'step' : 'steps'}
-        </span>
-        <button
-          type="button"
-          className="mc-activity-toggle"
-          onClick={() => setShowAll((v) => !v)}
-          aria-pressed={showAll}
-          title={
-            showAll
-              ? 'Hide low-signal status pings'
-              : 'Show every event including heartbeats and legacy log lines'
-          }
-        >
-          {showAll ? 'hide noise' : 'show all'}
-        </button>
-        <span className="mc-audit-order" title="Most recent at the top">
-          newest first
-        </span>
-      </div>
-      {rows.length === 0 ? (
-        <Empty>{isLive ? 'Waiting for the runner’s first output…' : 'No activity yet.'}</Empty>
-      ) : (
-        <div className="mc-act-stack">
-          {rows.map((row) => (
-            <ActivityRow key={row.key} row={row} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ActivityRow({ row }: { row: ActivityRowData }): ReactElement | null {
-  switch (row.kind) {
-    case 'sessionInit':
-      return <SessionLine row={row} />;
-    case 'thinking':
-      return <ThinkingCard row={row} />;
-    case 'tool':
-      return <ToolCard row={row} />;
-    case 'event':
-      return <EventCard row={row} />;
-    case 'result':
-      return <ResultLine row={row} />;
-    case 'status':
-      return <StatusLine row={row} />;
-    case 'raw':
-      return <RawLine row={row} />;
-  }
-}
-
-/**
- * Session start as a single line — model + cwd in muted text. Goose-style
- * compact one-liner; no border, no chevron.
- */
-function SessionLine({
-  row,
-}: {
-  row: Extract<ActivityRowData, { kind: 'sessionInit' }>;
-}): ReactElement {
-  const bits: string[] = [];
-  if (row.model) bits.push(row.model);
-  if (typeof row.toolCount === 'number') bits.push(`${row.toolCount} tools`);
-  if (row.cwd) bits.push(shortPath(row.cwd));
-  return (
-    <div className="mc-act-pill" role="listitem">
-      <span className="mc-act-pill-icon" aria-hidden="true">
-        <Icon.Sparkles size={11} color="var(--t-3)" />
-      </span>
-      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
-      <span className="mc-act-pill-text">Session started</span>
-      {bits.length > 0 ? <span className="mc-act-pill-meta">{bits.join(' · ')}</span> : null}
-    </div>
-  );
-}
-
-/**
- * Final-result envelope as a one-liner with run stats.
- */
-function ResultLine({ row }: { row: Extract<ActivityRowData, { kind: 'result' }> }): ReactElement {
-  const bits: string[] = [];
-  if (typeof row.turns === 'number') bits.push(`${row.turns} turns`);
-  if (typeof row.durationMs === 'number') bits.push(formatDuration(row.durationMs));
-  if (typeof row.costUsd === 'number') bits.push(`$${row.costUsd.toFixed(2)}`);
-  return (
-    <div className={`mc-act-pill is-result ${row.ok ? 'tone-ok' : 'tone-bad'}`} role="listitem">
-      <span className="mc-act-pill-icon" aria-hidden="true">
-        {row.ok ? (
-          <Icon.Check size={11} color="var(--ok)" />
-        ) : (
-          <Icon.Close size={11} color="var(--bad)" />
-        )}
-      </span>
-      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
-      <span className="mc-act-pill-text">{row.ok ? 'Run complete' : 'Run failed'}</span>
-      {bits.length > 0 ? <span className="mc-act-pill-meta">{bits.join(' · ')}</span> : null}
-    </div>
-  );
-}
-
-/**
- * Thinking turn — assistant prose. Borderless, sans-serif. If the text is
- * longer than ~6 lines it clamps with a "Show more" toggle so a long
- * reasoning dump doesn't push every other step off-screen.
- */
-/**
- * Thinking turn — renders with the same card chrome as ToolCard so the
- * timeline reads as a uniform stack. Short turns (≤2 lines, ≤160 chars)
- * are expanded by default since there's nothing to hide; longer turns
- * collapse so a giant reasoning dump doesn't push everything else off
- * the screen. Body is sans-serif prose, not monospace — this is the
- * model's voice, not code.
- */
-function ThinkingCard({
-  row,
-}: {
-  row: Extract<ActivityRowData, { kind: 'thinking' }>;
-}): ReactElement {
-  const lines = row.text.split('\n');
-  const lineCount = lines.length;
-  const charCount = row.text.length;
-  const short = lineCount <= 2 && charCount <= 160;
-  const [expanded, setExpanded] = useState(short);
-  const firstLine = lines.find((l) => l.trim().length > 0)?.trim() ?? '';
-  return (
-    <div className={`mc-act-tool tone-muted${expanded ? ' is-expanded' : ''}`} role="listitem">
-      <button
-        type="button"
-        className="mc-act-tool-head"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="mc-act-tool-icon" aria-hidden="true">
-          <Icon.Spark size={12} color="var(--t-2)" />
-          <span className="mc-act-pip tone-info" />
-        </span>
-        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
-        <span className="mc-act-tool-title">
-          <span className="mc-act-tool-verb">thinking</span>
-          {firstLine ? (
-            <span className="mc-act-tool-target is-prose">{previewText(firstLine, 70)}</span>
-          ) : null}
-        </span>
-        {lineCount > 1 ? (
-          <span className="mc-act-tool-meta">{lineCount} lines</span>
-        ) : (
-          <span className="mc-act-tool-meta" />
-        )}
-        <Icon.Chevron
-          size={11}
-          color="var(--t-3)"
-          style={{
-            marginLeft: 4,
-            transform: expanded ? 'rotate(90deg)' : undefined,
-            transition: 'transform .12s ease',
-          }}
-        />
-      </button>
-      {expanded ? (
-        <div className="mc-act-tool-body">
-          <div className="mc-act-tool-section">
-            <div className="mc-act-tool-section-body">
-              <div className="mc-act-prose">{row.text}</div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Old-run stdout line that looks like a stream-json event but didn't
- * fully parse (typically a giant `tool_result` whose chunks were split
- * by the runner pipe before our buffer fix landed). Renders as a card so
- * the user can collapse it; body shows the raw JSON-ish text.
- */
-function EventCard({ row }: { row: Extract<ActivityRowData, { kind: 'event' }> }): ReactElement {
-  const [expanded, setExpanded] = useState(false);
-  const lineCount = row.content.split('\n').length;
-  const meta = lineCount === 1 ? `${row.content.length} chars` : `${lineCount} lines`;
-  return (
-    <div className={`mc-act-tool tone-muted${expanded ? ' is-expanded' : ''}`} role="listitem">
-      <button
-        type="button"
-        className="mc-act-tool-head"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="mc-act-tool-icon" aria-hidden="true">
-          <Icon.Sliders size={12} color="var(--t-2)" />
-          <span className="mc-act-pip tone-pending" />
-        </span>
-        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
-        <span className="mc-act-tool-title">
-          <span className="mc-act-tool-verb">{row.subtype}</span>
-          <span className="mc-act-tool-target">unparseable</span>
-        </span>
-        <span className="mc-act-tool-meta">{meta}</span>
-        <Icon.Chevron
-          size={11}
-          color="var(--t-3)"
-          style={{
-            marginLeft: 4,
-            transform: expanded ? 'rotate(90deg)' : undefined,
-            transition: 'transform .12s ease',
-          }}
-        />
-      </button>
-      {expanded ? (
-        <div className="mc-act-tool-body">
-          <div className="mc-act-tool-section">
-            <div className="mc-act-tool-section-body">
-              <pre className="mc-act-pre">{row.content}</pre>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Tool call as a Goose-style bordered card. Header has the tool icon
- * (with a status pip overlaid in the corner), a one-line description, and
- * a chevron that rotates on expand. Body shows input args followed by the
- * tool result, separated by a thin border.
- *
- * Result content flows freely — no max-height, no inner scroll. The
- * Activity panel itself is the only scroll surface.
- */
-function ToolCard({ row }: { row: Extract<ActivityRowData, { kind: 'tool' }> }): ReactElement {
-  const [expanded, setExpanded] = useState(false);
-  const desc = describeToolCall(row.name, row.input);
-  const status: ToolStatus = row.result ? (row.result.ok ? 'ok' : 'bad') : 'pending';
-  return (
-    <div className={`mc-act-tool tone-${status}${expanded ? ' is-expanded' : ''}`} role="listitem">
-      <button
-        type="button"
-        className="mc-act-tool-head"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="mc-act-tool-icon" aria-hidden="true">
-          {desc.icon}
-          <span className={`mc-act-pip tone-${status}`} />
-        </span>
-        <span className="mc-act-tool-time">{shortTime(row.at)}</span>
-        <span className="mc-act-tool-title">
-          <span className="mc-act-tool-verb">{desc.verb}</span>
-          {desc.target ? <span className="mc-act-tool-target">{desc.target}</span> : null}
-        </span>
-        {row.result && row.result.ok ? (
-          <span className="mc-act-tool-meta">{compactResultMeta(row.result.content)}</span>
-        ) : null}
-        {row.result && !row.result.ok ? (
-          <span className="mc-act-tool-meta is-bad">
-            {previewText(firstNonEmpty(row.result.content) || 'error', 50)}
-          </span>
-        ) : null}
-        {!row.result ? <span className="mc-act-tool-meta is-pending">running…</span> : null}
-        <Icon.Chevron
-          size={11}
-          color="var(--t-3)"
-          style={{
-            marginLeft: 4,
-            transform: expanded ? 'rotate(90deg)' : undefined,
-            transition: 'transform .12s ease',
-          }}
-        />
-      </button>
-      {expanded ? (
-        <div className="mc-act-tool-body">
-          <ToolSection
-            label={describeInputLabel(row.name)}
-            body={renderInput(row.name, row.input)}
-          />
-          {row.result ? (
-            <ToolSection
-              label={row.result.ok ? 'Output' : 'Error'}
-              tone={row.result.ok ? undefined : 'bad'}
-              body={
-                row.result.content.length === 0 ? (
-                  <span className="mc-act-empty">(no output)</span>
-                ) : (
-                  <pre className="mc-act-pre">{row.result.content}</pre>
-                )
-              }
-            />
-          ) : (
-            <ToolSection label="Output" body={<span className="mc-act-empty">running…</span>} />
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-type ToolStatus = 'ok' | 'bad' | 'pending';
-
-function ToolSection({
-  label,
-  body,
-  tone,
-}: {
-  label: string;
-  body: ReactNode;
-  tone?: 'bad';
-}): ReactElement {
-  return (
-    <section className={`mc-act-tool-section${tone === 'bad' ? ' is-bad' : ''}`}>
-      <div className="mc-act-tool-section-label">{label}</div>
-      <div className="mc-act-tool-section-body">{body}</div>
-    </section>
-  );
-}
-
-/**
- * Status events (heartbeats etc.) as a tiny one-liner. Only rendered when
- * the user toggles "show all".
- */
-function StatusLine({ row }: { row: Extract<ActivityRowData, { kind: 'status' }> }): ReactElement {
-  return (
-    <div className="mc-act-status-line" role="listitem">
-      <Icon.Dot size={11} color="var(--t-3)" />
-      <span className="mc-act-pill-time">{shortTime(row.at)}</span>
-      <span className="mc-act-pill-text">{row.subtype}</span>
-    </div>
-  );
-}
-
-/**
- * One persisted log line, untouched. Used only when "show all" is on so
- * power users can see the raw stream beneath the structured rendering.
- */
-function RawLine({ row }: { row: Extract<ActivityRowData, { kind: 'raw' }> }): ReactElement {
-  return (
-    <div className={`mc-act-raw-line is-${row.stream}`} role="listitem">
-      <span className="mc-act-raw-time">{shortTime(row.at)}</span>
-      <span className={`mc-act-raw-stream is-${row.stream}`}>{row.stream}</span>
-      <span className="mc-act-raw-text">{row.text}</span>
-    </div>
-  );
-}
-
-interface ToolDescriptor {
-  icon: ReactNode;
-  verb: string;
-  target: string | null;
-}
-
-function describeToolCall(name: string, input: unknown): ToolDescriptor {
-  const i = (input ?? {}) as Record<string, unknown>;
-  const path = stringOf(i['file_path']) ?? stringOf(i['path']);
-  switch (name) {
-    case 'Read':
-      return {
-        icon: <Icon.Doc size={12} color="var(--t-2)" />,
-        verb: 'reading',
-        target: path ? shortPath(path) : null,
-      };
-    case 'Edit':
-      return {
-        icon: <Icon.Code size={12} color="var(--t-2)" />,
-        verb: 'editing',
-        target: path ? shortPath(path) : null,
-      };
-    case 'MultiEdit':
-      return {
-        icon: <Icon.Code size={12} color="var(--t-2)" />,
-        verb: 'editing',
-        target: path ? shortPath(path) : null,
-      };
-    case 'Write':
-      return {
-        icon: <Icon.Code size={12} color="var(--t-2)" />,
-        verb: 'writing',
-        target: path ? shortPath(path) : null,
-      };
-    case 'Bash': {
-      const cmd = stringOf(i['command']);
-      return {
-        icon: <Icon.Terminal size={12} color="var(--t-2)" />,
-        verb: 'running',
-        target: cmd ? previewText(cmd, 60) : null,
-      };
-    }
-    case 'Grep':
-    case 'Glob':
-    case 'Search': {
-      const q = stringOf(i['pattern']) ?? stringOf(i['query']);
-      return {
-        icon: <Icon.Search size={12} color="var(--t-2)" />,
-        verb: 'searching',
-        target: q ?? null,
-      };
-    }
-    case 'TodoWrite':
-      return {
-        icon: <Icon.Filter size={12} color="var(--t-2)" />,
-        verb: 'updating plan',
-        target: null,
-      };
-    case 'Task':
-      return {
-        icon: <Icon.Agents size={12} color="var(--t-2)" />,
-        verb: 'sub-agent',
-        target: stringOf(i['description']) ?? null,
-      };
-    case 'WebFetch':
-    case 'WebSearch':
-      return {
-        icon: <Icon.Search size={12} color="var(--t-2)" />,
-        verb: 'web',
-        target: stringOf(i['url']) ?? stringOf(i['query']) ?? null,
-      };
-    default:
-      return {
-        icon: <Icon.Sliders size={12} color="var(--t-2)" />,
-        verb: name || 'tool',
-        target: null,
-      };
-  }
-}
-
-function describeInputLabel(name: string): string {
-  if (name === 'Bash') return 'Command';
-  if (name === 'Read' || name === 'Write' || name === 'Edit' || name === 'MultiEdit')
-    return 'Arguments';
-  return 'Input';
-}
-
-function renderInput(name: string, input: unknown): ReactNode {
-  if (name === 'Bash') {
-    const i = (input ?? {}) as Record<string, unknown>;
-    const cmd = stringOf(i['command']) ?? '';
-    return <pre className="mc-act-pre">{cmd}</pre>;
-  }
-  return <pre className="mc-act-pre">{prettyJson(input)}</pre>;
-}
-
-function compactResultMeta(content: string): string {
-  if (content.length === 0) return 'empty';
-  const lineCount = content.split('\n').length;
-  if (lineCount === 1) return previewText(content, 60);
-  return `${lineCount} lines`;
-}
-
-function firstNonEmpty(text: string): string {
-  for (const l of text.split('\n')) {
-    if (l.trim().length > 0) return l;
-  }
-  return text;
-}
-
-function prettyJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function previewText(text: string, max: number): string {
-  const collapsed = text.replace(/\s+/g, ' ').trim();
-  if (collapsed.length <= max) return collapsed;
-  return collapsed.slice(0, max - 1) + '…';
-}
-
-function shortPath(p: string): string {
-  const parts = p.split('/').filter(Boolean);
-  if (parts.length <= 2) return p;
-  return '…/' + parts.slice(-2).join('/');
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const secs = Math.round(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}m ${s}s`;
-}
-
-function stringOf(v: unknown): string | undefined {
-  return typeof v === 'string' && v.length > 0 ? v : undefined;
-}
-
-function LivePill(): ReactElement {
-  return (
-    <span className="mc-audit-live" title="Streaming — new entries appear as they arrive">
-      <span className="mc-audit-live-dot" aria-hidden="true" />
-      Live
-    </span>
-  );
-}
-
-function EvidenceTab({ evidence }: { evidence: EvidenceItem[] }): ReactElement {
-  if (evidence.length === 0) return <Empty>No evidence captured yet.</Empty>;
-  const groups: Record<string, EvidenceItem[]> = {};
-  for (const e of evidence) {
-    (groups[e.kind] ??= []).push(e);
-  }
-  return (
-    <div>
-      {Object.entries(groups).map(([kind, items]) => (
-        <div key={kind} className="mc-evidence-section">
-          <div className="mc-evidence-section-title">{kind}</div>
-          <ul className="mc-evidence-list">
-            {items.map((it) => (
-              <li key={it.path}>
-                {basename(it.path)} · {it.bytes}b · sha:{it.sha256.slice(0, 10)}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ReasoningTab({ lines }: { lines: AuditLine[] }): ReactElement {
-  const reasoningLines = lines.filter((l) => l.kind === 'reasoning' || l.kind === 'evidence_check');
-  if (reasoningLines.length === 0) return <Empty>No reasoning entries yet.</Empty>;
-  return (
-    <div className="col gap-2">
-      {reasoningLines.map((l) => (
-        <div key={l.id}>
-          <div className="mc-evidence-section-title">{l.kind}</div>
-          <pre className="mc-pre-payload">{JSON.stringify(l.payload, null, 2)}</pre>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FilesTab({ evidence }: { evidence: EvidenceItem[] }): ReactElement {
-  const patches = evidence.filter((e) => e.kind === 'patch' || e.kind === 'failing_test_diff');
-  if (patches.length === 0) return <Empty>No patch artifacts yet.</Empty>;
-  return (
-    <ul className="mc-files-list">
-      {patches.map((p) => (
-        <li key={p.path}>
-          {basename(p.path)} ({p.bytes} bytes)
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Empty({ children }: { children: ReactNode }): ReactElement {
-  return <div className="mc-empty">{children}</div>;
-}
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
 }

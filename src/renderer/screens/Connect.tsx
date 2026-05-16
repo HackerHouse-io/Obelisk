@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { Icon } from '../icons';
 import { useStore } from '../state/store';
+import { pickFolder } from '../state/folder-picker-store';
 import type { Repo, RunnerKind, SafetyMode } from '../../shared/types';
 
 type StepId = 'auth' | 'repo' | 'safety' | 'runner' | 'schedule' | 'start';
@@ -237,9 +238,12 @@ export function Connect(): ReactElement {
   }
 
   async function handlePickFolder(): Promise<void> {
-    const res = await window.obelisk.invoke('repos:pickFolder', undefined);
-    if (res.ok && res.value.path) {
-      setRepoChoice({ source: 'local', localPath: res.value.path });
+    const path = await pickFolder({
+      title: 'Pick the root of a local git clone',
+      confirmLabel: 'Connect this folder',
+    });
+    if (path) {
+      setRepoChoice({ source: 'local', localPath: path });
     }
   }
 

@@ -5,6 +5,7 @@ import { useClickOutside } from '../hooks/useClickOutside';
 import type { PlaybookFile, PlaybookRegenMode } from '../../shared/types';
 import { EmptyState } from '../ui/EmptyState';
 import { showApiAlert } from '../state/alert-store';
+import { showConfirm } from '../state/confirm-store';
 
 export function Playbook(): ReactElement {
   const repos = useStore((s) => s.repos);
@@ -37,16 +38,23 @@ export function Playbook(): ReactElement {
 
   async function regenerate(mode: PlaybookRegenMode): Promise<void> {
     if (!repo || regenMode) return;
-    if (
-      mode === 'deep' &&
-      !confirm(
-        'Deep regenerate spawns the default CLI runner against this repo. It can take several minutes and uses LLM tokens. Continue?',
-      )
-    ) {
-      return;
+    if (mode === 'deep') {
+      const ok = await showConfirm({
+        title: 'Deep regenerate this playbook?',
+        body: 'Spawns the default CLI runner against this repo. It can take several minutes and uses LLM tokens.',
+        confirmLabel: 'Regenerate',
+        confirmIcon: 'Refresh',
+      });
+      if (!ok) return;
     }
-    if (dirty && !confirm('You have unsaved edits. Regenerating will discard them. Continue?')) {
-      return;
+    if (dirty) {
+      const ok = await showConfirm({
+        title: 'Discard unsaved edits?',
+        body: 'Regenerating will overwrite your unsaved changes.',
+        confirmLabel: 'Discard & regenerate',
+        tone: 'danger',
+      });
+      if (!ok) return;
     }
     setRegenMode(mode);
     const res = await window.obelisk.invoke('playbook:regenerate', {
@@ -107,8 +115,16 @@ export function Playbook(): ReactElement {
     );
   }
 
-  function pick(path: string): void {
-    if (dirty && !confirm('Discard unsaved changes?')) return;
+  async function pick(path: string): Promise<void> {
+    if (dirty) {
+      const ok = await showConfirm({
+        title: 'Discard unsaved changes?',
+        body: 'Switching to another playbook file will drop your edits.',
+        confirmLabel: 'Discard',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     const f = files.find((x) => x.path === path);
     if (!f) return;
     setActivePath(path);
@@ -167,7 +183,7 @@ export function Playbook(): ReactElement {
               key={f.path}
               type="button"
               className={`playbook-file-button${f.path === activePath ? ' selected' : ''}`}
-              onClick={() => pick(f.path)}
+              onClick={() => void pick(f.path)}
             >
               {basename(f.path)}
             </button>
