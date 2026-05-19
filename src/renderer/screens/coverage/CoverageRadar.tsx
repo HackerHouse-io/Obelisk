@@ -28,7 +28,11 @@ export function CoverageRadar({
 }: Props): ReactElement {
   const cx = size / 2;
   const cy = size / 2;
-  const radius = size / 2 - 56; // leave room for axis labels
+  // Shrink the polygon to leave generous room for axis labels (which can be
+  // long words like "completion" or "renderer-screens"). Without this the
+  // text-anchored labels overflow the SVG bounds and get clipped by the
+  // container.
+  const radius = Math.max(40, size / 2 - 88);
 
   const target = features.map((f) => f.coveragePct);
   const animated = useAnimatedValues(target);

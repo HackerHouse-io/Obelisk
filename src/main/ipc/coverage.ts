@@ -137,6 +137,72 @@ function renderCoverageMap(
   return lines.join('\n');
 }
 
+/**
+ * Remove labels from `qa/coverage-map.md` that match zero tracked files,
+ * or that appear in the explicit `labels` request list. One-shot cleanup
+ * for maps that have accumulated stale labels from prior LLM regenerates.
+ */
+export async function handleCoverageCleanStaleLabels(
+  payload: IpcMap['coverage:cleanStaleLabels']['req'],
+): Promise<IpcMap['coverage:cleanStaleLabels']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+
+  const mapDir = join(repo.localPath, 'qa');
+  const mapPath = join(mapDir, 'coverage-map.md');
+  if (!existsSync(mapPath)) {
+    return { removed: [] };
+  }
+
+  let parsed: ReturnType<typeof parseCoverageMap>;
+  try {
+    parsed = parseCoverageMap(readFileSync(mapPath, 'utf8'));
+  } catch {
+    return { removed: [] };
+  }
+  if (parsed.size === 0) return { removed: [] };
+
+  const trackedFiles = await listTrackedFiles(repo.localPath);
+  const explicit = payload.labels ? new Set(payload.labels.map((l) => l.toLowerCase())) : null;
+
+  const kept: { label: string; globs: string[] }[] = [];
+  const removed: string[] = [];
+  for (const [label, globs] of parsed) {
+    if (explicit) {
+      if (explicit.has(label)) {
+        removed.push(label);
+      } else {
+        kept.push({ label, globs });
+      }
+      continue;
+    }
+    const matched = trackedFiles.filter((p) => matchesAnyGlob(p, globs)).length;
+    if (matched === 0) {
+      removed.push(label);
+    } else {
+      kept.push({ label, globs });
+    }
+  }
+
+  if (removed.length === 0) return { removed: [] };
+
+  try {
+    mkdirSync(mapDir, { recursive: true });
+  } catch {
+    // mkdir may race; let writeFile surface the error below.
+  }
+  try {
+    writeFileSync(mapPath, renderCoverageMap(kept.map((k) => ({ ...k, filesMatched: 0 }))), 'utf8');
+  } catch (e) {
+    throw new ObeliskError(
+      'IO',
+      `Could not write qa/coverage-map.md: ${(e as Error).message}`,
+      'Make sure the repo is writable.',
+    );
+  }
+  return { removed };
+}
+
 export async function handleCoverageGenerateMap(
   payload: IpcMap['coverage:generateMap']['req'],
 ): Promise<IpcMap['coverage:generateMap']['res']> {
@@ -146,6 +212,7 @@ export async function handleCoverageGenerateMap(
     repo,
     ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
     ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+    ...(payload.replace !== undefined ? { replace: payload.replace } : {}),
   });
   return { jobId };
 }

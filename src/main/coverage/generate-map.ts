@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { simpleGit } from 'simple-git';
 import { ulid } from 'ulid';
 import type { Repo, RunnerKind } from '../../shared/types';
 import { ClaudeCodeRunner } from '../runners/claude-code';
@@ -9,8 +10,13 @@ import { runnerEnv } from '../runners/env';
 import { effectiveDefaultRunner, resolveRunnerModel } from '../runners/effective-default';
 import { buildCodexExecArgs } from '../prompt-compiler/codex-layout';
 import { createWorktree, destroyWorktree } from '../git/worktree';
-import { parseCoverageMap } from './coverage-map';
+import { matchesAnyGlob, parseCoverageMap } from './coverage-map';
 import { advanceStage, finishDone, finishFailed, startJob } from './jobs';
+
+/** Hard cap on labels written to disk. The prompt asks for 5–8 so this is the ceiling. */
+const MAX_LABELS = 8;
+/** Minimum tracked files a glob must match before we accept the label. */
+const MIN_FILES_PER_LABEL = 1;
 
 const GEN_TIMEOUT_MS = 8 * 60 * 1000;
 
@@ -18,6 +24,17 @@ export interface GenerateMapInput {
   repo: Repo;
   runnerOverride?: RunnerKind;
   modelOverride?: string;
+  /**
+   * When true (default), the new LLM-proposed features REPLACE the existing
+   * `qa/coverage-map.md`. When false, the new features are MERGED on top of
+   * the existing labels (legacy behavior — opt-in via the "Keep existing
+   * labels" checkbox in the regenerate dialog).
+   *
+   * Replace is the default because the previous merge-only behavior turned
+   * repeated regenerates into a silent accumulator, ballooning real users'
+   * maps to 60+ labels and breaking the radar.
+   */
+  replace?: boolean;
 }
 
 /**
@@ -109,8 +126,8 @@ async function runJob(jobId: string, input: GenerateMapInput): Promise<void> {
     }
 
     advanceStage(jobId, 'reading', 'Parsing model output…');
-    const features = extractFeatures(result.stdout);
-    if (!features || features.length === 0) {
+    const rawFeatures = extractFeatures(result.stdout);
+    if (!rawFeatures || rawFeatures.length === 0) {
       finishFailed(
         jobId,
         'The model did not return a parseable coverage map.',
@@ -119,29 +136,74 @@ async function runJob(jobId: string, input: GenerateMapInput): Promise<void> {
       return;
     }
 
+    // Validate the LLM's globs against the actual tracked-files list.
+    // Anything matching < MIN_FILES_PER_LABEL is a speculative label we
+    // refuse to write — surfacing it as a feature card with "Run QA Hunter"
+    // would be misleading. Cap the survivors at MAX_LABELS so the radar
+    // stays legible (the prompt asks for ≤10 but we enforce a hard ceiling).
+    const trackedFiles = await listTrackedFiles(input.repo.localPath);
+    const validated: { label: string; globs: string[]; filesMatched: number }[] = [];
+    const droppedZeroFile: string[] = [];
+    for (const f of rawFeatures) {
+      const matched = trackedFiles.filter((p) => matchesAnyGlob(p, f.globs)).length;
+      if (matched < MIN_FILES_PER_LABEL) {
+        droppedZeroFile.push(f.label);
+        continue;
+      }
+      validated.push({ label: f.label, globs: f.globs, filesMatched: matched });
+    }
+    // Keep the labels covering the MOST surface area — likely real features.
+    validated.sort((a, b) => b.filesMatched - a.filesMatched);
+    const features = validated.slice(0, MAX_LABELS);
+
+    if (features.length === 0) {
+      finishFailed(
+        jobId,
+        "None of the model's proposed labels matched any tracked files.",
+        droppedZeroFile.length > 0
+          ? `Dropped: ${droppedZeroFile.slice(0, 6).join(', ')}. The model may have hallucinated paths — retry or edit qa/coverage-map.md by hand.`
+          : 'Retry, or edit qa/coverage-map.md by hand.',
+      );
+      return;
+    }
+
     advanceStage(jobId, 'writing');
 
-    // Merge with existing map — user-curated labels and globs always win.
     const mapDir = join(input.repo.localPath, 'qa');
     const mapPath = join(mapDir, 'coverage-map.md');
-    const existingLabels = new Set<string>();
-    const merged: { label: string; globs: string[] }[] = [];
-    if (existsSync(mapPath)) {
-      try {
-        const existing = parseCoverageMap(readFileSync(mapPath, 'utf8'));
-        for (const [label, globs] of existing) {
-          merged.push({ label, globs });
-          existingLabels.add(label);
+    const replaceMode = input.replace !== false; // default true
+
+    let merged: { label: string; globs: string[] }[];
+    let addedLabels: string[];
+
+    if (replaceMode) {
+      // Replace mode: the LLM's proposals ARE the entire new map. Existing
+      // labels are wiped. This is the default because the prior merge-only
+      // behavior accumulated stale labels every regen.
+      merged = features.map((f) => ({ label: f.label, globs: f.globs }));
+      addedLabels = features.map((f) => f.label);
+    } else {
+      // Merge mode (opt-in via "Keep existing labels"): preserve existing
+      // entries and append any new LLM labels not already present.
+      const existingLabels = new Set<string>();
+      merged = [];
+      if (existsSync(mapPath)) {
+        try {
+          const existing = parseCoverageMap(readFileSync(mapPath, 'utf8'));
+          for (const [label, globs] of existing) {
+            merged.push({ label, globs });
+            existingLabels.add(label);
+          }
+        } catch {
+          // unparseable → treat as absent.
         }
-      } catch {
-        // unparseable → treat as absent.
       }
-    }
-    const addedLabels: string[] = [];
-    for (const f of features) {
-      if (existingLabels.has(f.label)) continue;
-      merged.push({ label: f.label, globs: f.globs });
-      addedLabels.push(f.label);
+      addedLabels = [];
+      for (const f of features) {
+        if (existingLabels.has(f.label)) continue;
+        merged.push({ label: f.label, globs: f.globs });
+        addedLabels.push(f.label);
+      }
     }
 
     try {
@@ -204,33 +266,33 @@ const GEN_SYSTEM_PROMPT = [
 
 function generatorPrompt(repo: Repo): string {
   return [
-    `# Task: produce a comprehensive coverage map for ${repo.githubFullName}`,
+    `# Task: produce a high-level coverage map for ${repo.githubFullName}`,
     '',
     `Repository root: ${repo.localPath} (current working directory)`,
     '',
     '## Goal',
-    'Identify EVERY user-facing feature, domain area, or product surface in this codebase.',
-    'For each one, propose:',
+    "Identify the **5–10 top-level features** that matter most to this product's users.",
+    "Think 'major product surface', not 'every nested directory'. A user looking at the",
+    'Coverage screen needs a punchy summary of where their app is well-tested vs. dark —',
+    '50 micro-features make the radar unreadable and the cards useless.',
+    '',
+    'For each feature, propose:',
     '  • a short kebab-case `label` (e.g. `auth`, `checkout`, `onboarding`, `ios-pilot`)',
     '  • one or more `globs` that point at the files implementing the feature',
     '',
-    'Cover the whole app — do not stop at top-level directories. If `src/wealthlab/`',
-    'contains many sub-features (`auth`, `charts`, `data`, etc.), emit a label for',
-    'each sub-feature, not just one for `wealthlab`. Aim for **8 to 15 labels** total —',
-    'enough granularity to drive an actionable coverage radar.',
-    '',
     '## Investigation steps (do these BEFORE writing)',
-    '1. Read README.md and package.json to understand what the product is.',
+    '1. Read README.md and package.json to understand what the product DOES.',
     '2. List the top-level entry points (src/index*, src/main/*, app/*, src/renderer/screens/*, src/pages/*, src/routes/*).',
-    '3. Walk one level deeper into each candidate dir — note which sub-dirs are real features vs. just utility folders.',
-    '4. Map each feature to the smallest glob that covers its files (prefer `src/<feature>/**` over `**/<feature>/**`).',
+    '3. Group related code into product surfaces a user would recognise (auth, checkout, dashboard, settings, …). Do NOT enumerate every sub-folder — group them.',
+    '4. Map each feature to the smallest glob that covers its files (prefer `src/<feature>/**` over `**/<feature>/**`). Glob MUST match real tracked paths in the repo.',
     '',
     '## Hard requirements',
+    '- 5 to 8 labels (NEVER more than 8). Tiny apps can use 3–5. The radar becomes unreadable beyond 8.',
     '- Labels are unique, lowercase, kebab-case, ≤32 chars.',
-    '- Each label has ≥1 glob.',
+    '- Each label has ≥1 glob and the glob MUST match real files in this repo.',
     '- Globs are valid filesystem patterns (`*` and `**` allowed).',
     '- Do NOT include labels for `node_modules`, `out`, `dist`, `build`, `coverage`, `docs`, `scripts`, `qa`, `evidence`, generic `utils`, `lib`, `components`, etc.',
-    '- 8 to 15 labels (more if the repo is genuinely multi-product, fewer for tiny apps).',
+    '- Prefer ONE label per product surface. Sub-features can be added later by hand.',
     '',
     '## Output format (STRICT)',
     'Emit ONLY the following block, nothing else:',
@@ -356,4 +418,19 @@ function renderCoverageMap(entries: { label: string; globs: string[] }[]): strin
   }
   lines.push('');
   return lines.join('\n');
+}
+
+async function listTrackedFiles(repoPath: string): Promise<string[]> {
+  try {
+    const out = await simpleGit(repoPath).raw(['ls-files']);
+    return out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter(
+        (p) => !p.startsWith('node_modules/') && !p.startsWith('out/') && !p.startsWith('dist/'),
+      );
+  } catch {
+    return [];
+  }
 }

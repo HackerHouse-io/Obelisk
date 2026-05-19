@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
 import { showApiAlert } from '../../state/alert-store';
 import { runAgentByName } from '../../state/agent-actions';
@@ -7,6 +7,7 @@ import type {
   CoverageFeature,
   IpcMap,
   TestPlanGenerationJob,
+  TestPlanSummary,
 } from '../../../shared/types';
 
 export type RunnerInstalled = IpcMap['runners:installed']['res'];
@@ -46,6 +47,54 @@ export function FeatureCard({
   const [busy, setBusy] = useState<string | null>(null);
   const generating = planJob !== null;
   const generateLabel = generating ? stageLabel(planJob) : 'Generate test plan';
+
+  /** Attach-existing-plan picker state. */
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [allPlans, setAllPlans] = useState<TestPlanSummary[] | null>(null);
+  const attachRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!attachOpen) return;
+    let cancelled = false;
+    void window.obelisk.invoke('testPlans:list', { repoId }).then((res) => {
+      if (cancelled) return;
+      if (res.ok) setAllPlans(res.value);
+    });
+    function onDocClick(e: MouseEvent): void {
+      if (!attachRef.current) return;
+      if (!attachRef.current.contains(e.target as Node)) setAttachOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('mousedown', onDocClick);
+    };
+  }, [attachOpen, repoId]);
+
+  async function handleAttachPlan(planId: string): Promise<void> {
+    setBusy('attach');
+    setAttachOpen(false);
+    try {
+      const get = await window.obelisk.invoke('testPlans:get', { repoId, planId });
+      if (!get.ok) {
+        showApiAlert(get.error, 'attach plan');
+        return;
+      }
+      const res = await window.obelisk.invoke('testPlans:save', {
+        repoId,
+        planId,
+        blocks: get.value.blocks,
+        feature: feature.label,
+      });
+      if (!res.ok) {
+        showApiAlert(res.error, 'attach plan');
+      } else {
+        onChange();
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const hasPlan = feature.planRefs.length > 0;
   const agentNamesInPlans = useMemo(() => {
@@ -143,26 +192,69 @@ export function FeatureCard({
 
       <div className="coverage-feature-card-actions">
         {!hasPlan ? (
-          <button
-            type="button"
-            className="btn primary sm"
-            disabled={busy !== null || generating || installed === null || !runnersOk}
-            onClick={handleGenerate}
-            title={
-              generating
-                ? `Already generating a test plan for ${feature.label} — ${planJob!.status}`
-                : (runnersHint ?? 'Generate a test plan scoped to this feature')
-            }
-            data-testid={`feature-card-generate-${feature.label}`}
-            data-generating={generating ? 'true' : 'false'}
-          >
-            {busy === 'generate' || generating ? (
-              <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
-            ) : (
-              <Icon.Sparkles size={11} />
-            )}{' '}
-            {generateLabel}
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={busy !== null || generating || installed === null || !runnersOk}
+              onClick={handleGenerate}
+              title={
+                generating
+                  ? `Already generating a test plan for ${feature.label} — ${planJob!.status}`
+                  : (runnersHint ?? 'Generate a test plan scoped to this feature')
+              }
+              data-testid={`feature-card-generate-${feature.label}`}
+              data-generating={generating ? 'true' : 'false'}
+            >
+              {busy === 'generate' || generating ? (
+                <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+              ) : (
+                <Icon.Sparkles size={11} />
+              )}{' '}
+              {generateLabel}
+            </button>
+            <div className="coverage-feature-card-attach-wrap" ref={attachRef}>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={busy !== null || generating}
+                onClick={() => setAttachOpen((v) => !v)}
+                title="Bind an existing test plan to this feature"
+                data-testid={`feature-card-attach-${feature.label}`}
+              >
+                {busy === 'attach' ? (
+                  <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+                ) : null}{' '}
+                Attach existing ▾
+              </button>
+              {attachOpen ? (
+                <div className="coverage-feature-card-attach-pop">
+                  {allPlans === null ? (
+                    <div className="coverage-feature-card-attach-empty">Loading…</div>
+                  ) : allPlans.length === 0 ? (
+                    <div className="coverage-feature-card-attach-empty">
+                      No plans in this repo yet.
+                    </div>
+                  ) : (
+                    allPlans.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="coverage-feature-card-attach-row"
+                        onClick={() => void handleAttachPlan(p.id)}
+                      >
+                        <div className="coverage-feature-card-attach-name">{p.name}</div>
+                        <div className="coverage-feature-card-attach-meta">
+                          {p.caseCount} case{p.caseCount === 1 ? '' : 's'} ·{' '}
+                          {p.scope === 'feature' && p.feature ? p.feature : 'whole app'}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </>
         ) : (
           <>
             {COVERAGE_AGENTS.filter((a) => agentNamesInPlans.has(a.name)).map((a, i) => {

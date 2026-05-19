@@ -260,12 +260,16 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     for (const file of trackedFiles) {
       if (matchesAnyGlob(file, globs)) filesInGlob.push(file);
     }
-    // Surface labels with 0 matching files on the radar (at 0%) instead of
-    // hiding them — when the LLM proposes a label whose glob doesn't match
-    // actual paths, the user needs to SEE it so they can fix the glob in
-    // qa/coverage-map.md. Silently dropping makes Regenerate look broken.
-    if (filesInGlob.length === 0) {
+    // 0-file labels aren't features — they're broken globs the user needs
+    // to fix. Showing them as feature cards (with "Run QA Hunter" buttons
+    // that target zero files) is misleading. Relegate to staleLabels;
+    // the Coverage screen surfaces them as a separate diagnostic strip
+    // with a "fix in qa/coverage-map.md" CTA. EXCEPTION: a label with a
+    // bound plan still appears so the user can see the binding even when
+    // the globs are wrong — they can fix the glob from there.
+    if (filesInGlob.length === 0 && scratch.planRefs.size === 0) {
       staleLabels.push(label);
+      continue;
     }
 
     let filesWithCases = 0;
@@ -331,6 +335,9 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     });
   }
 
+  // Sort: lowest coverage first (most attention needed). Within same %,
+  // features with more cases beat features with fewer (touching anything
+  // is signal that the user cares about it).
   features.sort((a, b) => {
     if (a.coveragePct !== b.coveragePct) return a.coveragePct - b.coveragePct;
     return b.caseCount - a.caseCount;

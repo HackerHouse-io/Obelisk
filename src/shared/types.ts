@@ -758,6 +758,13 @@ export interface IpcMap {
       blocks: TestPlanBlock[];
       name?: string;
       agentNames?: AgentName[];
+      /**
+       * Override the plan's feature binding. Sending a non-empty string pins
+       * this plan to that feature label (and flips scope to 'feature'); sending
+       * null unpins it (and flips scope back to 'whole-app'). Omit to leave
+       * the existing binding untouched.
+       */
+      feature?: string | null;
     };
     res: { savedAt: ISO };
   };
@@ -816,8 +823,24 @@ export interface IpcMap {
       repoId: string;
       runnerOverride?: RunnerKind;
       modelOverride?: string;
+      /**
+       * When true (default), the LLM's proposed features REPLACE the existing
+       * map. When false, they MERGE — used by the "Keep existing labels"
+       * checkbox in the regenerate dialog. Default exists to break the
+       * previous merge-only accumulation bug.
+       */
+      replace?: boolean;
     };
     res: { jobId: string };
+  };
+  /**
+   * Remove labels from qa/coverage-map.md that match zero tracked files (or
+   * the explicit `labels` list when provided). Used by the "Remove N broken
+   * labels" diagnostic button to one-shot clean up bloated maps.
+   */
+  'coverage:cleanStaleLabels': {
+    req: { repoId: string; labels?: string[] };
+    res: { removed: string[] };
   };
   'coverage:generationJobs': {
     req: { repoId?: string };

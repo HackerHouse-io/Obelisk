@@ -76,6 +76,7 @@ import {
   handleCoverageGenerateMap,
   handleCoverageGenerationJobs,
   handleCoverageDismissJob,
+  handleCoverageCleanStaleLabels,
 } from './coverage';
 import {
   handleQaDoctor,
@@ -198,6 +199,7 @@ export function registerIpcHandlers(): void {
   register('coverage:generateMap', handleCoverageGenerateMap);
   register('coverage:generationJobs', handleCoverageGenerationJobs);
   register('coverage:dismissJob', handleCoverageDismissJob);
+  register('coverage:cleanStaleLabels', handleCoverageCleanStaleLabels);
 
   // iOS QA Pilot
   register('qa:list', handleQaList);

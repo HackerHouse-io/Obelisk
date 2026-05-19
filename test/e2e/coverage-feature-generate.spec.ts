@@ -176,6 +176,64 @@ test('Feature card flips from Generate-button to agent buttons after a plan is c
   await expect(card.getByRole('button', { name: /QA Hunter/i })).toBeVisible({ timeout: 5_000 });
 });
 
+test('Attach existing plan dropdown rebinds a plan to this feature', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Plant an existing plan whose frontmatter.feature is a DIFFERENT
+  // feature so the wealthlab card is unbound at start.
+  const plansDir = join(ctx.repoDir, 'qa', 'test-plans');
+  mkdirSync(plansDir, { recursive: true });
+  writeFileSync(
+    join(plansDir, 'legacy-plan.md'),
+    [
+      '---',
+      'id: legacy-plan',
+      'name: My legacy plan',
+      'scope: whole-app',
+      'feature: null',
+      'agentNames: [qa-hunter, manual-qa, ios-qa-pilot]',
+      'generatedAt: 2026-05-07T12:00:00Z',
+      'generatedBy: heuristic',
+      'version: 1',
+      '---',
+      '',
+      '## Smoke',
+      '',
+      '- [ ] Some case',
+      '  - **Expected:** ok',
+      '  - **Repro:** ok',
+      '',
+    ].join('\n'),
+  );
+  execSync('git add . && git commit -q -m "plan"', { cwd: ctx.repoDir });
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  // Card has Generate button (no plan bound yet).
+  const genBtn = page.getByTestId('feature-card-generate-wealthlab');
+  await expect(genBtn).toBeVisible({ timeout: 15_000 });
+
+  // Open attach dropdown, click the legacy plan.
+  await page.getByTestId('feature-card-attach-wealthlab').click();
+  await expect(page.getByText('My legacy plan')).toBeVisible({ timeout: 5_000 });
+  await page.getByText('My legacy plan').click();
+
+  // Within a couple seconds, the card flips: Generate disappears, agent
+  // buttons appear.
+  await expect
+    .poll(async () => page.getByTestId('feature-card-generate-wealthlab').count(), {
+      timeout: 15_000,
+    })
+    .toBe(0);
+  const card = page
+    .locator('.coverage-feature-card', { has: page.getByText('wealthlab', { exact: false }) })
+    .first();
+  await expect(card.getByRole('button', { name: /QA Hunter/i })).toBeVisible({ timeout: 5_000 });
+});
+
 test('Backend refuses a duplicate plan job for the same feature', async () => {
   stubDir = slowStubClaude(6);
   ctx = await launchApp({

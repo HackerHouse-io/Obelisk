@@ -167,11 +167,13 @@ test('Regenerate spawns Claude CLI, writes LLM-proposed labels, shows progress, 
   // Job reaches "done" stage (stub returns immediately).
   await expect(progress).toHaveAttribute('data-stage', 'done', { timeout: 30_000 });
 
-  // The map on disk now contains the stub's LLM-proposed labels AND the
-  // user-customised "custom-keep-me" label (merged, not destroyed).
+  // The map on disk now contains the stub's LLM-proposed labels (those that
+  // matched real files). Coverage v2 defaults to REPLACE — so the user's
+  // existing "custom-keep-me" is GONE unless they opt-in via the checkbox.
+  // The hallucinated `auth` label (no src/auth/ in the seed) is also dropped.
   const after = readFileSync(mapPath, 'utf8');
-  expect(after).toContain('`custom-keep-me`');
-  expect(after).toContain('`auth`');
+  expect(after).not.toContain('`custom-keep-me`'); // REPLACE wiped it
+  expect(after).not.toContain('`auth`'); // hallucinated → dropped
   expect(after).toContain('`renderer-screens`');
   expect(after).toContain('`main-agents`');
   expect(after).toContain('`main-ipc`');
@@ -215,11 +217,215 @@ test('Bootstrap (no map yet) uses Claude CLI when it is installed', async () => 
   const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
   expect(existsSync(mapPath)).toBe(true);
   const content = readFileSync(mapPath, 'utf8');
-  expect(content).toContain('`auth`');
+  // `auth` is dropped (hallucinated — no src/auth/ in seed); validated
+  // labels survive.
+  expect(content).not.toContain('`auth`');
   expect(content).toContain('`renderer-screens`');
 });
 
-test('Regenerate map MERGES: preserves existing user labels AND adds new scanner labels', async () => {
+test('Regenerate REPLACE (default) nukes existing labels with the LLM proposals', async () => {
+  stubDir = stubClaude();
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+    pathOverride: `${stubDir}:/usr/bin:/bin`,
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Plant a bloated map with stale + custom labels.
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(
+    mapPath,
+    '# Coverage map\n\n' +
+      '- `old-label-1`: `**/nope/**`\n' +
+      '- `old-label-2`: `**/nada/**`\n' +
+      '- `legacy-custom`: `src/**`\n',
+  );
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-regenerate-btn').click();
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+
+  // "Keep existing labels" checkbox exists, defaults UNCHECKED (= replace).
+  const keepExisting = page.getByTestId('coverage-regen-keep-existing');
+  await expect(keepExisting).toBeVisible();
+  await expect(keepExisting).not.toBeChecked();
+
+  await dialog.getByRole('button', { name: /^Regenerate$/ }).click();
+
+  // Wait for the file to be replaced.
+  await expect
+    .poll(() => readFileSync(mapPath, 'utf8'), { timeout: 15_000 })
+    .not.toContain('old-label-1');
+
+  const after = readFileSync(mapPath, 'utf8');
+  // OLD labels are GONE — this is the heart of the fix.
+  expect(after).not.toContain('`old-label-1`');
+  expect(after).not.toContain('`old-label-2`');
+  expect(after).not.toContain('`legacy-custom`');
+  // NEW LLM labels (those whose globs match files) are present.
+  expect(after).toMatch(/`renderer-screens`/);
+  expect(after).toMatch(/`main-agents`/);
+});
+
+test('Regenerate KEEP-EXISTING (opt-in via checkbox) merges instead of replacing', async () => {
+  stubDir = stubClaude();
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+    pathOverride: `${stubDir}:/usr/bin:/bin`,
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(mapPath, '# Coverage map\n\n- `legacy-custom`: `src/**`\n');
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await page.getByTestId('coverage-regenerate-btn').click();
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+
+  // Check the "Keep existing labels" checkbox.
+  await page.getByTestId('coverage-regen-keep-existing').check();
+  await dialog.getByRole('button', { name: /^Regenerate$/ }).click();
+
+  // Wait for the new LLM labels to be merged in.
+  await expect
+    .poll(() => readFileSync(mapPath, 'utf8'), { timeout: 15_000 })
+    .toMatch(/`renderer-screens`/);
+
+  const after = readFileSync(mapPath, 'utf8');
+  // Existing label preserved (merge mode).
+  expect(after).toContain('`legacy-custom`');
+  // New LLM labels also present.
+  expect(after).toMatch(/`renderer-screens`/);
+  expect(after).toMatch(/`main-agents`/);
+});
+
+test('Clean stale labels button removes 0-file labels in one click', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  seedCodeFiles(ctx.repoDir);
+
+  // Plant a map with 2 real labels + 3 stale ones.
+  const mapPath = join(ctx.repoDir, 'qa', 'coverage-map.md');
+  mkdirSync(join(ctx.repoDir, 'qa'), { recursive: true });
+  writeFileSync(
+    mapPath,
+    '# Coverage map\n\n' +
+      '- `main`: `src/main/**`\n' +
+      '- `renderer`: `src/renderer/**`\n' +
+      '- `bogus1`: `**/nope/**`\n' +
+      '- `bogus2`: `**/nada/**`\n' +
+      '- `bogus3`: `src/totally-fake/**`\n',
+  );
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+
+  // The stale-labels diagnostic appears with the clean button.
+  const cleanBtn = page.getByTestId('coverage-clean-stale-btn');
+  await expect(cleanBtn).toBeVisible({ timeout: 15_000 });
+  await cleanBtn.click();
+
+  // Branded confirm dialog appears with the list of labels to remove.
+  const dialog = page.locator('[role="alertdialog"]');
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await expect(dialog).toContainText(/Remove 3 broken labels/);
+  await dialog.getByRole('button', { name: /Remove labels/ }).click();
+
+  // Wait for the file to be cleaned.
+  await expect
+    .poll(() => readFileSync(mapPath, 'utf8'), { timeout: 15_000 })
+    .not.toContain('bogus1');
+
+  const after = readFileSync(mapPath, 'utf8');
+  expect(after).not.toContain('`bogus1`');
+  expect(after).not.toContain('`bogus2`');
+  expect(after).not.toContain('`bogus3`');
+  expect(after).toContain('`main`');
+  expect(after).toContain('`renderer`');
+
+  // The diagnostic strip disappears after the load() refresh.
+  await expect(page.getByTestId('coverage-stale-labels')).toHaveCount(0, { timeout: 5_000 });
+});
+
+test('Expand modal shows a SORTABLE TABLE, not a giant radar', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  // Many features so the table content is interesting.
+  for (let i = 0; i < 14; i++) {
+    const dir = join(ctx.repoDir, 'src', `feat${i}`);
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(dir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "many features"', { cwd: ctx.repoDir });
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await expect(page.locator('.coverage-feature-card-label').first()).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.getByTestId('coverage-radar-expand').click();
+  // The new TABLE is mounted, not a radar.
+  await expect(page.getByTestId('coverage-features-table')).toBeVisible({ timeout: 5_000 });
+  // The modal-body does NOT contain a radar svg.
+  const modalRadarCount = await page
+    .locator('.coverage-table-modal-body svg.coverage-radar')
+    .count();
+  expect(modalRadarCount).toBe(0);
+
+  // Sort by Coverage % — already default. Click "Feature" header to sort alphabetically.
+  await page.getByTestId('coverage-table-sort-name').click();
+  // First visible row label should be alphabetically earliest among feat0..feat13.
+  const firstRowName = await page
+    .locator('.coverage-features-cell-name')
+    .first()
+    .innerText();
+  expect(firstRowName.toLowerCase()).toMatch(/^feat\d+$/);
+
+  // Click a row — modal closes and that feature is selected on the main view.
+  const targetLabel = firstRowName.toLowerCase();
+  await page.getByTestId(`coverage-table-row-${targetLabel}`).click();
+  await expect(page.getByTestId('coverage-radar-modal')).toHaveCount(0, { timeout: 5_000 });
+  // The card for that label is now in the .selected state on the main view.
+  const selectedCardLabel = await page
+    .locator('.coverage-feature-card.selected .coverage-feature-card-label')
+    .first()
+    .innerText();
+  expect(selectedCardLabel.toLowerCase()).toBe(targetLabel);
+});
+
+test('Inline radar caps at 8 axes', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  for (let i = 0; i < 14; i++) {
+    const dir = join(ctx.repoDir, 'src', `feat${i}`);
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(dir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "many features"', { cwd: ctx.repoDir });
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  const stage = page.locator('.coverage-radar-stage');
+  await expect(stage.locator('.coverage-radar-label-text').first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const axisCount = await stage.locator('.coverage-radar-label-text').count();
+  expect(axisCount).toBeLessThanOrEqual(8);
+});
+
+// Legacy test renamed for clarity; kept around to prevent regressions in
+// the heuristic fallback path (no Claude CLI installed).
+test('Heuristic fallback (no CLI): regenerate still works without Claude', async () => {
   ctx = await launchApp({
     seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
   });
@@ -409,6 +615,96 @@ test('Regenerate cancel keeps the existing map intact', async () => {
   // File untouched.
   expect(readFileSync(mapPath, 'utf8')).toContain('`keep-me`');
 });
+
+test('Visual screenshot of sortable table modal at 30 features', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  for (let i = 0; i < 14; i++) {
+    const dir = join(ctx.repoDir, 'src', `feat${i}`);
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(dir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "many features"', { cwd: ctx.repoDir });
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  await expect(page.locator('.coverage-feature-card-label').first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByTestId('coverage-radar-expand').click();
+  await expect(page.getByTestId('coverage-features-table')).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(400);
+  await page
+    .locator('.coverage-radar-modal')
+    .screenshot({ path: '/tmp/obelisk-table-modal.png' });
+});
+
+test('Radar layout screenshot — visual proof of no overlap/clipping', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+  for (let i = 0; i < 15; i++) {
+    const dir = join(ctx.repoDir, 'src', `feat${i}`);
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(dir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "many features"', { cwd: ctx.repoDir });
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  const stage = page.locator('.coverage-radar-stage').first();
+  await expect(stage).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(800); // let the radar tween settle
+  await stage.screenshot({ path: '/tmp/obelisk-radar-layout.png' });
+});
+
+test('Radar layout: overflow note sits BELOW the radar, labels are not clipped', async () => {
+  ctx = await launchApp({
+    seedFixtures: { mode: 'observe', agents: ['qa-hunter'] },
+  });
+  const page = ctx.window;
+
+  // 15 feature dirs → radar shows 10, overflow text shows "+5 more".
+  for (let i = 0; i < 15; i++) {
+    const dir = join(ctx.repoDir, 'src', `feat${i}`);
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) writeFileSync(join(dir, f), '// seed\n');
+  }
+  execSync('git add . && git commit -q -m "many features"', { cwd: ctx.repoDir });
+
+  await page.getByRole('button', { name: 'Coverage' }).first().click();
+  const stage = page.locator('.coverage-radar-stage').first();
+  await expect(stage).toBeVisible({ timeout: 15_000 });
+
+  // 1) The overflow note is BELOW the radar SVG, not beside it.
+  const svgBox = await stage.locator('svg.coverage-radar').boundingBox();
+  const overflowBox = await stage.locator('.coverage-radar-overflow').boundingBox();
+  expect(svgBox).not.toBeNull();
+  expect(overflowBox).not.toBeNull();
+  // Overflow note top must be at or below the SVG bottom (allow 4px slop).
+  expect(overflowBox!.y + 2).toBeGreaterThanOrEqual(svgBox!.y + svgBox!.height - 4);
+  // Overflow note text takes a single visual line: height < 30px (no
+  // letter-by-letter wrapping like the broken screenshot showed).
+  expect(overflowBox!.height).toBeLessThan(30);
+
+  // 2) Every radar axis label text fits inside the stage's bounding box —
+  //    proves nothing is being clipped at the SVG edge.
+  const stageBox = await stage.boundingBox();
+  expect(stageBox).not.toBeNull();
+  const labels = stage.locator('.coverage-radar-label-text');
+  const labelCount = await labels.count();
+  expect(labelCount).toBeGreaterThan(0);
+  for (let i = 0; i < labelCount; i++) {
+    const lbl = await labels.nth(i).boundingBox();
+    if (!lbl) continue;
+    expect(lbl.x).toBeGreaterThanOrEqual(stageBox!.x - 1);
+    expect(lbl.x + lbl.width).toBeLessThanOrEqual(stageBox!.x + stageBox!.width + 1);
+  }
+});
+
+// Note: Coverage v2 replaced the "expand modal = bigger radar" UX with a
+// sortable table — see the `Expand modal shows a SORTABLE TABLE` test
+// earlier in this file. The inline 8-axis cap is exercised by `Inline
+// radar caps at 8 axes` above.
 
 test('Bootstrap overrides a stale/empty coverage-map.md and populates the radar', async () => {
   ctx = await launchApp({

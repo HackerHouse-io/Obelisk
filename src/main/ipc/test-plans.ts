@@ -38,6 +38,7 @@ export async function handleTestPlansSave(
     ...(payload.agentNames && payload.agentNames.length > 0
       ? { agentNames: payload.agentNames }
       : {}),
+    ...(payload.feature !== undefined ? { feature: payload.feature } : {}),
   });
   broadcast({ type: 'testPlans.changed', repoId: repo.id });
   return { savedAt: saved.updatedAt };

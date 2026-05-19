@@ -5,6 +5,7 @@ import { showApiAlert, showAlert } from '../state/alert-store';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { CoverageRadar } from './coverage/CoverageRadar';
+import { CoverageFeaturesTable } from './coverage/CoverageFeaturesTable';
 import { FeatureCard, type RunnerInstalled } from './coverage/FeatureCard';
 import type {
   BusEvent,
@@ -49,6 +50,11 @@ export function Coverage(): ReactElement {
   const [regenConfirmOpen, setRegenConfirmOpen] = useState(false);
   /** Live LLM-generation job, if any. Drives the progress card. */
   const [genJob, setGenJob] = useState<CoverageMapGenerationJob | null>(null);
+  const [radarExpanded, setRadarExpanded] = useState(false);
+  /** "Keep existing labels" toggle in the regenerate dialog. Default unchecked → REPLACE. */
+  const [regenKeepExisting, setRegenKeepExisting] = useState(false);
+  const [cleanStaleConfirmOpen, setCleanStaleConfirmOpen] = useState(false);
+  const [cleanStaleBusy, setCleanStaleBusy] = useState(false);
   /**
    * All in-flight test plan generation jobs for this repo. Keyed by jobId
    * so updates from the bus replace rather than append. Passed to each
@@ -272,13 +278,44 @@ export function Coverage(): ReactElement {
         await heuristicBootstrap();
         return;
       }
-      const res = await window.obelisk.invoke('coverage:generateMap', { repoId: repo.id });
+      // Default = REPLACE. `regenKeepExisting` is the dialog's checkbox.
+      const res = await window.obelisk.invoke('coverage:generateMap', {
+        repoId: repo.id,
+        replace: !regenKeepExisting,
+      });
       if (!res.ok) {
         showApiAlert(res.error, 'generate coverage map');
       }
       // Progress / completion lands via the bus subscription above.
     } finally {
       setBootstrapBusy(false);
+    }
+  }
+
+  async function cleanStaleLabels(): Promise<void> {
+    if (!repo || cleanStaleBusy) return;
+    setCleanStaleBusy(true);
+    try {
+      const res = await window.obelisk.invoke('coverage:cleanStaleLabels', { repoId: repo.id });
+      if (!res.ok) {
+        showApiAlert(res.error, 'clean stale labels');
+        return;
+      }
+      await load();
+      showAlert({
+        title:
+          res.value.removed.length > 0
+            ? `Removed ${res.value.removed.length} broken label${res.value.removed.length === 1 ? '' : 's'}`
+            : 'No broken labels to remove',
+        body:
+          res.value.removed.length > 0
+            ? res.value.removed.slice(0, 10).join(', ') +
+              (res.value.removed.length > 10 ? `, +${res.value.removed.length - 10} more` : '')
+            : 'Every label in qa/coverage-map.md already matches at least one tracked file.',
+      });
+    } finally {
+      setCleanStaleBusy(false);
+      setCleanStaleConfirmOpen(false);
     }
   }
 
@@ -322,7 +359,7 @@ export function Coverage(): ReactElement {
 
   function onRegenerateConfirmed(): void {
     setRegenConfirmOpen(false);
-    void generateMap();
+    void generateMap().finally(() => setRegenKeepExisting(false));
   }
 
   function dismissJobToast(): void {
@@ -342,6 +379,13 @@ export function Coverage(): ReactElement {
   }
 
   const features = report?.features ?? [];
+  // Cap the radar at 8 axes — beyond that, labels overlap and the chart
+  // becomes unreadable. The full feature list lives in the cards below and
+  // in the sortable table that opens from the Expand button.
+  const RADAR_CAP = 8;
+  const radarFeatures = features.slice(0, RADAR_CAP);
+  const overflowCount = Math.max(0, features.length - radarFeatures.length);
+  const staleLabels = report?.staleLabels ?? [];
   const avgCoverage =
     features.length > 0
       ? Math.round(features.reduce((sum, f) => sum + f.coveragePct, 0) / features.length)
@@ -437,11 +481,26 @@ export function Coverage(): ReactElement {
         <>
           <div className="coverage-radar-section">
             <div className="coverage-radar-stage">
+              <button
+                type="button"
+                className="coverage-radar-expand-btn"
+                onClick={() => setRadarExpanded(true)}
+                title="Expand radar to fullscreen"
+                aria-label="Expand radar"
+                data-testid="coverage-radar-expand"
+              >
+                <Icon.Search size={11} /> Expand
+              </button>
               <CoverageRadar
-                features={features}
+                features={radarFeatures}
                 selectedLabel={selectedFeature}
                 onSelect={setSelectedFeature}
               />
+              {overflowCount > 0 ? (
+                <div className="coverage-radar-overflow">
+                  +{overflowCount} more in cards below — click <em>Expand</em> for all
+                </div>
+              ) : null}
             </div>
             <div className="coverage-radar-summary">
               <div className="coverage-summary-stat">
@@ -464,14 +523,33 @@ export function Coverage(): ReactElement {
                 </div>
                 <div className="coverage-summary-stat-label">last QA pass</div>
               </div>
-              {report.staleLabels.length > 0 ? (
-                <div className="coverage-summary-stale">
-                  <div className="coverage-summary-stale-title">Stale labels</div>
-                  <div className="coverage-summary-stale-list">{report.staleLabels.join(', ')}</div>
-                  <div className="coverage-summary-stale-hint">
-                    These labels appear on test cases but match no tracked files. Update{' '}
-                    <span className="mono">qa/coverage-map.md</span>.
+              {staleLabels.length > 0 ? (
+                <div className="coverage-summary-stale" data-testid="coverage-stale-labels">
+                  <div className="coverage-summary-stale-title">
+                    {staleLabels.length} broken label{staleLabels.length === 1 ? '' : 's'}
                   </div>
+                  <div className="coverage-summary-stale-list">
+                    {staleLabels.slice(0, 8).join(', ')}
+                    {staleLabels.length > 8 ? `, +${staleLabels.length - 8} more` : ''}
+                  </div>
+                  <div className="coverage-summary-stale-hint">
+                    Globs in <span className="mono">qa/coverage-map.md</span> match zero tracked
+                    files. Remove them in one click — or edit the file to fix the globs.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn sm danger coverage-summary-stale-btn"
+                    onClick={() => setCleanStaleConfirmOpen(true)}
+                    disabled={cleanStaleBusy}
+                    data-testid="coverage-clean-stale-btn"
+                  >
+                    {cleanStaleBusy ? (
+                      <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+                    ) : (
+                      <Icon.Close size={11} />
+                    )}{' '}
+                    Remove {staleLabels.length} broken label{staleLabels.length === 1 ? '' : 's'}
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -611,16 +689,96 @@ export function Coverage(): ReactElement {
         title="Regenerate qa/coverage-map.md?"
         body={
           <>
-            Claude (or Codex) will read your codebase end-to-end and propose feature labels.
-            Anything already in <span className="mono">qa/coverage-map.md</span> is kept verbatim;
-            newly discovered labels are appended. Typically takes 30–90 seconds.
+            Claude (or Codex) will read your codebase end-to-end and propose{' '}
+            <strong>5–8 high-level features</strong>. By default this <strong>replaces</strong> the
+            existing file — previously the map was merge-only and accumulated stale labels over
+            repeated runs. Typically takes 30–90 seconds.
+            <label className="coverage-regen-keep">
+              <input
+                type="checkbox"
+                checked={regenKeepExisting}
+                onChange={(e) => setRegenKeepExisting(e.target.checked)}
+                data-testid="coverage-regen-keep-existing"
+              />
+              Keep existing labels (merge — for incrementally adding new features only)
+            </label>
           </>
         }
         confirmLabel="Regenerate"
         confirmIcon="Sparkles"
-        onCancel={() => setRegenConfirmOpen(false)}
+        onCancel={() => {
+          setRegenConfirmOpen(false);
+          setRegenKeepExisting(false);
+        }}
         onConfirm={onRegenerateConfirmed}
       />
+
+      <ConfirmDialog
+        open={cleanStaleConfirmOpen}
+        title={`Remove ${staleLabels.length} broken label${staleLabels.length === 1 ? '' : 's'}?`}
+        body={
+          <>
+            These labels in <span className="mono">qa/coverage-map.md</span> match{' '}
+            <strong>zero tracked files</strong> — they&apos;re broken globs that can&apos;t drive
+            any test. Removing them cleans up the map and the radar.
+            <div className="coverage-clean-stale-list">
+              {staleLabels.slice(0, 12).join(', ')}
+              {staleLabels.length > 12 ? `, +${staleLabels.length - 12} more` : ''}
+            </div>
+          </>
+        }
+        confirmLabel={cleanStaleBusy ? 'Removing…' : 'Remove labels'}
+        tone="danger"
+        onCancel={() => setCleanStaleConfirmOpen(false)}
+        onConfirm={() => void cleanStaleLabels()}
+      />
+
+      {radarExpanded ? (
+        <div
+          className="modal-overlay coverage-radar-modal-overlay"
+          onClick={() => setRadarExpanded(false)}
+          data-testid="coverage-radar-modal"
+        >
+          <div
+            className="coverage-radar-modal coverage-table-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="All features (sortable table)"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="coverage-radar-modal-head">
+              <div>
+                <div className="modal-title">All {features.length} features</div>
+                <div className="coverage-radar-modal-sub">
+                  Sort by any column. Click a row to focus that feature in the main view.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn ghost icon"
+                onClick={() => setRadarExpanded(false)}
+                aria-label="Close"
+              >
+                <Icon.Close size={11} />
+              </button>
+            </header>
+            <div className="coverage-radar-modal-body coverage-table-modal-body">
+              <CoverageFeaturesTable
+                repoId={repo.id}
+                features={features}
+                installed={installed}
+                planJobs={planJobs}
+                selectedLabel={selectedFeature}
+                onSelectRow={(label) => {
+                  setSelectedFeature(label);
+                  setRadarExpanded(false);
+                }}
+                onChange={() => void load()}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

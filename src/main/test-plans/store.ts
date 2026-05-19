@@ -92,6 +92,14 @@ export interface SavePlanInput {
   name?: string;
   /** Switch which QA agents this plan applies to. Empty list is rejected. */
   agentNames?: AgentName[];
+  /**
+   * Override the plan's feature binding. Used by the Coverage screen's
+   * "Attach existing plan" dropdown so a plan that lacks `frontmatter.feature`
+   * (created before the Coverage radar existed) can be retroactively pinned
+   * to a feature label. Setting this also flips `scope` to `'feature'`.
+   * Pass `null` to clear (binds to whole-app).
+   */
+  feature?: string | null;
 }
 
 export function savePlan(input: SavePlanInput): TestPlan {
@@ -104,10 +112,19 @@ export function savePlan(input: SavePlanInput): TestPlan {
     input.agentNames && input.agentNames.length > 0
       ? dedupeAgents(input.agentNames)
       : existing.frontmatter.agentNames;
+  const featureChanged = input.feature !== undefined;
+  const nextFeature = featureChanged ? input.feature?.trim() || null : existing.frontmatter.feature;
+  const nextScope = featureChanged
+    ? nextFeature
+      ? ('feature' as const)
+      : ('whole-app' as const)
+    : existing.frontmatter.scope;
   const next: TestPlanFrontmatter = {
     ...existing.frontmatter,
     name: input.name?.trim() || existing.frontmatter.name,
     agentNames: nextAgents,
+    scope: nextScope,
+    feature: nextFeature,
     version: existing.frontmatter.version + 1,
   };
   ensureDir(plansDir(input.repoPath));
