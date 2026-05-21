@@ -6,7 +6,8 @@ import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { CoverageRadar } from './coverage/CoverageRadar';
 import { CoverageFeaturesTable } from './coverage/CoverageFeaturesTable';
-import { FeatureCard, type RunnerInstalled } from './coverage/FeatureCard';
+import { FeatureCard, type ActiveRun, type RunnerInstalled } from './coverage/FeatureCard';
+import { WholeAppPlansCard } from './coverage/WholeAppPlansCard';
 import type {
   BusEvent,
   CoverageEntry,
@@ -63,6 +64,13 @@ export function Coverage(): ReactElement {
    * away and back (hydrated from `testPlans:generationJobs` on mount).
    */
   const [planJobs, setPlanJobs] = useState<Record<string, TestPlanGenerationJob>>({});
+  /**
+   * Live (queued/running/publishing/paused) runs for this repo. Drives the
+   * per-(plan, agent) "Running…" state on feature cards so the renderer
+   * never lets the user dispatch a duplicate. Refreshed on every
+   * `run.created` / `run.transition` event from the bus.
+   */
+  const [activeRuns, setActiveRuns] = useState<ActiveRun[]>([]);
 
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
@@ -113,6 +121,24 @@ export function Coverage(): ReactElement {
     };
   }, []);
 
+  // Hydrate live-runs on mount and on every repo change. The bus subscription
+  // below refreshes this whenever a run is created / transitions, but the
+  // initial paint needs a one-shot fetch so a card mounted mid-run shows
+  // "Running…" without waiting for the next event.
+  const refreshActiveRuns = useCallback(async (): Promise<void> => {
+    if (!repo) return;
+    const res = await window.obelisk.invoke('runs:activeForRepo', { repoId: repo.id });
+    if (!res.ok) return;
+    // Skip the setState when nothing actually changed — bus events fire for
+    // every run.* transition app-wide, and an unconditional set would
+    // cascade re-renders across every FeatureCard on stable data.
+    setActiveRuns((prev) => (sameActiveRuns(prev, res.value) ? prev : res.value));
+  }, [repo]);
+
+  useEffect(() => {
+    void refreshActiveRuns();
+  }, [refreshActiveRuns]);
+
   // Live refresh: re-pull the report when a run finishes or a plan changes.
   // Throttle to one in-flight load to keep the radar's tween from jittering.
   useEffect(() => {
@@ -134,6 +160,12 @@ export function Coverage(): ReactElement {
       });
     }
     return window.obelisk.subscribe((event: BusEvent) => {
+      if (event.type === 'run.created' || event.type === 'run.transition') {
+        // Refresh active-runs whenever any run moves; cheap query and keeps
+        // the per-card "Running…" state in sync with the DB without needing
+        // to filter the event payload to "is this run for our repo".
+        void refreshActiveRuns();
+      }
       if (event.type === 'run.transition' && (event.state === 'done' || event.state === 'failed')) {
         refresh();
       } else if (event.type === 'testPlans.changed' && event.repoId === repo.id) {
@@ -172,7 +204,7 @@ export function Coverage(): ReactElement {
         }
       }
     });
-  }, [repo, load]);
+  }, [repo, load, refreshActiveRuns]);
 
   // Hydrate any in-flight job on mount so the progress card survives a route change.
   useEffect(() => {
@@ -555,6 +587,14 @@ export function Coverage(): ReactElement {
             </div>
           </div>
 
+          <WholeAppPlansCard
+            repoId={repo.id}
+            plans={report.wholeAppPlans}
+            installed={installed}
+            activeRuns={activeRuns}
+            onChange={() => void load()}
+          />
+
           {features.length > 0 ? (
             <div className="coverage-feature-grid">
               {features.map((f) => {
@@ -568,6 +608,7 @@ export function Coverage(): ReactElement {
                     feature={f}
                     selected={selectedFeature === f.label}
                     installed={installed}
+                    activeRuns={activeRuns}
                     planJob={job ?? null}
                     onSelect={() => setSelectedFeature((cur) => (cur === f.label ? null : f.label))}
                     onChange={() => void load()}
@@ -767,6 +808,7 @@ export function Coverage(): ReactElement {
                 repoId={repo.id}
                 features={features}
                 installed={installed}
+                activeRuns={activeRuns}
                 planJobs={planJobs}
                 selectedLabel={selectedFeature}
                 onSelectRow={(label) => {
@@ -840,6 +882,16 @@ function SortHeader({
       </button>
     </div>
   );
+}
+
+function sameActiveRuns(a: ActiveRun[], b: ActiveRun[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.runId !== y.runId || x.state !== y.state) return false;
+  }
+  return true;
 }
 
 function short(iso: string): string {

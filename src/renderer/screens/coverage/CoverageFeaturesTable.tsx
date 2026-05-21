@@ -1,20 +1,14 @@
 import { useMemo, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
 import { showApiAlert } from '../../state/alert-store';
-import { runAgentByName } from '../../state/agent-actions';
-import type {
-  AgentName,
-  CoverageFeature,
-  IpcMap,
-  TestPlanGenerationJob,
-} from '../../../shared/types';
-
-type RunnerInstalled = IpcMap['runners:installed']['res'];
+import { findActiveRun, RunRow, type ActiveRun, type RunnerInstalled } from './FeatureCard';
+import type { AgentName, CoverageFeature, TestPlanGenerationJob } from '../../../shared/types';
 
 interface Props {
   repoId: string;
   features: CoverageFeature[];
   installed: RunnerInstalled | null;
+  activeRuns: ActiveRun[];
   planJobs: Record<string, TestPlanGenerationJob>;
   selectedLabel: string | null;
   onSelectRow: (label: string) => void;
@@ -24,12 +18,6 @@ interface Props {
 type SortKey = 'coverage' | 'name' | 'files' | 'cases' | 'findings';
 type SortDir = 'asc' | 'desc';
 type Filter = 'all' | 'under-50' | 'no-plan' | 'has-findings';
-
-const COVERAGE_AGENTS: { name: AgentName; label: string }[] = [
-  { name: 'qa-hunter', label: 'QA' },
-  { name: 'ios-qa-pilot', label: 'iOS' },
-  { name: 'manual-qa', label: 'Manual' },
-];
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -47,6 +35,7 @@ export function CoverageFeaturesTable({
   repoId,
   features,
   installed,
+  activeRuns,
   planJobs,
   selectedLabel,
   onSelectRow,
@@ -58,6 +47,10 @@ export function CoverageFeaturesTable({
   const [busy, setBusy] = useState<string | null>(null);
 
   const runnersOk = installed ? installed.claude.installed || installed.codex.installed : null;
+  const runnersHint =
+    installed && !runnersOk
+      ? (installed.claude.hint ?? installed.codex.hint ?? 'No coding-agent CLI on PATH.')
+      : null;
 
   const jobByLabel = useMemo(() => {
     const map = new Map<string, TestPlanGenerationJob>();
@@ -118,17 +111,6 @@ export function CoverageFeaturesTable({
         focusOnChangedOrUncovered: true,
       });
       if (!res.ok) showApiAlert(res.error, 'generate test plan');
-      else onChange();
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function handleRun(label: string, agentName: AgentName, planId: string): Promise<void> {
-    setBusy(`run:${label}:${agentName}`);
-    try {
-      const res = await runAgentByName(repoId, agentName, `plan:${planId}`);
-      if (!res.ok) showApiAlert(res.error, 'run agent');
       else onChange();
     } finally {
       setBusy(null);
@@ -206,8 +188,12 @@ export function CoverageFeaturesTable({
             const job = jobByLabel.get(f.label);
             const generating = job !== undefined;
             const hasPlan = f.planRefs.length > 0;
-            const planAgents = new Set<AgentName>();
-            for (const p of f.planRefs) for (const a of p.agentNames) planAgents.add(a);
+            const planRows: { plan: (typeof f.planRefs)[number]; agentName: AgentName }[] = [];
+            for (const plan of f.planRefs) {
+              for (const agentName of plan.agentNames) {
+                planRows.push({ plan, agentName });
+              }
+            }
             return (
               <div
                 key={f.label}
@@ -238,9 +224,16 @@ export function CoverageFeaturesTable({
                   {f.openFindings}
                 </div>
                 <div className="coverage-features-cell">
-                  {hasPlan ? `${f.planCount} plan${f.planCount === 1 ? '' : 's'}` : '—'}
+                  {hasPlan
+                    ? f.planRefs.length === 1
+                      ? f.planRefs[0]!.name
+                      : `${f.planRefs.length} plans`
+                    : '—'}
                 </div>
-                <div className="coverage-features-cell coverage-features-cell-actions">
+                <div
+                  className="coverage-features-cell coverage-features-cell-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {!hasPlan ? (
                     <button
                       type="button"
@@ -264,33 +257,20 @@ export function CoverageFeaturesTable({
                       {generating ? stageShort(job!) : 'Plan'}
                     </button>
                   ) : (
-                    COVERAGE_AGENTS.filter((a) => planAgents.has(a.name)).map((a, i) => {
-                      const plan = f.planRefs.find((p) => p.agentNames.includes(a.name));
-                      if (!plan) return null;
-                      const isBusy = busy === `run:${f.label}:${a.name}`;
-                      return (
-                        <button
-                          key={a.name}
-                          type="button"
-                          className={`btn sm${i === 0 ? ' primary' : ''}`}
-                          disabled={busy !== null || installed === null || !runnersOk}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handleRun(f.label, a.name, plan.id);
-                          }}
-                        >
-                          {isBusy ? (
-                            <Icon.Spinner
-                              size={11}
-                              style={{ animation: 'spin 0.9s linear infinite' }}
-                            />
-                          ) : (
-                            <Icon.Play size={11} />
-                          )}{' '}
-                          {a.label}
-                        </button>
-                      );
-                    })
+                    planRows.map(({ plan, agentName }) => (
+                      <RunRow
+                        key={`${plan.id}:${agentName}`}
+                        repoId={repoId}
+                        featureLabel={f.label}
+                        plan={plan}
+                        agentName={agentName}
+                        installed={installed}
+                        runnersOk={runnersOk}
+                        runnersHint={runnersHint}
+                        activeRun={findActiveRun(activeRuns, plan.id, agentName)}
+                        onChange={onChange}
+                      />
+                    ))
                   )}
                 </div>
               </div>

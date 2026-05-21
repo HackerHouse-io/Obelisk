@@ -33,6 +33,7 @@ import {
 import { handleBugFixerHealth } from './bug-fixer-health';
 import {
   handleRunsList,
+  handleRunsActiveForRepo,
   handleRunsGet,
   handleRunsStats,
   handleRunsHistogram,
@@ -156,6 +157,7 @@ export function registerIpcHandlers(): void {
 
   // Runs (Phase 4 — real)
   register('runs:list', handleRunsList);
+  register('runs:activeForRepo', handleRunsActiveForRepo);
   register('runs:get', handleRunsGet);
   register('runs:stats', handleRunsStats);
   register('runs:histogram', handleRunsHistogram);

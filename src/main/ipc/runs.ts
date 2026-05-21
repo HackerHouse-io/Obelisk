@@ -1,5 +1,6 @@
 import {
   listRuns,
+  listLiveRuns,
   getRun,
   deleteRun,
   deleteRunsForRepo,
@@ -19,6 +20,17 @@ export async function handleRunsList(
   payload: IpcMap['runs:list']['req'],
 ): Promise<IpcMap['runs:list']['res']> {
   return listRuns(payload.repoId, payload.limit ?? 50);
+}
+
+export async function handleRunsActiveForRepo(
+  payload: IpcMap['runs:activeForRepo']['req'],
+): Promise<IpcMap['runs:activeForRepo']['res']> {
+  return listLiveRuns(payload.repoId).map((r) => ({
+    runId: r.id,
+    agentName: r.agentName,
+    taskRef: r.taskRef,
+    state: r.state,
+  }));
 }
 
 export async function handleRunsGet(

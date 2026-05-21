@@ -17,6 +17,7 @@ import type {
   CoverageFeature,
   CoverageReport,
   TestPlan,
+  TestPlanRef,
 } from '../../shared/types';
 
 /** Files-per-feature cap on the IPC payload — keeps responses bounded for large globs. */
@@ -62,6 +63,10 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     caseIdsByPlan: Map<string, Set<string>>;
   }
   const featureScratch = new Map<string, FeatureScratch>();
+  // Plans with frontmatter.scope === 'whole-app' surface in their own
+  // "Whole-app QA" row rather than on per-feature cards. We collect them
+  // here so the IPC payload carries them without a second walk over `plans`.
+  const wholeAppPlans = new Map<string, TestPlanRef>();
 
   function scratchFor(label: string): FeatureScratch {
     let s = featureScratch.get(label);
@@ -94,11 +99,12 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
 
   for (const plan of plans) {
     const filesForPlan = new Set<string>();
-    // Feature-scoped plans are owned by `frontmatter.feature` regardless of
-    // what scope tags the LLM happened to put on individual cases. Without
-    // this, a `feature: wealthlab` plan whose cases tag `["smoke"]` would
-    // leave the wealthlab card stuck on "Generate test plan" even after
-    // the plan was successfully written.
+    // A plan attaches to a feature card ONLY when it's explicitly scoped to
+    // that feature (frontmatter.scope === 'feature' + matching `feature`).
+    // Whole-app plans live in their own bucket and surface in a dedicated
+    // "Whole-app QA" row — they no longer leak onto feature cards via
+    // per-case scope tags, which was the source of the confusing
+    // "4 plans cover this feature" footer.
     const planFeatureLabel =
       plan.frontmatter.scope === 'feature' && plan.frontmatter.feature
         ? plan.frontmatter.feature.toLowerCase()
@@ -106,6 +112,13 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     if (planFeatureLabel) {
       const s = scratchFor(planFeatureLabel);
       s.planRefs.set(plan.frontmatter.id, {
+        id: plan.frontmatter.id,
+        name: plan.frontmatter.name,
+        agentNames: plan.frontmatter.agentNames,
+        updatedAt: plan.updatedAt,
+      });
+    } else if (plan.frontmatter.scope === 'whole-app') {
+      wholeAppPlans.set(plan.frontmatter.id, {
         id: plan.frontmatter.id,
         name: plan.frontmatter.name,
         agentNames: plan.frontmatter.agentNames,
@@ -122,12 +135,6 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
       for (const label of effectiveLabels) {
         const lower = label.toLowerCase();
         const s = scratchFor(lower);
-        s.planRefs.set(plan.frontmatter.id, {
-          id: plan.frontmatter.id,
-          name: plan.frontmatter.name,
-          agentNames: plan.frontmatter.agentNames,
-          updatedAt: plan.updatedAt,
-        });
         s.caseIds.add(block.id);
         let byPlan = s.caseIdsByPlan.get(plan.frontmatter.id);
         if (!byPlan) {
@@ -268,7 +275,14 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     // bound plan still appears so the user can see the binding even when
     // the globs are wrong — they can fix the glob from there.
     if (filesInGlob.length === 0 && scratch.planRefs.size === 0) {
-      staleLabels.push(label);
+      // Only labels actually present in qa/coverage-map.md are reportable
+      // as stale — the cleanup CTA can only edit lines that exist in that
+      // file. Scratch entries seeded purely by per-case `scope` tags
+      // (e.g. a whole-app plan tagging cases with "smoke") would otherwise
+      // show up as broken labels the user can't remove.
+      if (coverageMap.has(label)) {
+        staleLabels.push(label);
+      }
       continue;
     }
 
@@ -351,10 +365,15 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     else uncoveredFiles++;
   }
 
+  const wholeAppPlansSorted = Array.from(wholeAppPlans.values()).sort((a, b) =>
+    a.updatedAt < b.updatedAt ? 1 : -1,
+  );
+
   return {
     repoId,
     files: fileEntries,
     features,
+    wholeAppPlans: wholeAppPlansSorted,
     staleLabels,
     hasCoverageMap: coverageMap.size > 0,
     totalFiles: fileEntries.length,

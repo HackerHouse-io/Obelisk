@@ -675,6 +675,16 @@ export interface IpcMap {
 
   // Runs
   'runs:list': { req: { repoId: string; limit?: number; before?: ISO }; res: Run[] };
+  /**
+   * Live runs (queued / running / publishing / paused) for a repo. Drives
+   * the per-feature-card "Running…" state so the renderer reflects in-flight
+   * work even when the originating click happened in another window or
+   * before mount.
+   */
+  'runs:activeForRepo': {
+    req: { repoId: string };
+    res: { runId: string; agentName: AgentName; taskRef: string | null; state: RunState }[];
+  };
   'runs:get': {
     req: { runId: string };
     res: Run & { auditLog: AuditLine[]; evidence: EvidenceItem[] };
@@ -996,6 +1006,13 @@ export interface CoverageEntry {
  * the formula is the same one the renderer uses to render the breakdown
  * tooltip and lives in `src/renderer/screens/coverage/coverageFormula.ts`.
  */
+export interface TestPlanRef {
+  id: string;
+  name: string;
+  agentNames: AgentName[];
+  updatedAt: ISO;
+}
+
 export interface CoverageFeature {
   label: string;
   planCount: number;
@@ -1006,8 +1023,12 @@ export interface CoverageFeature {
   filesRecentPass: number;
   openFindings: number;
   coveragePct: number;
-  /** Plans that cover this label — used to wire run CTAs to existing plans. */
-  planRefs: { id: string; name: string; agentNames: AgentName[]; updatedAt: ISO }[];
+  /**
+   * Plans explicitly scoped to this feature (frontmatter.scope === 'feature'
+   * AND frontmatter.feature === <label>). Whole-app sweeps live on
+   * CoverageReport.wholeAppPlans instead.
+   */
+  planRefs: TestPlanRef[];
   /** Files in this label's glob — capped so the IPC payload stays bounded. */
   files: string[];
 }
@@ -1017,6 +1038,8 @@ export interface CoverageReport {
   files: CoverageEntry[];
   /** Per-feature aggregates used by the radar + feature-card UI. */
   features: CoverageFeature[];
+  /** Plans with scope === 'whole-app' — surfaced in a dedicated row in the UI. */
+  wholeAppPlans: TestPlanRef[];
   /** Labels referenced by test cases but matching zero tracked files. */
   staleLabels: string[];
   /** False when `qa/coverage-map.md` is missing or empty — drives the bootstrap CTA. */

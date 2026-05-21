@@ -182,4 +182,90 @@ describe('feature-scoped plan → feature card linkage', () => {
       expect(wealthlab.planRefs.length).toBe(0);
     }
   });
+
+  it('whole-app plans land in report.wholeAppPlans, not on feature cards — even when their cases tag a feature label', async () => {
+    createPlan({
+      repoPath,
+      agentName: 'qa-hunter',
+      scope: 'whole-app',
+      generatedBy: 'claude',
+      blocks: [
+        {
+          kind: 'case',
+          id: 'c1',
+          title: 'Wealthlab probe (case tagged the feature)',
+          expected: 'ok',
+          repro: 'ok',
+          severity: 'P0',
+          // A per-case scope tag pointing at a feature must NOT cause the
+          // owning whole-app plan to attach to that feature card.
+          scope: ['wealthlab'],
+        },
+      ],
+    });
+
+    const report = await buildCoverageReport(repoId);
+    expect(report.wholeAppPlans.length).toBe(1);
+    expect(report.wholeAppPlans[0]!.agentNames).toContain('qa-hunter');
+
+    const wealthlab = report.features.find((f) => f.label === 'wealthlab');
+    // wealthlab still surfaces (the map references it) but no plan attaches.
+    expect(wealthlab?.planRefs ?? []).toEqual([]);
+  });
+
+  it("scope-tag-only labels (not in coverage-map.md) are NOT reported as staleLabels", async () => {
+    // Regression: a whole-app plan whose cases tag labels like 'appstate',
+    // 'assets', etc. used to produce 30+ "broken labels" the user couldn't
+    // remove — the cleanup CTA only edits coverage-map.md, but those
+    // labels were never written there. The aggregator must only flag a
+    // label as stale when the user can actually act on it.
+    createPlan({
+      repoPath,
+      agentName: 'qa-hunter',
+      scope: 'whole-app',
+      generatedBy: 'claude',
+      blocks: [
+        {
+          kind: 'case',
+          id: 'c1',
+          title: 'Tagged with labels not in the map',
+          expected: 'ok',
+          repro: 'ok',
+          severity: 'P0',
+          scope: ['appstate', 'assets', 'gestures'],
+        },
+      ],
+    });
+
+    const report = await buildCoverageReport(repoId);
+    for (const tag of ['appstate', 'assets', 'gestures']) {
+      expect(report.staleLabels).not.toContain(tag);
+    }
+  });
+
+  it('feature-scoped plans do NOT appear in report.wholeAppPlans', async () => {
+    createPlan({
+      repoPath,
+      agentName: 'qa-hunter',
+      scope: 'feature',
+      featureName: 'wealthlab',
+      generatedBy: 'claude',
+      blocks: [
+        {
+          kind: 'case',
+          id: 'c1',
+          title: 'Feature-scoped only',
+          expected: 'ok',
+          repro: 'ok',
+          severity: 'P0',
+          scope: null,
+        },
+      ],
+    });
+
+    const report = await buildCoverageReport(repoId);
+    expect(report.wholeAppPlans).toEqual([]);
+    const wealthlab = report.features.find((f) => f.label === 'wealthlab');
+    expect(wealthlab!.planRefs.length).toBe(1);
+  });
 });

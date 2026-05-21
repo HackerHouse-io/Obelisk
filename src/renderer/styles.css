@@ -6990,6 +6990,145 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Run rows: one button per (agent × plan) on a feature card. */
+.coverage-feature-card-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.coverage-feature-card-run-row {
+  position: relative;
+}
+.coverage-feature-card-run-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-1);
+  border: 1px solid oklch(72% 0.05 230 / 0.16);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--t-0);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease;
+}
+.coverage-feature-card-run-trigger:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: oklch(72% 0.05 230 / 0.3);
+}
+.coverage-feature-card-run-trigger:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.coverage-feature-card-run-row.running .coverage-feature-card-run-trigger {
+  background: oklch(60% 0.12 240 / 0.12);
+  border-color: oklch(60% 0.12 240 / 0.35);
+  opacity: 1;
+}
+.coverage-feature-card-run-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  flex: 0 0 auto;
+}
+.coverage-feature-card-run-agent {
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.coverage-feature-card-run-sep {
+  color: var(--t-3);
+  flex: 0 0 auto;
+}
+.coverage-feature-card-run-plan {
+  flex: 1 1 auto;
+  color: var(--t-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coverage-feature-card-run-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--info);
+  font-style: italic;
+}
+
+.coverage-feature-card-run-pop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  z-index: 50;
+  background: var(--bg-3);
+  border: 1px solid oklch(72% 0.05 230 / 0.3);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coverage-feature-card-run-pop-head {
+  font-size: 11px;
+  color: var(--t-2);
+}
+.coverage-feature-card-run-pop-head strong {
+  color: var(--t-0);
+  font-weight: 500;
+}
+.coverage-feature-card-run-pop-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--t-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.coverage-feature-card-run-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* Whole-app QA card: like a feature card but with no stats / bar / pct. */
+.coverage-whole-app-card {
+  background: var(--bg-2);
+  border: 1px solid oklch(72% 0.05 230 / 0.14);
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.coverage-whole-app-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.coverage-whole-app-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--t-0);
+}
+.coverage-whole-app-card-sub {
+  font-size: 11px;
+  color: var(--t-2);
+}
+.coverage-whole-app-card-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .coverage-files-disclosure {
   background: var(--bg-2);
   border: 1px solid oklch(72% 0.05 230 / 0.14);

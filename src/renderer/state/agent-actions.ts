@@ -1,5 +1,12 @@
-import type { AgentName } from '../../shared/types';
+import type { AgentName, RunnerKind } from '../../shared/types';
 import type { Result } from '../../shared/errors';
+
+export interface RunAgentOptions {
+  taskId?: string;
+  runnerOverride?: RunnerKind;
+  /** Empty string is treated as "no override" — agent row / CLI default applies. */
+  modelOverride?: string;
+}
 
 /**
  * Renderer-side helper for "Run <type> now" buttons that don't care which
@@ -13,8 +20,10 @@ import type { Result } from '../../shared/errors';
 export async function runAgentByName(
   repoId: string,
   agentName: AgentName,
-  taskId?: string,
+  taskIdOrOptions?: string | RunAgentOptions,
 ): Promise<Result<{ runId: string }>> {
+  const opts: RunAgentOptions =
+    typeof taskIdOrOptions === 'string' ? { taskId: taskIdOrOptions } : (taskIdOrOptions ?? {});
   const list = await window.obelisk.invoke('agents:list', { repoId });
   if (!list.ok) return list;
   const found = list.value.find((a) => a.name === agentName);
@@ -29,6 +38,10 @@ export async function runAgentByName(
   }
   return window.obelisk.invoke('agents:run', {
     agentId: found.id,
-    ...(taskId ? { taskId } : {}),
+    ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    ...(opts.runnerOverride ? { runnerOverride: opts.runnerOverride } : {}),
+    ...(opts.modelOverride !== undefined && opts.modelOverride.trim().length > 0
+      ? { modelOverride: opts.modelOverride.trim() }
+      : {}),
   });
 }
