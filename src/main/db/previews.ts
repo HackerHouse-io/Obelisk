@@ -5,6 +5,7 @@ import type {
   FindingSeverity,
   PreviewedFinding,
   PreviewEvidence,
+  QaFinding,
 } from '../../shared/types';
 
 /**
@@ -41,12 +42,20 @@ interface PreviewRow {
   payload: string;
 }
 
-interface IssuePlan {
+export interface IssuePlan {
   kind: 'issue';
   title: string;
   body: string;
   labels?: string[];
   fingerprint?: string;
+  /**
+   * Structured form of the finding. Persisted on the preview row by
+   * QA-Hunter so the FileIssueModal follow-up refiner can regenerate
+   * `body` deterministically via `bodyFor` after the user reframes the
+   * issue. Older rows predate the field and have it omitted; the refine
+   * panel disables Send when this is missing.
+   */
+  finding?: QaFinding;
 }
 
 function isIssuePlan(v: unknown): v is IssuePlan {
@@ -58,7 +67,8 @@ function isIssuePlan(v: unknown): v is IssuePlan {
     typeof o['body'] === 'string' &&
     (o['labels'] === undefined ||
       (Array.isArray(o['labels']) && o['labels'].every((s) => typeof s === 'string'))) &&
-    (o['fingerprint'] === undefined || typeof o['fingerprint'] === 'string')
+    (o['fingerprint'] === undefined || typeof o['fingerprint'] === 'string') &&
+    (o['finding'] === undefined || (typeof o['finding'] === 'object' && o['finding'] !== null))
   );
 }
 
@@ -170,6 +180,7 @@ function rowToFinding(row: PreviewRow, enrich: RowEnrichment): PreviewedFinding 
     evidence: row.run_id ? (enrich.evidenceByRun.get(row.run_id) ?? []) : [],
     published: enrich.publishedById.get(row.id) ?? null,
     dismissed: enrich.dismissedIds.has(row.id),
+    finding: parsed.finding ?? null,
   };
 }
 
@@ -284,6 +295,28 @@ export function insertPreview(opts: {
       opts.fingerprint ?? null,
     );
   return Number(result.lastInsertRowid);
+}
+
+/**
+ * Replace the `payload` JSON and `fingerprint` on an existing preview row
+ * in a single statement. Used by the FileIssueModal follow-up refiner
+ * after each chat turn: the new `IssuePlan` (with refined title / body /
+ * labels / finding) becomes the live truth, and dedup queries pick up
+ * the new fingerprint immediately. The row id is preserved so transcript
+ * rows in `preview_followups` stay anchored.
+ */
+export function updatePreviewPayload(opts: {
+  previewId: number;
+  payload: IssuePlan;
+  fingerprint: string | null;
+}): void {
+  getDb()
+    .prepare(
+      `UPDATE previews
+          SET payload = ?, fingerprint = ?
+        WHERE id = ?`,
+    )
+    .run(JSON.stringify(opts.payload), opts.fingerprint, opts.previewId);
 }
 
 /**

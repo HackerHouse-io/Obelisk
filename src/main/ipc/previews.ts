@@ -6,7 +6,16 @@ import {
   markPreviewDismissed,
   markPreviewPublished,
   removePreviewDismissedMarker,
+  updatePreviewPayload,
+  type IssuePlan,
 } from '../db/previews';
+import {
+  appendPreviewFollowup,
+  getOriginalSnapshot,
+  listPreviewFollowups,
+  revertPreviewToOriginal,
+  snapshotOriginalIfMissing,
+} from '../db/preview-followups';
 import { getPlaybookDraft } from '../agents/playbook-bootstrapper/publish';
 import { getRepo } from '../db/repos';
 import { getRun } from '../db/runs';
@@ -14,7 +23,24 @@ import { publish } from '../publisher';
 import { OBELISK_LABELS } from '../publisher/labels';
 import { syncBacklogForRepo } from '../scheduler/backlog-sync';
 import { broadcast } from './bus';
-import type { FindingSeverity, IpcMap } from '../../shared/types';
+import {
+  bodyFor,
+  fingerprintFor,
+  parseBodyToFinding,
+  stripTitlePrefix,
+  titleFor,
+} from '../agents/qa-hunter';
+import { refineFinding } from '../agents/preview-followup/refine';
+import { effectiveDefaultRunner } from '../runners/effective-default';
+import { checkInstalled } from '../runners/spawn';
+import { probeRunnerAuth } from '../runners/auth-probe';
+import type {
+  FindingSeverity,
+  IpcMap,
+  PreviewedFinding,
+  QaFinding,
+  RunnerKind,
+} from '../../shared/types';
 
 export async function handlePreviewsList(
   payload: IpcMap['previews:list']['req'],
@@ -223,6 +249,235 @@ function buildDraftBodyFromCase(opts: {
     '',
     `<!-- obelisk:case_id=${opts.caseId} -->`,
   ].join('\n');
+}
+
+/* ---------- Follow-up refine chat ---------- */
+
+interface RunnerProbeCacheEntry {
+  at: number;
+  res: IpcMap['previews:refineAvailable']['res'];
+}
+const REFINE_PROBE_TTL_MS = 60_000;
+const refineProbeCache = new Map<RunnerKind, RunnerProbeCacheEntry>();
+const refineInflight = new Set<number>();
+
+export async function handlePreviewsRefineAvailable(
+  payload: IpcMap['previews:refineAvailable']['req'],
+): Promise<IpcMap['previews:refineAvailable']['res']> {
+  const lookup = getPreviewById(payload.previewId);
+  if (!lookup) {
+    throw new ObeliskError('NOT_FOUND', `Preview ${payload.previewId} not found`);
+  }
+  const repo = getRepo(lookup.repoId);
+  if (!repo) {
+    throw new ObeliskError('REPO_NOT_FOUND', `Repo ${lookup.repoId} not found`);
+  }
+  const runner = effectiveDefaultRunner(repo);
+  const cached = refineProbeCache.get(runner);
+  if (cached && Date.now() - cached.at < REFINE_PROBE_TTL_MS) {
+    return cached.res;
+  }
+
+  const command = runner === 'codex' ? 'codex' : 'claude';
+  const installed = await checkInstalled(command);
+  let res: IpcMap['previews:refineAvailable']['res'];
+  if (!installed.ok) {
+    res = { ok: false, runner, reason: 'cli_missing' };
+  } else {
+    const probe = await probeRunnerAuth(runner);
+    if (probe.status === 'signed_in') {
+      res = { ok: true, runner };
+    } else if (probe.status === 'cli_missing') {
+      res = { ok: false, runner, reason: 'cli_missing' };
+    } else if (probe.status === 'signed_out') {
+      res = { ok: false, runner, reason: 'signed_out' };
+    } else {
+      res = { ok: false, runner, reason: 'unknown' };
+    }
+  }
+  refineProbeCache.set(runner, { at: Date.now(), res });
+  return res;
+}
+
+export async function handlePreviewsRefine(
+  payload: IpcMap['previews:refine']['req'],
+): Promise<IpcMap['previews:refine']['res']> {
+  const lookup = getPreviewById(payload.previewId);
+  if (!lookup) {
+    throw new ObeliskError('NOT_FOUND', `Preview ${payload.previewId} not found`);
+  }
+  if (lookup.finding.published) {
+    throw new ObeliskError(
+      'CONFLICT',
+      'This finding has already been filed to GitHub. Refine is unavailable.',
+    );
+  }
+  const repo = getRepo(lookup.repoId);
+  if (!repo) {
+    throw new ObeliskError('REPO_NOT_FOUND', `Repo ${lookup.repoId} not found`);
+  }
+  if (refineInflight.has(payload.previewId)) {
+    throw new ObeliskError(
+      'CONFLICT',
+      'Another refine is already running for this finding.',
+      'Wait for it to finish and try again.',
+    );
+  }
+
+  // Legacy previews predate the structured `finding` payload field —
+  // best-effort parse the rendered body back into a Finding so the user
+  // can still refine. The LLM will rewrite whatever the parser missed.
+  const baseFinding: QaFinding =
+    lookup.finding.finding ??
+    parseBodyToFinding({
+      title: lookup.finding.title,
+      body: lookup.finding.body,
+      labels: lookup.finding.labels,
+    });
+
+  // Persist the user's manual title/labels onto the structured finding
+  // before prompting — the LLM sees what the form sees, and the original
+  // snapshot below captures the pre-refine payload so revert is precise.
+  const originalPayload: IssuePlan = {
+    kind: 'issue',
+    title: lookup.finding.title,
+    body: lookup.finding.body,
+    labels: lookup.finding.labels,
+    finding: baseFinding,
+  };
+  snapshotOriginalIfMissing({
+    previewId: payload.previewId,
+    payloadJson: JSON.stringify(originalPayload),
+  });
+
+  const draftTitle = stripTitlePrefix(payload.currentDraft.title.trim());
+  const draftLabels = payload.currentDraft.labels.slice();
+  const mergedCurrent: QaFinding = {
+    ...baseFinding,
+    title: draftTitle.length > 0 ? draftTitle : baseFinding.title,
+    labels: draftLabels,
+  };
+
+  const userMessage = payload.userMessage.trim();
+  if (!userMessage) {
+    throw new ObeliskError('INVALID_INPUT', 'Follow-up message cannot be empty.');
+  }
+  appendPreviewFollowup({
+    previewId: payload.previewId,
+    role: 'user',
+    content: userMessage,
+  });
+
+  const transcript = listPreviewFollowups(payload.previewId, { limit: 20 });
+  const abort = new AbortController();
+  refineInflight.add(payload.previewId);
+  let refineResult;
+  try {
+    refineResult = await refineFinding({
+      runner: effectiveDefaultRunner(repo),
+      cwd: repo.localPath,
+      current: mergedCurrent,
+      transcript: transcript.slice(0, -1), // exclude the user turn we just appended
+      userMessage,
+      abort: abort.signal,
+    });
+  } finally {
+    refineInflight.delete(payload.previewId);
+  }
+
+  const updated: QaFinding = refineResult.updated;
+  const newTitle = titleFor(updated);
+  const newBody = bodyFor(updated);
+  const newFingerprint = fingerprintFor(updated);
+  const labels = (
+    updated.labels && updated.labels.length > 0 ? updated.labels : draftLabels
+  ).slice();
+  const newPayload: IssuePlan = {
+    kind: 'issue',
+    title: newTitle,
+    body: newBody,
+    labels,
+    fingerprint: newFingerprint,
+    finding: { ...updated, labels },
+  };
+  updatePreviewPayload({
+    previewId: payload.previewId,
+    payload: newPayload,
+    fingerprint: newFingerprint,
+  });
+  appendPreviewFollowup({
+    previewId: payload.previewId,
+    role: 'assistant',
+    content: refineResult.assistantReply,
+  });
+  broadcast({ type: 'previews.changed', repoId: lookup.repoId });
+  broadcast({
+    type: 'previews.followupChanged',
+    previewId: payload.previewId,
+    repoId: lookup.repoId,
+  });
+
+  // Build the response from what we just wrote — markers (published /
+  // dismissed) and evidence don't change in a refine, so re-reading would
+  // just round-trip the row we already have authoritative knowledge of.
+  const refreshedFinding: PreviewedFinding = {
+    ...lookup.finding,
+    title: newTitle,
+    body: newBody,
+    labels,
+    severity: updated.severity,
+    finding: newPayload.finding ?? null,
+  };
+  return { assistantReply: refineResult.assistantReply, updated: refreshedFinding };
+}
+
+export async function handlePreviewsListFollowups(
+  payload: IpcMap['previews:listFollowups']['req'],
+): Promise<IpcMap['previews:listFollowups']['res']> {
+  const lookup = getPreviewById(payload.previewId);
+  if (!lookup) {
+    throw new ObeliskError('NOT_FOUND', `Preview ${payload.previewId} not found`);
+  }
+  return { messages: listPreviewFollowups(payload.previewId) };
+}
+
+export async function handlePreviewsRevertFollowups(
+  payload: IpcMap['previews:revertFollowups']['req'],
+): Promise<IpcMap['previews:revertFollowups']['res']> {
+  const lookup = getPreviewById(payload.previewId);
+  if (!lookup) {
+    throw new ObeliskError('NOT_FOUND', `Preview ${payload.previewId} not found`);
+  }
+  const snapshot = getOriginalSnapshot(payload.previewId);
+  if (!snapshot) {
+    return { ok: true, restored: null };
+  }
+  let original: IssuePlan;
+  try {
+    original = JSON.parse(snapshot.payloadJson) as IssuePlan;
+  } catch {
+    throw new ObeliskError('INTERNAL', 'Original snapshot is corrupt; cannot revert.');
+  }
+  revertPreviewToOriginal({
+    previewId: payload.previewId,
+    payload: original,
+    fingerprint: original.fingerprint ?? null,
+  });
+  broadcast({ type: 'previews.changed', repoId: lookup.repoId });
+  broadcast({
+    type: 'previews.followupChanged',
+    previewId: payload.previewId,
+    repoId: lookup.repoId,
+  });
+  const restored: PreviewedFinding = {
+    ...lookup.finding,
+    title: original.title,
+    body: original.body,
+    labels: original.labels ?? [],
+    severity: original.finding?.severity ?? lookup.finding.severity,
+    finding: original.finding ?? null,
+  };
+  return { ok: true, restored };
 }
 
 /**

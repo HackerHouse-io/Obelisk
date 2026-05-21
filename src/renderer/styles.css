@@ -2560,9 +2560,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  /* Scroll inside the modal so the action footer stays pinned. */
   max-height: calc(100vh - 80px);
-  overflow-y: auto;
+  /* The form is a flex container with independently-scrolling panes
+     (left fields scroll, right sidebar's refine panel scrolls). The
+     form itself never scrolls — that would let the body textarea push
+     the right-side chat behind the pinned footer. */
+  overflow: hidden;
 }
 
 .file-issue-header {
@@ -2572,6 +2575,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .file-issue-headline {
@@ -2598,16 +2602,16 @@ body {
 }
 
 .file-issue-grid {
+  /* Stretch to fill the form's remaining space; min-height: 0 lets the
+     internal scroll containers actually shrink instead of overflowing. */
+  flex: 1;
+  min-height: 0;
   display: grid;
-  /* Single-column by default — the aside only joins when there's actual
-     evidence to show (see .has-evidence). Saves ~280px of empty real
-     estate for QA Hunter findings, which usually have no screenshots. */
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
-  min-height: 360px;
 }
 .file-issue-grid.has-evidence {
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 340px;
 }
 @media (max-width: 920px) {
   .file-issue-grid.has-evidence {
@@ -2625,6 +2629,10 @@ body {
   gap: 12px;
   padding: 16px 20px;
   min-width: 0;
+  /* The body textarea is tall by design — scroll the left column
+     internally so the right-side sidebar stays pinned alongside it. */
+  overflow-y: auto;
+  min-height: 0;
 }
 .file-issue-grid.has-evidence .file-issue-fields {
   border-right: 1px solid var(--line);
@@ -2777,6 +2785,204 @@ body {
   background: var(--bg-2);
 }
 
+/* Tabbed right sidebar (Evidence | Follow-up) on the file-issue modal. */
+.file-issue-sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-issue-sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.file-issue-sidebar-tabs .file-issue-tab {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.file-issue-sidebar-tabs .file-issue-tab.active {
+  background: var(--bg-1);
+  color: var(--t-0);
+  border-bottom: 1px solid var(--bg-1);
+  margin-bottom: -1px;
+}
+
+.file-issue-sidebar-count {
+  font-size: 10.5px;
+  background: var(--bg-3);
+  color: var(--t-1);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.file-issue-sidebar-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.file-issue-sidebar-refine {
+  padding: 0;
+  background: var(--bg-1);
+  /* Refine panel owns its own internal scrolling (transcript scrolls,
+     input row + actions pinned at the bottom). Hide overflow here so
+     the sidebar-body's `overflow-y: auto` doesn't double-clip. */
+  overflow: hidden;
+}
+
+/* ---------- Refine panel ---------- */
+
+.refine-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.refine-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.refine-empty {
+  font-size: 12.5px;
+  color: var(--t-2);
+  line-height: 1.55;
+  padding: 6px 4px;
+}
+
+.refine-message {
+  max-width: 90%;
+  border-radius: var(--r-2);
+  padding: 8px 11px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.refine-message-user {
+  align-self: flex-end;
+  background: var(--brand);
+  color: #fff;
+}
+.refine-message-assistant {
+  align-self: flex-start;
+  background: var(--bg-3);
+  color: var(--t-0);
+}
+.refine-message-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 12px;
+}
+.refine-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--t-2);
+  opacity: 0.45;
+  animation: refine-dot-pulse 1.2s ease-in-out infinite;
+}
+.refine-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.refine-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes refine-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateY(-2px);
+  }
+}
+
+.refine-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--t-2);
+  padding: 6px 14px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+}
+.refine-banner-error {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+
+.refine-input-row {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-1);
+}
+.refine-input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--t-0);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+  width: 100%;
+  box-sizing: border-box;
+}
+.refine-input:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+.refine-input:disabled {
+  background: var(--bg-2);
+  color: var(--t-3);
+}
+
+.refine-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.refine-revert {
+  font-size: 11.5px;
+  padding: 4px 8px;
+}
+.refine-send {
+  font-size: 12px;
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .file-issue-evidence-title {
   font-size: 11.5px;
   color: var(--t-2);
@@ -2810,12 +3016,11 @@ body {
 .file-issue-actions {
   padding: 12px 20px 14px;
   border-top: 1px solid var(--line);
-  /* Pin the footer so the Cancel / Send buttons remain reachable when the
-     form scrolls (long bodies push the action row off-screen otherwise). */
-  position: sticky;
-  bottom: 0;
   background: var(--bg-1);
-  z-index: 1;
+  /* The form is a non-scrolling flex container, so the actions row is
+     naturally pinned at the bottom — no sticky positioning needed,
+     which previously overlaid the right-side chat panel. */
+  flex-shrink: 0;
 }
 
 /* ---------- Test Plans (redesigned, Notion-like) ---------- */

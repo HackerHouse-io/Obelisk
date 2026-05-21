@@ -422,6 +422,49 @@ export interface PreviewedFinding {
   published: { issueNumber: number; htmlUrl: string; at: ISO } | null;
   /** When the user dismissed this finding (false-positive). */
   dismissed: boolean;
+  /**
+   * Structured form of the finding, when available. Captured by QA-Hunter
+   * on emit and persisted on the preview row so the follow-up refiner can
+   * regenerate `body` deterministically via the same `bodyFor` template.
+   * Older previews predate this field and have it omitted; refine is
+   * disabled for those rows.
+   */
+  finding: QaFinding | null;
+}
+
+/**
+ * Structured QA finding as parsed from the agent's `BEGIN_FINDINGS` block.
+ * Lives in shared so both the QA-Hunter handler and the renderer's
+ * follow-up panel can reference the same shape.
+ */
+export interface QaFinding {
+  title: string;
+  severity: FindingSeverity;
+  description: string;
+  expected: string;
+  actual: string;
+  repro: string;
+  evidence?: string;
+  suspected_files: string[];
+  suggested_test: string;
+  suspected_kind?: 'bug' | 'coverage';
+  case_id?: string;
+  /**
+   * Labels carried with the finding. QA-Hunter populates from severity +
+   * obelisk:fix; the refiner may add/remove (e.g. add "spec" when the
+   * user reframes a bug as a spec fix).
+   */
+  labels?: string[];
+}
+
+/** Visible follow-up message in the FileIssueModal refine panel. */
+export type PreviewFollowupRole = 'user' | 'assistant' | 'system';
+export interface PreviewFollowup {
+  id: number;
+  previewId: number;
+  role: PreviewFollowupRole;
+  content: string;
+  createdAt: ISO;
 }
 
 /* ---------- iOS QA Pilot ---------- */
@@ -708,6 +751,46 @@ export interface IpcMap {
   'previews:dismiss': { req: { previewId: number }; res: { ok: true } };
   'previews:undismiss': { req: { previewId: number }; res: { ok: true } };
   /**
+   * Pre-flight probe: is the connected coding-agent CLI installed and
+   * signed in? Drives whether the Follow-up panel's Send button is
+   * enabled. Cached for ~60s in the main process to keep modal opens
+   * snappy.
+   */
+  'previews:refineAvailable': {
+    req: { previewId: number };
+    res:
+      | { ok: true; runner: RunnerKind }
+      | { ok: false; runner: RunnerKind; reason: 'cli_missing' | 'signed_out' | 'unknown' };
+  };
+  /**
+   * Run one refine turn. The renderer sends the current form draft
+   * (title + labels — the body is regenerated server-side by `bodyFor`
+   * from the structured finding) along with the new user message so the
+   * user's manual edits aren't clobbered by stale DB state. On success
+   * the preview row's payload + fingerprint are overwritten and the new
+   * PreviewedFinding is returned for the modal to apply.
+   */
+  'previews:refine': {
+    req: {
+      previewId: number;
+      currentDraft: { title: string; labels: string[] };
+      userMessage: string;
+    };
+    res: { assistantReply: string; updated: PreviewedFinding };
+  };
+  'previews:listFollowups': {
+    req: { previewId: number };
+    res: { messages: PreviewFollowup[] };
+  };
+  /**
+   * Wipe the transcript and restore the original `previews.payload`
+   * snapshotted on the first refine. No-op if no refine has happened.
+   */
+  'previews:revertFollowups': {
+    req: { previewId: number };
+    res: { ok: true; restored: PreviewedFinding | null };
+  };
+  /**
    * Synthesize a preview row from a failed plan case when the QA agent
    * emitted CASE_FAIL but did not produce a finding. Returns the new
    * preview so the renderer can hand it straight to FileIssueModal —
@@ -973,6 +1056,7 @@ export type BusEvent =
       status: 'started' | 'completed' | 'failed';
     }
   | { type: 'previews.changed'; repoId: string }
+  | { type: 'previews.followupChanged'; previewId: number; repoId: string }
   | { type: 'testPlans.changed'; repoId: string }
   | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }
   | { type: 'coverageMapGeneration.progress'; job: CoverageMapGenerationJob }

@@ -242,6 +242,13 @@ export type PublishPlan =
        * title-similarity dedup.
        */
       fingerprint?: string;
+      /**
+       * Structured form of the finding, when the agent emitted one (QA
+       * Hunter, Manual QA). Persisted on the preview row so the FileIssue
+       * follow-up refiner can re-emit the same `bodyFor` rendering after
+       * the user chats with the agent to reframe the issue.
+       */
+      finding?: import('../../shared/types').QaFinding;
     }
   | { kind: 'comment'; issueNumber: number; body: string }
   | {

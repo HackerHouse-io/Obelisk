@@ -9,6 +9,7 @@ import {
 } from '../lib/find-existing-issue';
 import { listAllPreviewTitlesForRepo, listKnownFingerprintsForRepo } from '../../db/previews';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
+import type { QaFinding } from '../../../shared/types';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -16,6 +17,13 @@ import type {
   InterpretResultInput,
   PublishPlan,
 } from '../types';
+
+/**
+ * Local alias for the shared structured-finding type. QA Hunter is the
+ * primary producer; the refine pipeline in `preview-followup/` is the
+ * primary consumer.
+ */
+export type Finding = QaFinding;
 
 export const qaHunterHandler: AgentHandler = {
   name: 'qa-hunter',
@@ -103,12 +111,14 @@ export const qaHunterHandler: AgentHandler = {
       // if the agent reworded the title this run.
       if (dedupFingerprints.has(fingerprint)) continue;
       if (dedupTitles.some((t) => previewTitleConflicts(t, title))) continue;
+      const labels = labelsFor(f);
       out.push({
         kind: 'issue',
         title,
         body: bodyFor(f),
-        labels: labelsFor(f),
+        labels,
         fingerprint,
+        finding: { ...f, labels },
       });
       dedupTitles.push(title);
       dedupFingerprints.add(fingerprint);
@@ -163,33 +173,11 @@ export function fingerprintFor(f: Finding): string {
 
 /* ---------- output parsing ---------- */
 
-interface Finding {
-  title: string;
-  severity: 'P0' | 'P1' | 'P2';
-  description: string;
-  expected: string;
-  actual: string;
-  repro: string;
-  evidence?: string;
-  suspected_files: string[];
-  suggested_test: string;
-  suspected_kind?: 'bug' | 'coverage';
-  /**
-   * Plan case id this finding maps to (or `extra-N` for unsolicited
-   * finds). Optional only because older QA Hunter outputs predate the
-   * field; the agent prompt requires it. Surfaced in the issue body so
-   * `derivePerCaseState` can flip the case to `failed` even when the
-   * live `CASE_FAIL` marker was lost (e.g. older codex runs whose
-   * agent_message text never reached the case-progress tracker).
-   */
-  case_id?: string;
-}
-
 export function parseFindings(stdout: string): Finding[] {
   return parseFencedJson<Finding>(stdout, 'BEGIN_FINDINGS', 'END_FINDINGS', isFinding);
 }
 
-function isFinding(v: unknown): v is Finding {
+export function isFinding(v: unknown): v is Finding {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
   return (
@@ -207,13 +195,24 @@ function isFinding(v: unknown): v is Finding {
     obj['suspected_files'].every((f) => typeof f === 'string') &&
     typeof obj['suggested_test'] === 'string' &&
     (obj['evidence'] === undefined || typeof obj['evidence'] === 'string') &&
-    (obj['case_id'] === undefined || typeof obj['case_id'] === 'string')
+    (obj['case_id'] === undefined || typeof obj['case_id'] === 'string') &&
+    (obj['labels'] === undefined ||
+      (Array.isArray(obj['labels']) && obj['labels'].every((s) => typeof s === 'string')))
   );
 }
 
-function titleFor(f: Finding): string {
+export function titleFor(f: Finding): string {
   const prefix = f.severity === 'P2' ? '[smell]' : '[bug]';
   return `${prefix} ${f.title}`;
+}
+
+/**
+ * Inverse of `titleFor`: drops the `[bug]` / `[smell]` prefix so callers
+ * (e.g. the follow-up refiner) can hand the raw title back to the model
+ * without leaking the rendering convention into the structured form.
+ */
+export function stripTitlePrefix(title: string): string {
+  return title.replace(/^\s*\[(bug|smell)\]\s+/i, '');
 }
 
 export function bodyFor(f: Finding): string {
@@ -261,4 +260,96 @@ export function bodyFor(f: Finding): string {
 
 function labelsFor(f: Finding): string[] {
   return [OBELISK_LABELS.fix, f.severity];
+}
+
+/**
+ * Best-effort inverse of `bodyFor`: rebuild a structured Finding from a
+ * rendered issue body. Used by the FileIssueModal follow-up refiner when
+ * a preview row predates the structured-`finding` payload field (older
+ * QA Hunter runs, manual drafts) — we still want the user to be able to
+ * chat with the agent, so we re-parse what we have. Missing sections
+ * fall back to placeholders that pass `isFinding`'s shape check.
+ */
+export function parseBodyToFinding(opts: {
+  title: string;
+  body: string;
+  labels: readonly string[];
+}): Finding {
+  const rawTitle = stripTitlePrefix(opts.title).trim();
+  const title = rawTitle.length > 0 ? rawTitle : '(untitled finding)';
+  const severity = severityFromLabelsOrBody(opts.labels, opts.body);
+  const evidence = unplaceholder(extractSection(opts.body, 'Evidence'));
+  const suggested = stripCodeFence(extractSection(opts.body, 'Suggested test'));
+  return {
+    title,
+    severity,
+    description: nonEmpty(extractSection(opts.body, 'Description'), title),
+    expected: nonEmpty(extractSection(opts.body, 'Expected behavior'), '(unspecified)'),
+    actual: nonEmpty(extractSection(opts.body, 'Actual behavior'), '(unspecified)'),
+    repro: nonEmpty(extractSection(opts.body, 'Steps to reproduce'), '(unspecified)'),
+    ...(evidence ? { evidence } : {}),
+    suspected_files: parseFileList(extractSection(opts.body, 'Suspected files')),
+    suggested_test: suggested,
+    labels: [...opts.labels],
+  };
+}
+
+function extractSection(body: string, name: string): string {
+  // Section content runs until the next `## ` heading or the trailing
+  // `> Filed by Obelisk QA Hunter` blockquote (terminator in `bodyFor`).
+  const re = new RegExp(
+    `^##\\s+${escapeRegex(name)}\\s*$([\\s\\S]*?)(?=^##\\s+|^>\\s+Filed|\\z)`,
+    'mi',
+  );
+  const m = body.match(re);
+  return m && m[1] ? m[1].trim() : '';
+}
+
+function unplaceholder(s: string): string {
+  // bodyFor renders empty sections as italic placeholders like
+  // `_(no evidence captured)_`; drop those so the model doesn't think
+  // the placeholder is real content.
+  const t = s.trim();
+  if (/^_\(.*\)_$/.test(t)) return '';
+  return t;
+}
+
+function nonEmpty(s: string, fallback: string): string {
+  const t = unplaceholder(s);
+  return t.length > 0 ? t : fallback;
+}
+
+function stripCodeFence(s: string): string {
+  const t = s.trim();
+  const fenced = t.match(/^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$/);
+  return fenced ? fenced[1]!.trim() : unplaceholder(t);
+}
+
+function parseFileList(s: string): string[] {
+  const t = unplaceholder(s);
+  if (!t) return [];
+  const out: string[] = [];
+  for (const line of t.split(/\r?\n/)) {
+    const m = line.match(/^\s*[-*]\s+`?([^`\n]+?)`?\s*$/);
+    if (m && m[1]) out.push(m[1].trim());
+  }
+  return out;
+}
+
+function severityFromLabelsOrBody(labels: readonly string[], body: string): 'P0' | 'P1' | 'P2' {
+  // Labels are the canonical source (qa-hunter writes `P0|P1|P2` as a
+  // bare label); fall back to the `## Severity` section if the labels
+  // are stripped or use the legacy `severity:Px` format.
+  for (const l of labels) {
+    if (l === 'P0' || l === 'P1' || l === 'P2') return l;
+    const m = /^severity:(P[012])$/.exec(l);
+    if (m) return m[1] as 'P0' | 'P1' | 'P2';
+  }
+  const sev = extractSection(body, 'Severity').trim();
+  if (sev === 'P0' || sev === 'P1' || sev === 'P2') return sev;
+  return 'P2';
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

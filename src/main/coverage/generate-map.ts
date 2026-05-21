@@ -7,8 +7,8 @@ import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
 import { spawnAgentCli } from '../runners/spawn';
 import { runnerEnv } from '../runners/env';
-import { effectiveDefaultRunner, resolveRunnerModel } from '../runners/effective-default';
-import { buildCodexExecArgs } from '../prompt-compiler/codex-layout';
+import { effectiveDefaultRunner } from '../runners/effective-default';
+import { buildOneShotClaudeArgs, buildOneShotCodexArgs } from '../agents/lib/oneshot-cli-args';
 import { createWorktree, destroyWorktree } from '../git/worktree';
 import { matchesAnyGlob, parseCoverageMap } from './coverage-map';
 import { advanceStage, finishDone, finishFailed, startJob } from './jobs';
@@ -240,18 +240,11 @@ async function pickInstalledRunner(repo: Repo, override?: RunnerKind): Promise<R
 }
 
 function claudeArgs(modelOverride?: string): string[] {
-  const args = ['-p', '--system-prompt', GEN_SYSTEM_PROMPT];
-  const model = resolveRunnerModel('claude', modelOverride);
-  if (model) args.splice(0, 0, '--model', model);
-  return args;
+  return buildOneShotClaudeArgs({ systemPrompt: GEN_SYSTEM_PROMPT, modelOverride });
 }
 
 function codexArgs(modelOverride?: string): string[] {
-  return buildCodexExecArgs({
-    sandbox: 'read-only',
-    reasoning: 'high',
-    modelOverride,
-  });
+  return buildOneShotCodexArgs({ reasoning: 'high', modelOverride });
 }
 
 const GEN_SYSTEM_PROMPT = [

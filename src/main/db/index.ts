@@ -14,8 +14,22 @@ export function setDbPathForTesting(absolutePath: string): void {
   }
   overridePath = absolutePath;
   // The audit module caches "system sentinel exists" between calls; that
-  // cache stops being valid as soon as we swap to a fresh DB file.
-  void import('../logger/audit').then((m) => m._resetSystemSentinelCacheForTesting());
+  // cache stops being valid as soon as we swap to a fresh DB file. The
+  // dynamic import is fire-and-forget (sync function can't await); guard
+  // against the worker tearing the module down between schedule and
+  // settle — vitest reloads modules across test files and the promise
+  // can resolve against a stale namespace, surfacing as a noisy
+  // "Unhandled Rejection" that fails husky pre-push.
+  void import('../logger/audit')
+    .then((m) => {
+      if (typeof m?._resetSystemSentinelCacheForTesting === 'function') {
+        m._resetSystemSentinelCacheForTesting();
+      }
+    })
+    .catch(() => {
+      // Module not available (test teardown raced this call). Safe to ignore —
+      // the sentinel cache is reset implicitly on the next process.
+    });
 }
 
 function resolveUserDataDir(): string {

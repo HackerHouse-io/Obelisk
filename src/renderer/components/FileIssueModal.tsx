@@ -12,6 +12,7 @@ import type { PreviewedFinding } from '../../shared/types';
 import { Icon } from '../icons';
 import { labelForAgent, shortDate } from '../format';
 import { EvidenceStrip } from './FindingPreview';
+import { FileIssueRefinePanel } from './FileIssueRefinePanel';
 
 interface Props {
   open: boolean;
@@ -43,9 +44,11 @@ export function FileIssueModal({
 }: Props): ReactElement | null {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [bodyDirty, setBodyDirty] = useState(false);
   const [labels, setLabels] = useState<string[]>([]);
   const [labelDraft, setLabelDraft] = useState('');
   const [bodyTab, setBodyTab] = useState<'edit' | 'preview'>('edit');
+  const [sideTab, setSideTab] = useState<'evidence' | 'refine'>('refine');
   const [post, setPost] = useState<PostState>({ status: 'idle' });
   const titleRef = useRef<HTMLInputElement | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,12 +57,24 @@ export function FileIssueModal({
     if (!open || !finding) return;
     setTitle(finding.title);
     setBody(finding.body);
+    setBodyDirty(false);
     setLabels(finding.labels);
     setLabelDraft('');
     setBodyTab('edit');
+    setSideTab(finding.evidence.length > 0 ? 'evidence' : 'refine');
     setPost({ status: 'idle' });
     queueMicrotask(() => titleRef.current?.focus());
   }, [open, finding]);
+
+  // Push refined finding back into the form. Resets the dirty flag because
+  // the refine result becomes the new baseline — the user can iterate
+  // again from this rendered body without re-warning.
+  function applyRefinedFinding(next: PreviewedFinding): void {
+    setTitle(next.title);
+    setBody(next.body);
+    setBodyDirty(false);
+    setLabels(next.labels);
+  }
 
   useEffect(() => {
     return () => {
@@ -172,7 +187,7 @@ export function FileIssueModal({
             </button>
           </header>
 
-          <div className={`file-issue-grid${finding.evidence.length > 0 ? ' has-evidence' : ''}`}>
+          <div className="file-issue-grid has-evidence">
             <div className="file-issue-fields">
               <label className="file-issue-label">
                 <span>Title</span>
@@ -239,7 +254,10 @@ export function FileIssueModal({
                 {bodyTab === 'edit' ? (
                   <textarea
                     value={body}
-                    onChange={(e) => setBody(e.target.value)}
+                    onChange={(e) => {
+                      setBody(e.target.value);
+                      setBodyDirty(true);
+                    }}
                     className="file-issue-textarea"
                     spellCheck
                     disabled={sending || sent}
@@ -250,12 +268,49 @@ export function FileIssueModal({
               </div>
             </div>
 
-            {finding.evidence.length > 0 ? (
-              <aside className="file-issue-evidence">
-                <div className="file-issue-evidence-title">Evidence</div>
-                <EvidenceStrip finding={finding} />
-              </aside>
-            ) : null}
+            <aside className="file-issue-sidebar">
+              <div className="file-issue-sidebar-tabs">
+                <button
+                  type="button"
+                  className={`file-issue-tab${sideTab === 'evidence' ? ' active' : ''}`}
+                  onClick={() => setSideTab('evidence')}
+                >
+                  Evidence
+                  {finding.evidence.length > 0 ? (
+                    <span className="file-issue-sidebar-count">{finding.evidence.length}</span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  className={`file-issue-tab${sideTab === 'refine' ? ' active' : ''}`}
+                  onClick={() => setSideTab('refine')}
+                >
+                  Follow-up
+                </button>
+              </div>
+              {sideTab === 'evidence' ? (
+                <div className="file-issue-sidebar-body">
+                  {finding.evidence.length > 0 ? (
+                    <EvidenceStrip finding={finding} />
+                  ) : (
+                    <div className="file-issue-evidence-empty">
+                      No screenshots or traces attached.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="file-issue-sidebar-body file-issue-sidebar-refine">
+                  <FileIssueRefinePanel
+                    previewId={finding.id}
+                    finding={finding}
+                    currentDraft={{ title, labels }}
+                    bodyDirty={bodyDirty}
+                    onUpdated={applyRefinedFinding}
+                    readOnly={readOnly}
+                  />
+                </div>
+              )}
+            </aside>
           </div>
 
           {post.status === 'error' && post.error ? (

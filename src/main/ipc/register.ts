@@ -60,6 +60,10 @@ import {
   handlePreviewsUndismiss,
   handlePreviewsRefresh,
   handlePreviewsCreateDraftFromCase,
+  handlePreviewsRefine,
+  handlePreviewsRefineAvailable,
+  handlePreviewsListFollowups,
+  handlePreviewsRevertFollowups,
 } from './previews';
 import {
   handleTestPlansList,
@@ -183,6 +187,10 @@ export function registerIpcHandlers(): void {
   register('previews:undismiss', handlePreviewsUndismiss);
   register('previews:refresh', handlePreviewsRefresh);
   register('previews:createDraftFromCase', handlePreviewsCreateDraftFromCase);
+  register('previews:refine', handlePreviewsRefine);
+  register('previews:refineAvailable', handlePreviewsRefineAvailable);
+  register('previews:listFollowups', handlePreviewsListFollowups);
+  register('previews:revertFollowups', handlePreviewsRevertFollowups);
 
   // Test plans (gate the QA agent run flow)
   register('testPlans:list', handleTestPlansList);
