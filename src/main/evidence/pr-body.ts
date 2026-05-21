@@ -2,11 +2,6 @@ import type { EvidenceArtifact } from '../db/evidence';
 import type { CheckResult } from './check';
 import type { BugFixReport } from '../agents/bug-fixer';
 
-export interface CommitSummary {
-  sha: string;
-  subject: string;
-}
-
 export interface PrBodyInput {
   agentName: string;
   runId: string;
@@ -22,8 +17,6 @@ export interface PrBodyInput {
    * raw reasoning dump.
    */
   bugFixReport?: BugFixReport | null;
-  /** Commits the run produced (read from the worktree branch). */
-  commits?: CommitSummary[];
   /** Confidence score from the runner output, 0-1, or null if unknown. */
   confidence?: number | null;
   /** Local-app URI to open the run in Obelisk (Mission Control deep link). */
@@ -55,10 +48,7 @@ export function renderPrBody(input: PrBodyInput): string {
   const summary = `## Summary\n\n${input.summary.trim() || '(no summary provided)'}`;
   const reasoning = `## Reasoning\n\n${input.reasoning.trim() || '(no reasoning provided)'}`;
   const evidence = renderEvidence(input.evidence);
-  const commits = renderCommits(input.commits ?? []);
-  return [disclosure, summary, evidence, commits, reasoning]
-    .filter((s) => s.length > 0)
-    .join('\n\n');
+  return [disclosure, summary, evidence, reasoning].filter((s) => s.length > 0).join('\n\n');
 }
 
 function renderStructuredBody(
@@ -144,18 +134,6 @@ function issueNumberFromTaskRefSafe(taskRef: string): number | null {
   if (!match) return null;
   const n = Number(match[1]);
   return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function renderCommits(commits: CommitSummary[]): string {
-  if (commits.length === 0) return '';
-  const rows = commits
-    .map((c) => `| \`${c.sha.slice(0, 7)}\` | ${escapePipes(c.subject)} |`)
-    .join('\n');
-  return ['## Commits', '', '| sha | subject |', '| --- | --- |', rows].join('\n');
-}
-
-function escapePipes(s: string): string {
-  return s.replace(/\|/g, '\\|');
 }
 
 function renderDisclosure(input: PrBodyInput): string {

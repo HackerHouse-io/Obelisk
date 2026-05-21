@@ -655,10 +655,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
             // (e.g. the agent stopped early with REPRO_FAILED).
             const bugFixReport =
               input.agentName === 'bug-fixer' ? parseBugFixReport(ok.reasoning) : null;
-            const commits = await readCommitsOnBranch(
-              worktreeHandle.worktreePath,
-              repo.defaultBranch,
-            ).catch(() => [] as { sha: string; subject: string }[]);
             plan.body = renderPrBody({
               agentName: input.agentName,
               runId: run.id,
@@ -667,7 +663,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
               reasoning: ok.reasoning,
               evidence,
               bugFixReport,
-              commits,
             });
           }
         }
@@ -788,35 +783,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
   }
-}
-
-/**
- * Read the commits the runner produced on its branch (everything ahead
- * of the repo's default branch, oldest-first). Used by `renderPrBody`
- * to surface the commit list in the PR description so reviewers can
- * scan what got committed without expanding the diff.
- */
-async function readCommitsOnBranch(
-  worktreePath: string,
-  defaultBranch: string,
-): Promise<{ sha: string; subject: string }[]> {
-  const git = simpleGit(worktreePath);
-  // %h = abbreviated sha, %s = subject; tab-separated so subjects with
-  // spaces stay intact.
-  const out = await git.raw([
-    'log',
-    `${defaultBranch}..HEAD`,
-    '--pretty=format:%H%x09%s',
-    '--reverse',
-  ]);
-  return out
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const [sha, ...rest] = line.split('\t');
-      return { sha: sha ?? '', subject: rest.join('\t') };
-    });
 }
 
 /**

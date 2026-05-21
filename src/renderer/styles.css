@@ -6326,14 +6326,18 @@ body {
   align-items: center;
   gap: 10px;
   position: relative;
-  /* Let radar labels render outside the SVG bounds without being clipped. */
-  overflow: visible;
+  /* Hard-clip at the card boundary so an unexpectedly long axis label
+     never spills into the summary panel sitting in the next grid column. */
+  overflow: hidden;
 }
 
 .coverage-radar-shell {
   position: relative;
 }
 .coverage-radar-shell svg.coverage-radar {
+  /* Labels are anchored just outside the polygon and need a small amount
+     of room beyond the viewBox; the parent stage clips at the card edge
+     so this can't escape into neighbouring layout. */
   overflow: visible;
 }
 

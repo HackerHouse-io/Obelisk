@@ -124,6 +124,12 @@ export function CoverageRadar({
           const ly = p[1] + (dy / norm) * labelOffset;
           const anchor = lx < cx - 4 ? 'end' : lx > cx + 4 ? 'start' : 'middle';
           const isSelected = selectedLabel === f.label;
+          // Horizontally-anchored labels only have ~70px of gutter before
+          // they spill past the radar column into the summary card next
+          // door. Center-anchored labels split that gutter both ways.
+          // Truncate so the visible text always fits; the full label is
+          // still available via the hover tooltip card above the radar.
+          const truncated = truncateLabel(f.label, anchor === 'middle' ? 18 : 11);
           return (
             <g
               key={`label-${f.label}`}
@@ -134,7 +140,8 @@ export function CoverageRadar({
               onClick={() => onSelect(isSelected ? null : f.label)}
             >
               <text textAnchor={anchor} dy={-2} className="coverage-radar-label-text">
-                {f.label}
+                {truncated}
+                {truncated !== f.label ? <title>{f.label}</title> : null}
               </text>
               <text textAnchor={anchor} dy={11} className="coverage-radar-label-pct">
                 {f.coveragePct}%
@@ -259,6 +266,11 @@ function useAnimatedValues(target: number[]): number[] {
   }, [target.join('|')]);
 
   return values;
+}
+
+function truncateLabel(label: string, max: number): string {
+  if (label.length <= max) return label;
+  return label.slice(0, Math.max(1, max - 1)) + '…';
 }
 
 function padTo(arr: number[], len: number, fill: number): number[] {
