@@ -7102,6 +7102,53 @@ body {
   margin-top: 2px;
 }
 
+/* Attach-existing trigger: caret centred vertically (otherwise the SVG sits
+   on the text baseline and the button reads taller than its sibling). */
+.coverage-feature-card-attach-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--t-2);
+  transition: transform 120ms ease;
+}
+.btn:hover .coverage-feature-card-attach-caret {
+  color: var(--t-1);
+}
+.coverage-feature-card-attach-caret.open {
+  transform: rotate(180deg);
+  color: var(--t-0);
+}
+
+/* Slim, compact selects inside the run popover — the default .file-issue-input
+   sizing (14px font / 10px×12px padding) is built for full-width form fields
+   and looks bloated in a 240px popover. Custom SVG chevron replaces the
+   chunky native one so the look matches the rest of the dark UI. */
+.coverage-feature-card-run-pop .file-issue-input {
+  font-size: 12.5px;
+  padding: 6px 28px 6px 10px;
+  border-radius: 6px;
+}
+.coverage-feature-card-run-pop select.file-issue-input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2392a0ad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4 6l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+  cursor: pointer;
+}
+.coverage-feature-card-run-pop .model-select-row {
+  gap: 4px;
+}
+.coverage-feature-card-run-pop .model-select-refresh {
+  min-width: 24px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.coverage-feature-card-run-pop .model-select-custom {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 /* Whole-app QA card: like a feature card but with no stats / bar / pct. */
 .coverage-whole-app-card {
   background: var(--bg-2);

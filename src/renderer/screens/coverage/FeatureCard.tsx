@@ -225,8 +225,14 @@ export function FeatureCard({
               >
                 {busy === 'attach' ? (
                   <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
-                ) : null}{' '}
-                Attach existing ▾
+                ) : null}
+                Attach existing
+                <span
+                  className={`coverage-feature-card-attach-caret${attachOpen ? ' open' : ''}`}
+                  aria-hidden="true"
+                >
+                  <Icon.ChevronDown size={10} />
+                </span>
               </button>
               {attachOpen ? (
                 <div className="coverage-feature-card-attach-pop">
