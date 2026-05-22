@@ -1,4 +1,5 @@
 import { resolveRunnerModel } from '../runners/effective-default';
+import { renderCaseContract } from './claude-layout';
 import type { CompileInput, CompiledPrompt } from './types';
 
 /**
@@ -57,9 +58,7 @@ function renderTask(input: CompileInput): string {
         '## Assigned test plan',
         `Plan: ${task.assignedPlan.name} (id: ${task.assignedPlan.id})`,
         '',
-        'Execute every test case below. For each case that fails, emit a finding whose',
-        '`case_id` field matches the id from the plan so the user can map findings back',
-        'to specific cases.',
+        renderCaseContract(),
         '',
         task.assignedPlan.body,
         '',

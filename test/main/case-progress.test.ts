@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   CaseProgressTracker,
   parseCaseProgressLine,
+  resolveCaseId,
+  type CaseRef,
 } from '../../src/main/orchestrator/case-progress';
 import type { CaseProgressState } from '../../src/shared/types';
 
@@ -100,5 +102,68 @@ describe('CaseProgressTracker', () => {
       { caseId: 'one', status: 'failed' },
       { caseId: 'two', status: 'passed' },
     ]);
+  });
+});
+
+describe('resolveCaseId', () => {
+  const refs: CaseRef[] = [
+    { caseId: '01KS6FS17CAZAAGGZGX0BMX9B0', slotId: 'C1', caseTitle: 'First case' },
+    { caseId: '01KS6FS17CDTJA6T9048X0FB69', slotId: 'C2', caseTitle: 'Second case' },
+    { caseId: '01KS6FS17CZM3KNJ1QBDARDZ15', slotId: 'C3', caseTitle: 'Third case' },
+  ];
+
+  it('returns exact-ULID match', () => {
+    expect(resolveCaseId('01KS6FS17CDTJA6T9048X0FB69', refs)).toEqual({
+      caseId: '01KS6FS17CDTJA6T9048X0FB69',
+      resolvedBy: 'exact',
+    });
+  });
+
+  it('returns slot-id match when the agent quoted `C1`', () => {
+    expect(resolveCaseId('C2', refs)).toEqual({
+      caseId: '01KS6FS17CDTJA6T9048X0FB69',
+      resolvedBy: 'slot',
+    });
+  });
+
+  it('slot match is case-insensitive', () => {
+    expect(resolveCaseId('c3', refs)?.caseId).toBe('01KS6FS17CZM3KNJ1QBDARDZ15');
+  });
+
+  it('returns prefix match when the agent truncated the ULID', () => {
+    expect(resolveCaseId('01KS6FS17CAZAA', refs)).toEqual({
+      caseId: '01KS6FS17CAZAAGGZGX0BMX9B0',
+      resolvedBy: 'prefix',
+    });
+  });
+
+  it('refuses ambiguous prefix matches', () => {
+    // All three start with `01KS6FS17C…` — too short to disambiguate.
+    expect(resolveCaseId('01KS6FS17C', refs)).toBeNull();
+  });
+
+  it('refuses prefix matches shorter than the minimum length', () => {
+    expect(resolveCaseId('01KS6FS1', refs)).toBeNull();
+  });
+
+  it('returns null when nothing resolves', () => {
+    expect(resolveCaseId('not-in-plan-A', refs)).toBeNull();
+    expect(resolveCaseId('', refs)).toBeNull();
+    expect(resolveCaseId('extra-1', refs)).toBeNull();
+  });
+
+  it('returns null when the slot id has no matching case', () => {
+    expect(resolveCaseId('C99', refs)).toBeNull();
+  });
+
+  it('regression: 32 wrong ULIDs replay (Image #16) — none should resolve under exact-match alone', () => {
+    // Reproduces the production failure: the agent emitted 32 ULIDs that
+    // share the timestamp prefix `01KS6FS17` but are otherwise different.
+    // Without the resolver they all became orphans → 32/32 Skipped.
+    // With Layer A's slot ids in the prompt the agent will quote `C1`..`C32`
+    // instead; here we just verify the resolver doesn't falsely match
+    // hallucinated full ULIDs against the wrong plan id.
+    const hallucinated = '01KS6FS17NONEMATCHXX00000Z';
+    expect(resolveCaseId(hallucinated, refs)).toBeNull();
   });
 });

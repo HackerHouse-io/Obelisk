@@ -55,6 +55,14 @@ export function FindingPreview({
             style={{ transform: expanded ? 'rotate(180deg)' : undefined }}
           />
           <SeverityPill severity={finding.severity} />
+          {finding.finding?.synthetic ? (
+            <span
+              className="pill"
+              title="Auto-drafted by Obelisk because the QA agent left the case without a finding. Review and refine before filing."
+            >
+              auto
+            </span>
+          ) : null}
           <div className="finding-row-title">
             <div className="finding-row-title-text">{finding.title}</div>
             <div className="finding-row-meta">

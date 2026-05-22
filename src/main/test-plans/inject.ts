@@ -1,8 +1,7 @@
 import { ObeliskError } from '../../shared/errors';
-import type { AgentName, Repo, TestPlan } from '../../shared/types';
+import type { AgentName, FindingSeverity, Repo, TestPlan, TestPlanBlock } from '../../shared/types';
 import type { AssignedPlan } from '../prompt-compiler/types';
 import { getPlan, listPlans } from './store';
-import { serializePlan } from './parse';
 
 /** Hint format the renderer + IPC use. */
 const HINT_PREFIX = 'plan:';
@@ -49,21 +48,80 @@ export function resolvePlanForAgentRun(
   return getPlan(repo.localPath, candidates[0]!.id);
 }
 
-/** Render a plan into the prompt-compiler's AssignedPlan shape. */
+/**
+ * Render a plan into the prompt-compiler's AssignedPlan shape.
+ *
+ * The agent-facing body uses a different surface than the on-disk markdown:
+ *
+ *   - Every case gets a visible slot id (`C1`, `C2`, …) inline in the header
+ *     so the agent can quote it back in `CASE_PASS C1` markers without
+ *     having to dig the ULID out of an HTML comment.
+ *   - The full ULID is also rendered visibly (the agent uses it as the
+ *     `case_id` in structured `Finding` JSON).
+ *   - HTML comment anchors (`<!-- obelisk:id=… -->`) are stripped — they
+ *     were invisible to some CLI surfaces, which caused the agent to
+ *     hallucinate its own ULIDs and every marker landed as
+ *     `case_progress_orphan`.
+ *
+ * The on-disk file (`qa/test-plans/<id>.md`) is unchanged; only the
+ * agent-injected projection changes. Plans round-trip safely.
+ */
 export function toAssignedPlan(plan: TestPlan): AssignedPlan {
-  // Body without frontmatter, suitable for splicing into the user message.
-  const body = serializePlan(plan.frontmatter, plan.blocks)
-    .replace(/^---\n[\s\S]*?\n---\n+/, '')
-    .trimEnd();
-
   const caseRefs: AssignedPlan['caseRefs'] = [];
   let currentSection = '(no section)';
+  let nextSlot = 1;
   for (const b of plan.blocks) {
     if (b.kind === 'section') {
       currentSection = b.title;
       continue;
     }
-    caseRefs.push({ sectionTitle: currentSection, caseId: b.id, caseTitle: b.title });
+    caseRefs.push({
+      sectionTitle: currentSection,
+      caseId: b.id,
+      slotId: `C${nextSlot}`,
+      caseTitle: b.title,
+      expected: b.expected,
+      repro: b.repro,
+      severity: b.severity,
+    });
+    nextSlot += 1;
   }
+
+  const body = renderAgentFacingBody(plan, caseRefs);
   return { id: plan.frontmatter.id, name: plan.frontmatter.name, body, caseRefs };
+}
+
+function renderAgentFacingBody(plan: TestPlan, refs: AssignedPlan['caseRefs']): string {
+  const lines: string[] = [];
+  const refByCaseId = new Map(refs.map((r) => [r.caseId, r] as const));
+
+  for (const b of plan.blocks) {
+    if (b.kind === 'section') {
+      lines.push('', `## ${b.title.trim()}`, '');
+      continue;
+    }
+    const ref = refByCaseId.get(b.id);
+    if (!ref) continue; // defensive — every case block is added to refs above
+    lines.push(renderCase(b, ref));
+  }
+
+  return lines.join('\n').trim();
+}
+
+function renderCase(
+  block: Extract<TestPlanBlock, { kind: 'case' }>,
+  ref: { slotId: string; caseId: string },
+): string {
+  const sev: FindingSeverity | null = block.severity;
+  const title = block.title.trim() || '(untitled case)';
+  const header = `### ${ref.slotId} (id: ${ref.caseId}) — ${title}${sev ? ` [severity: ${sev}]` : ''}`;
+  const out: string[] = [header];
+  if (block.expected && block.expected.trim()) {
+    out.push(`- **Expected:** ${block.expected.trim()}`);
+  }
+  if (block.repro && block.repro.trim()) {
+    out.push(`- **Repro:** ${block.repro.trim()}`);
+  }
+  out.push('');
+  return out.join('\n');
 }

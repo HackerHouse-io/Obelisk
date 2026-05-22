@@ -94,3 +94,60 @@ export class CaseProgressTracker {
     if (evt) this.onTransition(evt);
   }
 }
+
+/* ---------- case-id resolution ---------- */
+
+export interface CaseRef {
+  caseId: string;
+  slotId: string;
+  caseTitle: string;
+}
+
+export interface CaseIdResolution {
+  caseId: string;
+  /** How the emitted id matched the plan. Useful for diagnostics. */
+  resolvedBy: 'exact' | 'slot' | 'prefix';
+}
+
+const SLOT_PATTERN = /^C\d+$/i;
+const ULIDISH = /^[0-9A-Z]{10,}$/i;
+const MIN_PREFIX_LEN = 10;
+
+/**
+ * Resolve a marker's emitted id back to a plan-case id. Tolerates three
+ * common drift modes:
+ *
+ *   1. Exact match — agent quoted the full ULID (preferred).
+ *   2. Slot match  — agent quoted the friendly slot label (`C1`, `c12`).
+ *   3. Prefix match — agent truncated the ULID; we accept any unique prefix
+ *      ≥ 10 chars that matches exactly one case.
+ *
+ * Returns `null` if nothing resolves; the caller (orchestrator) files an
+ * untracked-marker audit row for diagnostics.
+ */
+export function resolveCaseId(emitted: string, refs: readonly CaseRef[]): CaseIdResolution | null {
+  const trimmed = emitted.trim();
+  if (!trimmed) return null;
+
+  for (const r of refs) {
+    if (r.caseId === trimmed) return { caseId: r.caseId, resolvedBy: 'exact' };
+  }
+
+  if (SLOT_PATTERN.test(trimmed)) {
+    const canonical = trimmed.toUpperCase();
+    for (const r of refs) {
+      if (r.slotId.toUpperCase() === canonical) return { caseId: r.caseId, resolvedBy: 'slot' };
+    }
+    return null;
+  }
+
+  if (ULIDISH.test(trimmed) && trimmed.length >= MIN_PREFIX_LEN) {
+    const upper = trimmed.toUpperCase();
+    const matches = refs.filter((r) => r.caseId.toUpperCase().startsWith(upper));
+    if (matches.length === 1 && matches[0]) {
+      return { caseId: matches[0].caseId, resolvedBy: 'prefix' };
+    }
+  }
+
+  return null;
+}

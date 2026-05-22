@@ -455,6 +455,13 @@ export interface QaFinding {
    * user reframes a bug as a spec fix).
    */
   labels?: string[];
+  /**
+   * True when this finding was auto-drafted by the orchestrator because
+   * a case ended in `failed` or persistent `inconclusive` state without
+   * the agent producing one. Surfaced in the UI as an "auto" chip so the
+   * user knows to review before filing.
+   */
+  synthetic?: boolean;
 }
 
 /** Visible follow-up message in the FileIssueModal refine panel. */

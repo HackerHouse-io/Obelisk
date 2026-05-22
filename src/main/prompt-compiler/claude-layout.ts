@@ -91,12 +91,39 @@ function renderAssignedPlanBlock(task: import('./types').TaskPayload): string {
     '# Assigned test plan',
     `Plan: ${task.assignedPlan.name} (id: ${task.assignedPlan.id})`,
     '',
-    'Execute every test case below. For each case that fails, emit a finding',
-    'whose `case_id` field matches the id from the plan so the user can map',
-    'findings back to specific cases.',
+    renderCaseContract(),
     '',
     task.assignedPlan.body,
     '',
+  ].join('\n');
+}
+
+/**
+ * The CASE_* contract — repeated verbatim in the Claude and Codex prompts.
+ *
+ * The previous version told the agent to "use the exact `case_id` from the
+ * plan" while the ids lived in HTML comments — codex couldn't see them and
+ * hallucinated fresh ULIDs, so every marker landed as orphan and 32/32
+ * cases ended up Skipped. The slot ids (`C1`, `C2`, …) are visible in the
+ * case headings and the orchestrator's parser accepts either form, so an
+ * agent that quotes the slot still resolves cleanly.
+ */
+export function renderCaseContract(): string {
+  return [
+    '## Case execution contract',
+    '',
+    'Every case below has a slot id like `C1`, `C2`, … shown in its `### C# (id: …)` header.',
+    '',
+    'You MUST do all of the following:',
+    '',
+    '1. Before starting a case, print exactly one line: `CASE_START C#`',
+    '2. After finishing a case, print exactly one line:',
+    '   - `CASE_PASS C#`             — case behaves as expected',
+    '   - `CASE_FAIL C#`             — case is broken; you ALSO emit a Finding (see below)',
+    '   - `CASE_INCONCLUSIVE C# (reason)` — last resort; only if you genuinely cannot determine pass/fail after a real attempt',
+    '3. Use the **slot id** from the header (`C1`, `C2`, …) in every CASE_* marker. Do not invent ids. Do not skip cases.',
+    "4. For every `CASE_FAIL` you MUST emit a corresponding entry in the `BEGIN_FINDINGS` block with `case_id` set to the case's FULL ULID (the long id after `id:` in the same header).",
+    '5. Markers must be on their own line, plain text, not inside a code fence.',
   ].join('\n');
 }
 

@@ -18,7 +18,10 @@ import { CodexRunner } from '../runners/codex';
 import { effectiveDefaultRunner } from '../runners/effective-default';
 import { runnerFallback, classifyOutcome } from '../runners/fallback';
 import { isCancelled as runIsCancelled, registerRun, unregisterRun } from './active-runs';
-import { CaseProgressTracker } from './case-progress';
+import { CaseProgressTracker, resolveCaseId } from './case-progress';
+import { synthesizeMissingFindings, type CaseFinalState } from './qa-synthesis';
+import { listKnownFingerprintsForRepo } from '../db/previews';
+import type { CaseProgressState } from '../../shared/types';
 import { broadcast } from '../ipc/bus';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
 import { createWorktree, attachWorktree, destroyWorktree } from '../git/worktree';
@@ -330,30 +333,44 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     // Markers whose `caseId` is not in the assigned plan's `caseRefs` are
     // recorded as `case_progress_orphan` instead — the renderer's Plan tab
     // surfaces them as a small "untracked markers" footnote and does NOT
-    // count them against the plan's pass/fail/skipped tallies. This catches
-    // prompt drift (agent inventing or truncating ids) without losing the
-    // signal entirely.
-    const planCaseIdSet = new Set<string>(
-      (selected.task.assignedPlan?.caseRefs ?? []).map((c) => c.caseId),
-    );
+    // count them against the plan's pass/fail/skipped tallies.
+    //
+    // `resolveCaseId` accepts three forms before giving up: exact ULID,
+    // slot label (`C1`), and unambiguous ULID prefix. This catches the
+    // common drift modes (agent quotes the friendly slot or truncates the
+    // ULID) without laundering completely-wrong ids back into the plan.
+    const caseRefs = selected.task.assignedPlan?.caseRefs ?? [];
+    // Mirror of the audit-log state per in-plan case. Updated for every
+    // recognised marker so the post-run synthesis step (`synthesizeMissing-
+    // Findings`) doesn't need to round-trip through the DB. Latest marker
+    // wins — same rule as `derivePerCaseState` in src/shared/case-progress.ts.
+    const caseStateMap = new Map<string, CaseFinalState>();
     const caseTracker = new CaseProgressTracker((evt) => {
-      const inPlan = planCaseIdSet.size === 0 || planCaseIdSet.has(evt.caseId);
+      const resolution = caseRefs.length === 0 ? null : resolveCaseId(evt.caseId, caseRefs);
+      const inPlan = caseRefs.length === 0 || resolution !== null;
+      const canonicalCaseId = resolution?.caseId ?? evt.caseId;
       appendAudit({
         runId: run.id,
         kind: inPlan ? 'case_progress' : 'case_progress_orphan',
         payload: {
-          caseId: evt.caseId,
+          caseId: canonicalCaseId,
           status: evt.status,
           ...(evt.detail ? { detail: evt.detail } : {}),
+          ...(resolution && resolution.resolvedBy !== 'exact'
+            ? { emittedAs: evt.caseId, resolvedBy: resolution.resolvedBy }
+            : {}),
         },
       });
       if (inPlan) {
         broadcast({
           type: 'run.caseProgress',
           runId: run.id,
-          caseId: evt.caseId,
+          caseId: canonicalCaseId,
           status: evt.status,
         });
+        const next: CaseFinalState = { status: evt.status };
+        if (evt.detail) next.detail = evt.detail;
+        caseStateMap.set(canonicalCaseId, next);
       }
     });
     const runResult = await runWithFallback({
@@ -578,6 +595,51 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       runId: run.id,
     });
     const plans = Array.isArray(planOrPlans) ? planOrPlans : [planOrPlans];
+
+    // QA safety net — when the agent's contract says "every CASE_FAIL must
+    // emit a Finding" but the agent broke that contract, fill the gap so the
+    // user always has a row to file from. Synthetic findings are flagged
+    // `synthetic: true` and the renderer labels them "auto-drafted" so the
+    // user reviews before publishing. Same fallback covers persistent
+    // CASE_INCONCLUSIVE cases — they become "Could not verify: …" findings.
+    if (handler.alwaysPreview && selected.task.assignedPlan) {
+      // Cases still in `running` at run termination become `inconclusive`,
+      // matching the rule in src/shared/case-progress.ts:86-89 that the UI
+      // already applies.
+      for (const [id, state] of caseStateMap) {
+        if (state.status === 'running') caseStateMap.set(id, { ...state, status: 'inconclusive' });
+      }
+      // Cases that never produced a marker are treated as skipped — not
+      // every agent reaches every case, and the user shouldn't see a
+      // synthetic finding for a case the agent never even attempted.
+      // (The Plan tab will still show them as Skipped; surfacing those is
+      // a UX problem, not a "missing bug" problem.)
+      for (const ref of selected.task.assignedPlan.caseRefs) {
+        if (!caseStateMap.has(ref.caseId)) {
+          caseStateMap.set(ref.caseId, { status: 'skipped' as CaseProgressState });
+        }
+      }
+      const synthetic = synthesizeMissingFindings({
+        plan: selected.task.assignedPlan,
+        caseStates: caseStateMap,
+        existingPlans: plans,
+        knownFingerprints: listKnownFingerprintsForRepo(repo.id),
+      });
+      if (synthetic.length > 0) {
+        appendAudit({
+          runId: run.id,
+          kind: 'reasoning',
+          payload: {
+            summary: 'synthesized findings for cases without one',
+            count: synthetic.length,
+            caseIds: synthetic
+              .map((p) => (p.kind === 'issue' ? p.finding?.case_id : null))
+              .filter((id): id is string => typeof id === 'string'),
+          },
+        });
+        plans.push(...synthetic);
+      }
+    }
 
     // Preview path comes first so QA agents that produced zero findings
     // still get a friendly "Plan executed; no findings." summary (the
