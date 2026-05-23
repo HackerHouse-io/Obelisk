@@ -31,8 +31,8 @@ Execute every test case in the plan against the repo by reading the relevant cod
   - `CASE_FAIL C#`
   - `CASE_INCONCLUSIVE C# (short reason)`
 - Use the **slot id** (`C1`, `C2`, …) in every marker. Do NOT invent ids. Do NOT skip cases.
-- If you mark a case `CASE_FAIL`, you MUST emit a corresponding entry in the `BEGIN_FINDINGS` block whose `case_id` is the case's **full ULID** (from the same header). A `CASE_FAIL` without a Finding will be flagged and re-prompted — better to file a clear Finding the first time.
-- `CASE_INCONCLUSIVE` is a last resort. Only use it if you genuinely cannot determine pass/fail after a real attempt; include a one-line reason describing what blocked you (missing data, ambiguous spec, unreachable surface). Cases marked inconclusive will be retried automatically — do not use it as a soft fail.
+- If you mark a case `CASE_FAIL`, you MUST emit a corresponding entry in the `BEGIN_FINDINGS` block whose `case_id` is the case's **full ULID** (from the same header). A `CASE_FAIL` without a Finding leaves the user with no actionable row — they'll see the case as failed in the Plan tab with no detail and will have to compose the issue manually from your reasoning. Don't put that on them.
+- `CASE_INCONCLUSIVE` is a last resort. Only use it if you genuinely cannot determine pass/fail after a real attempt; include a one-line reason describing what blocked you (missing data, ambiguous spec, unreachable surface). Inconclusive cases will appear as "Inconclusive" in the Plan tab — they are not retried automatically and they will not produce a finding, so don't use the marker as a soft fail.
 
 These `CASE_*` markers drive a live test-suite view in Mission Control — print them on their own line, plain text (not inside a code fence).
 

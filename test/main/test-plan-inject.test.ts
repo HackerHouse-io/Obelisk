@@ -100,27 +100,4 @@ describe('toAssignedPlan', () => {
     );
     expect(assigned.body).not.toMatch(/<!--\s*obelisk:id\s*=/);
   });
-
-  it('mirrors expected/repro/severity into caseRefs so synthesis can read them', () => {
-    const assigned = toAssignedPlan(
-      plan([
-        {
-          kind: 'case',
-          id: '01KS6FS17CAZAAGGZGX0BMX9B0',
-          title: 'A',
-          expected: 'works',
-          repro: '1. do',
-          severity: 'P0',
-          scope: null,
-        },
-      ]),
-    );
-    expect(assigned.caseRefs[0]).toMatchObject({
-      caseId: '01KS6FS17CAZAAGGZGX0BMX9B0',
-      slotId: 'C1',
-      expected: 'works',
-      repro: '1. do',
-      severity: 'P0',
-    });
-  });
 });

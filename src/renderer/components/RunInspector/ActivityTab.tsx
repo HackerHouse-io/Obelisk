@@ -143,9 +143,10 @@ function ResultLine({ row }: { row: Extract<ActivityRowData, { kind: 'result' }>
 /**
  * Thinking turn — renders with the same card chrome as ToolCard so the
  * timeline reads as a uniform stack. Short turns (≤2 lines, ≤160 chars)
- * are expanded by default since there's nothing to hide; longer turns
- * collapse so a giant reasoning dump doesn't push everything else off
- * the screen.
+ * render flat with the full text inline (no expand affordance, since
+ * there is nothing more to reveal). Longer turns collapse so a giant
+ * reasoning dump doesn't push everything else off the screen, with the
+ * full text behind the chevron.
  */
 function ThinkingCard({
   row,
@@ -156,8 +157,28 @@ function ThinkingCard({
   const lineCount = lines.length;
   const charCount = row.text.length;
   const short = lineCount <= 2 && charCount <= 160;
-  const [expanded, setExpanded] = useState(short);
+  const [expanded, setExpanded] = useState(false);
   const firstLine = lines.find((l) => l.trim().length > 0)?.trim() ?? '';
+
+  if (short) {
+    return (
+      <div className="mc-act-tool tone-muted" role="listitem">
+        <div className="mc-act-tool-head is-static">
+          <span className="mc-act-tool-icon" aria-hidden="true">
+            <Icon.Spark size={12} color="var(--t-2)" />
+            <span className="mc-act-pip tone-info" />
+          </span>
+          <span className="mc-act-tool-time">{shortTime(row.at)}</span>
+          <span className="mc-act-tool-title">
+            <span className="mc-act-tool-verb">thinking</span>
+            <span className="mc-act-tool-target is-prose">{row.text.trim()}</span>
+          </span>
+          <span className="mc-act-tool-meta" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`mc-act-tool tone-muted${expanded ? ' is-expanded' : ''}`} role="listitem">
       <button
@@ -173,15 +194,11 @@ function ThinkingCard({
         <span className="mc-act-tool-time">{shortTime(row.at)}</span>
         <span className="mc-act-tool-title">
           <span className="mc-act-tool-verb">thinking</span>
-          {firstLine ? (
+          {!expanded && firstLine ? (
             <span className="mc-act-tool-target is-prose">{previewText(firstLine, 70)}</span>
           ) : null}
         </span>
-        {lineCount > 1 ? (
-          <span className="mc-act-tool-meta">{lineCount} lines</span>
-        ) : (
-          <span className="mc-act-tool-meta" />
-        )}
+        <span className="mc-act-tool-meta">{lineCount} lines</span>
         <Icon.Chevron
           size={11}
           color="var(--t-3)"

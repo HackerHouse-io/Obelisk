@@ -80,9 +80,6 @@ export function toAssignedPlan(plan: TestPlan): AssignedPlan {
       caseId: b.id,
       slotId: `C${nextSlot}`,
       caseTitle: b.title,
-      expected: b.expected,
-      repro: b.repro,
-      severity: b.severity,
     });
     nextSlot += 1;
   }

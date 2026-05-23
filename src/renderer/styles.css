@@ -1637,21 +1637,28 @@ body {
 
 /* ---------- Pills (session start, run complete, status) ---------- */
 
+/* Pills share the same column lattice as .mc-act-tool-head (18 / 56 / 1fr /
+   auto / auto) plus a 1px transparent border that matches the tool card's
+   real border, so "Run complete" / "Session started" / "Run failed" rows
+   align icon-by-icon and timestamp-by-timestamp with the cards above and
+   below them in the activity stream. */
 .mc-act-pill {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px 56px minmax(0, 1fr) minmax(0, auto) auto;
   align-items: center;
   gap: 8px;
-  padding: 4px 6px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
   font-size: 11.5px;
   color: var(--t-2);
-  border-radius: var(--r-1);
 }
 .mc-act-pill-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 .mc-act-pill-time {
   font-family: var(--mono);
@@ -1727,6 +1734,14 @@ body {
 .mc-act-tool-head:focus-visible {
   outline: 1px solid var(--info);
   outline-offset: -1px;
+}
+/* Flat variant — used when a thinking turn is short enough that the entire
+   body fits inline. No expand affordance, no hover bg, no focus ring. */
+.mc-act-tool-head.is-static {
+  cursor: default;
+}
+.mc-act-tool-head.is-static:hover {
+  background: transparent;
 }
 .mc-act-tool-icon {
   position: relative;

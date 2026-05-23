@@ -1,4 +1,4 @@
-import type { AgentName, FindingSeverity, RunnerKind, SafetyMode } from '../../shared/types';
+import type { AgentName, RunnerKind, SafetyMode } from '../../shared/types';
 
 export interface TaskPayload {
   /** Stable reference, e.g. "issue#142" or "pr#211" or "manual:run-1". */
@@ -37,21 +37,12 @@ export interface AssignedPlan {
    * document order. The orchestrator accepts either the ULID `caseId` or
    * the friendly `slotId` in CASE_* markers, so an agent that quotes the
    * visible slot label instead of the full ULID still resolves.
-   *
-   * `expected`/`repro`/`severity` are mirrored from the plan block so the
-   * orchestrator can synthesize a fallback Finding (with `synthetic: true`)
-   * when the agent marks a case `CASE_FAIL` or persistent `CASE_INCONCLUSIVE`
-   * but doesn't emit one of its own. Without this, a failed case ends up
-   * with no preview the user can file from.
    */
   caseRefs: {
     sectionTitle: string;
     caseId: string;
     slotId: string;
     caseTitle: string;
-    expected: string | null;
-    repro: string | null;
-    severity: FindingSeverity | null;
   }[];
 }
 
