@@ -173,8 +173,8 @@ export function FindingPreview({
   );
 }
 
-function SeverityPill({ severity }: { severity: FindingSeverity | null }): ReactElement {
-  if (!severity) return <span className="finding-sev-spacer" aria-hidden="true" />;
+function SeverityPill({ severity }: { severity: FindingSeverity | null }): ReactElement | null {
+  if (!severity) return null;
   return (
     <span className={`pill sev-${severity.toLowerCase()} ${SEVERITY_TONE[severity]}`}>
       {severity}

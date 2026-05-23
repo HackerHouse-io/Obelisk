@@ -2012,6 +2012,7 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--r-3);
   padding: 16px;
+  container-type: inline-size;
 }
 
 .home-section-title {
@@ -2036,6 +2037,10 @@ body {
   border-bottom: 1px solid var(--line-soft);
   font-size: 12.5px;
   align-items: center;
+  transition: background 120ms var(--ease);
+}
+.home-table-row:hover {
+  background: var(--bg-3);
 }
 .home-table-row-body {
   min-width: 0;
@@ -2053,6 +2058,27 @@ body {
 }
 .home-table-row:last-child {
   border-bottom: 0;
+}
+
+@container (max-width: 560px) {
+  .home-table-row {
+    grid-template-columns: 28px 1fr;
+    grid-template-areas:
+      'icon body'
+      '.    actions';
+    row-gap: 6px;
+  }
+  .home-table-row > :first-child {
+    grid-area: icon;
+  }
+  .home-table-row-body {
+    grid-area: body;
+  }
+  .home-table-row-actions {
+    grid-area: actions;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
 }
 
 .home-table-empty {
@@ -2170,9 +2196,9 @@ body {
 }
 
 .finding-row-toggle {
-  display: grid;
-  grid-template-columns: 14px auto 1fr auto;
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   background: transparent;
   border: 0;
@@ -2183,9 +2209,14 @@ body {
   padding: 4px 6px 4px 0;
   border-radius: var(--r-2);
   min-width: 0;
+  transition: background 120ms var(--ease);
 }
 .finding-row-toggle:hover {
   background: var(--bg-3);
+}
+.finding-row-toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 
 .finding-row-title {
@@ -2193,6 +2224,7 @@ body {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .finding-row-title-text {
@@ -2234,7 +2266,8 @@ body {
   flex-wrap: wrap;
   overflow: hidden;
   max-width: 240px;
-  justify-self: end;
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .finding-row-actions {
@@ -2326,27 +2359,12 @@ body {
     align-items: stretch;
   }
   .finding-row-toggle {
-    grid-template-columns: 14px auto 1fr;
-    grid-template-rows: auto auto;
-    grid-template-areas:
-      'chev sev title'
-      '.    .   labels';
-    gap: 6px 10px;
     padding: 6px 0;
   }
-  .finding-row-toggle > :nth-child(1) {
-    grid-area: chev;
-  }
-  .finding-row-toggle > :nth-child(2) {
-    grid-area: sev;
-  }
-  .finding-row-toggle > .finding-row-title {
-    grid-area: title;
-  }
-  .finding-row-toggle > .finding-row-labels {
-    grid-area: labels;
+  .finding-row-labels {
+    flex-basis: 100%;
+    margin-left: 0;
     max-width: none;
-    justify-self: start;
   }
   .finding-row-actions {
     justify-content: flex-end;
@@ -2437,11 +2455,6 @@ body {
 .finding-evidence-link:hover {
   border-color: var(--brand);
   color: var(--t-0);
-}
-
-.finding-sev-spacer {
-  display: inline-block;
-  width: 26px;
 }
 
 .pill.sev-p0 {
