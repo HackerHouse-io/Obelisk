@@ -228,6 +228,12 @@ export const Icon = {
     </>,
   ),
   Spark: make(<path d="M8 2v4M8 10v4M2 8h4M10 8h4" />),
+  Brain: make(
+    <>
+      <path d="M8 4a2 2 0 00-2 2 1.5 1.5 0 00-1.5 1.5 1.5 1.5 0 001.5 1.5 2 2 0 002 2z" />
+      <path d="M8 4a2 2 0 012 2 1.5 1.5 0 011.5 1.5 1.5 1.5 0 01-1.5 1.5 2 2 0 01-2 2z" />
+    </>,
+  ),
   AlertTri: make(
     <>
       <path d="M8 2.5l6 11H2z" />

@@ -1714,7 +1714,7 @@ body {
 
 .mc-act-tool-head {
   display: grid;
-  grid-template-columns: 18px 56px minmax(0, 1fr) minmax(0, auto) auto;
+  grid-template-columns: 18px 56px minmax(0, 1fr) minmax(0, 220px) auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -1790,6 +1790,7 @@ body {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 .mc-act-tool-verb {
   color: var(--t-1);
