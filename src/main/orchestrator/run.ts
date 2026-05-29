@@ -665,6 +665,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
               agentName: input.agentName,
               runId: run.id,
               taskRef: selected.task.ref,
+              ...(selected.task.githubNumber ? { githubNumber: selected.task.githubNumber } : {}),
               summary: oneLine(ok.reasoning),
               reasoning: ok.reasoning,
               evidence,

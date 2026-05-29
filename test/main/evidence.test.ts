@@ -199,7 +199,9 @@ describe('renderPrBody', () => {
     expect(body).toContain('### Logs');
     expect(body).toContain('### Reasoning');
     expect(body).toContain('## Reasoning');
-    expect(body).toContain('Authored by Obelisk (bug-fixer)');
-    expect(body).toContain('Task: issue#142');
+    expect(body).toContain('Co-authored by [Obelisk](https://github.com/HackerHouse-io/Obelisk)');
+    expect(body).toContain('Fixes #142.');
+    expect(body).not.toContain('on behalf of the connected account');
+    expect(body).not.toContain('Task: issue#142');
   });
 });

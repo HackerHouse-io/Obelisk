@@ -143,12 +143,16 @@ describe('renderPrBody (senior-engineer template for bug-fixer PRs)', () => {
 
     // 5. Notes bullets.
     expect(body).toContain('- Merged main into the branch');
-    expect(body).toContain("- Removed .claude/ agent-runtime files");
+    expect(body).toContain('- Removed .claude/ agent-runtime files');
 
     // 6. Footer is below a horizontal rule and contains the disclosure.
     expect(body).toMatch(/\n---\n/);
-    expect(body).toMatch(/_Authored by Obelisk Bug Fixer_/);
+    expect(body).toMatch(
+      /_Co-authored by \[Obelisk\]\(https:\/\/github\.com\/HackerHouse-io\/Obelisk\)_/,
+    );
     expect(body).toMatch(/\/obelisk explain/);
+    // The old "on behalf of the connected account" copy is gone.
+    expect(body).not.toContain('on behalf of the connected account');
 
     // 7. None of the noise from earlier iterations leaks through:
     //    - no top-level "## Reasoning" dump
@@ -157,7 +161,7 @@ describe('renderPrBody (senior-engineer template for bug-fixer PRs)', () => {
     expect(body).not.toMatch(/^## Reasoning/m);
     expect(body).not.toMatch(/^## Evidence$/m);
     expect(body).not.toContain('obelisk://artifact');
-    expect(body).not.toMatch(/^> Authored by Obelisk/m);
+    expect(body).not.toMatch(/^> (Authored|Co-authored) by Obelisk/m);
   });
 
   it('omits the Test plan section when no cases / manual verification are provided', () => {
@@ -213,5 +217,37 @@ describe('renderPrBody (senior-engineer template for bug-fixer PRs)', () => {
     });
     expect(body).toContain('## Summary\n\none-liner');
     expect(body).toContain('## Reasoning\n\ndetailed reasoning trace');
+  });
+
+  it('emits the `Fixes #N.` lead + co-author disclosure on the fallback path too', () => {
+    const body = renderPrBody({
+      agentName: 'feature-builder',
+      runId: '01HX',
+      taskRef: 'issue#42',
+      summary: 'one-liner',
+      reasoning: 'detailed reasoning trace',
+      evidence: EVIDENCE_OK,
+    });
+    // Lead line auto-closes the issue even without a structured report.
+    expect(body).toMatch(/^Fixes #42\.\n/);
+    expect(body).toContain(
+      '> Co-authored by [Obelisk](https://github.com/HackerHouse-io/Obelisk).',
+    );
+    // Old copy and the broken plain-text Task line are both gone.
+    expect(body).not.toContain('on behalf of the connected account');
+    expect(body).not.toContain('Task: issue#42');
+  });
+
+  it('prefers githubNumber over taskRef for the `Fixes #N.` lead', () => {
+    const body = renderPrBody({
+      agentName: 'feature-builder',
+      runId: '01HX',
+      taskRef: 'backlog#01HXYZ',
+      githubNumber: 99,
+      summary: 'one-liner',
+      reasoning: 'r',
+      evidence: EVIDENCE_OK,
+    });
+    expect(body).toMatch(/^Fixes #99\.\n/);
   });
 });

@@ -7,6 +7,7 @@ import type { PublishPlan } from '../agents/types';
 import { resolveAttribution, applyGitConfig, renderCommitMessage } from './attribution';
 import { OBELISK_LABELS } from './labels';
 import { mirrorEvidenceToRepo } from './artifact-mirror';
+import { buildBranchName } from '../git/branch-name';
 
 export interface PublishInput {
   repo: Repo;
@@ -184,10 +185,25 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
         await git.commit(commitMessage, { '--no-verify': null });
       }
 
+      // Rename the scratch `obelisk/<runId>` branch to a descriptive name
+      // derived from the PR title (e.g. `obelisk/fix-product-load-...-ytgf270`)
+      // BEFORE the first push, so the branch never appears on origin under the
+      // opaque ULID. Skip for resume / CI-retry appends (existingPrNumber):
+      // that branch already exists on origin tracking an open PR — renaming it
+      // would orphan the PR's head ref.
+      let branch = input.branch;
+      if (!input.existingPrNumber) {
+        const descriptive = buildBranchName(input.plan.title, input.runId);
+        if (descriptive !== branch) {
+          await git.raw(['branch', '-m', branch, descriptive]);
+          branch = descriptive;
+        }
+      }
+
       // Push the per-run branch to origin. For resume publishes the branch
       // already has an upstream tracking ref, so set-upstream is a no-op
       // (and harmless if re-set).
-      await git.push(['--set-upstream', 'origin', input.branch]);
+      await git.push(['--set-upstream', 'origin', branch]);
 
       // Resume publishes (CI-retry fix-up) skip `pulls.create` because the PR
       // already exists; the push above is enough — GitHub auto-attaches the
@@ -206,7 +222,7 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
           repo: repoName,
           title: input.plan.title,
           body: input.plan.body,
-          head: input.plan.head,
+          head: branch,
           base: input.plan.base,
           draft: false,
         });

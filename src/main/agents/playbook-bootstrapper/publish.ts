@@ -163,7 +163,7 @@ export function persistPlaybookFiles(repoPath: string, files: PlaybookFile[]): v
 
 function renderPrBody(framework: string, flowCount: number): string {
   return [
-    '> Authored by Obelisk (Playbook Bootstrapper) on behalf of the connected account.',
+    '> Co-authored by [Obelisk](https://github.com/HackerHouse-io/Obelisk).',
     '>',
     '> This PR seeds your `qa/` directory so Manual QA has a written contract to test against.',
     '> Edit any file freely before merging — Obelisk will not overwrite hand-edited files on subsequent runs.',

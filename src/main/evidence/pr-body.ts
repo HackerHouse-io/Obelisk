@@ -2,10 +2,18 @@ import type { EvidenceArtifact } from '../db/evidence';
 import type { CheckResult } from './check';
 import type { BugFixReport } from '../agents/bug-fixer';
 
+const OBELISK_REPO_URL = 'https://github.com/HackerHouse-io/Obelisk';
+
 export interface PrBodyInput {
   agentName: string;
   runId: string;
   taskRef: string;
+  /**
+   * Raw GitHub issue number this run is tied to, if any. Preferred over
+   * parsing `taskRef`; drives the `Fixes #N.` lead line that auto-closes
+   * the issue on merge.
+   */
+  githubNumber?: number;
   /** One paragraph the agent wrote about the change. */
   summary: string;
   /** Multi-line reasoning trace. */
@@ -39,8 +47,14 @@ export interface PrBodyInput {
  * structured block still produces a usable PR body.
  */
 export function renderPrBody(input: PrBodyInput): string {
+  // Lead line: `Fixes #N.` — the GitHub closing keyword that auto-closes the
+  // linked issue on merge. Emitted on BOTH paths (structured and fallback);
+  // without it a merged PR leaves the issue open.
+  const issue = resolveIssueNumber(input);
+  const lead = issue !== null ? `Fixes #${issue}.` : '';
+
   if (input.bugFixReport) {
-    return renderStructuredBody(input, input.bugFixReport);
+    return renderStructuredBody(input, input.bugFixReport, lead);
   }
 
   // Legacy / fallback path for agents without a structured report.
@@ -48,18 +62,17 @@ export function renderPrBody(input: PrBodyInput): string {
   const summary = `## Summary\n\n${input.summary.trim() || '(no summary provided)'}`;
   const reasoning = `## Reasoning\n\n${input.reasoning.trim() || '(no reasoning provided)'}`;
   const evidence = renderEvidence(input.evidence);
-  return [disclosure, summary, evidence, reasoning].filter((s) => s.length > 0).join('\n\n');
+  return [lead, disclosure, summary, evidence, reasoning].filter((s) => s.length > 0).join('\n\n');
 }
 
 function renderStructuredBody(
   input: PrBodyInput,
   r: NonNullable<PrBodyInput['bugFixReport']>,
+  lead: string,
 ): string {
   const sections: string[] = [];
 
-  // Lead line: `Fixes #N.` — auto-closes the GitHub issue on merge.
-  const issue = issueNumberFromTaskRefSafe(input.taskRef);
-  if (issue !== null) sections.push(`Fixes #${issue}.`);
+  if (lead) sections.push(lead);
 
   if (r.summary.trim()) sections.push(`## Summary\n\n${r.summary.trim()}`);
   if (r.root_cause.trim()) sections.push(`## Root cause\n\n${r.root_cause.trim()}`);
@@ -120,13 +133,25 @@ function renderTestPlan(plan: NonNullable<PrBodyInput['bugFixReport']>['test_pla
 
 function renderFooter(input: PrBodyInput): string {
   const parts = [
-    `_Authored by Obelisk Bug Fixer_`,
+    `_Co-authored by [Obelisk](${OBELISK_REPO_URL})_`,
     `_Reply \`/obelisk explain\` for the full reasoning trace._`,
   ];
   if (input.obeliskRunUri) {
     parts.push(`_Audit log: ${input.obeliskRunUri}_`);
   }
   return parts.join(' · ');
+}
+
+/**
+ * Resolve the GitHub issue number for the `Fixes #N.` lead. Prefers the raw
+ * `githubNumber` passed by the orchestrator; falls back to parsing an
+ * `issue#N` task ref. Returns null for backlog-only tasks (no issue to close).
+ */
+function resolveIssueNumber(input: PrBodyInput): number | null {
+  if (input.githubNumber != null && Number.isFinite(input.githubNumber) && input.githubNumber > 0) {
+    return input.githubNumber;
+  }
+  return issueNumberFromTaskRefSafe(input.taskRef);
 }
 
 function issueNumberFromTaskRefSafe(taskRef: string): number | null {
@@ -137,10 +162,7 @@ function issueNumberFromTaskRefSafe(taskRef: string): number | null {
 }
 
 function renderDisclosure(input: PrBodyInput): string {
-  const lines: string[] = [
-    `> Authored by Obelisk (${input.agentName}) on behalf of the connected account.`,
-    `> Task: ${input.taskRef}`,
-  ];
+  const lines: string[] = [`> Co-authored by [Obelisk](${OBELISK_REPO_URL}).`];
   if (input.obeliskRunUri) {
     lines.push(`> Audit log: ${input.obeliskRunUri}`);
   }
