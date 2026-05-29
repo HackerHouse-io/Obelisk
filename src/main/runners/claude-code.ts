@@ -4,6 +4,7 @@ import { spawnAgentCli, checkInstalled } from './spawn';
 import { runnerEnv } from './env';
 import { looksLikeAuthRequired } from './detect-auth';
 import { ClaudeStreamParser } from './claude-stream-json';
+import { recordObserved } from './observed-models';
 import { collectPatch } from './collect-patch';
 import type { CodingAgentRunner, RunOpts, RunResult, AuditLine } from './types';
 
@@ -42,6 +43,12 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
       },
       onEvent: (event) => {
         opts.onAudit({ at: new Date().toISOString(), kind: 'agent_event', payload: event });
+        // Harvest the concrete model the CLI resolved (e.g. `claude-opus-4-8`)
+        // so model dropdowns can label the always-latest alias rows with the
+        // real version — for free, from every real run. See model-discovery.ts.
+        if (event.type === 'session_init' && event.model) {
+          recordObserved(event.model, new Date().toISOString());
+        }
       },
     });
     const wrappedOnAudit = (line: AuditLine): void => {

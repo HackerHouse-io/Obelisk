@@ -1,16 +1,16 @@
 import type { RunnerKind } from '../shared/types';
 
 /**
- * Model dropdowns are populated dynamically — the main process discovers
- * models from the user's CLI config (`~/.codex/config.toml`,
- * `~/.claude/settings.json`) and, when API keys are present, from the live
- * Anthropic / OpenAI `/v1/models` endpoints. See
- * `src/main/runners/model-discovery.ts`.
+ * Model dropdowns are populated dynamically and CLI-sourced — never an API key.
+ * The main process reads the CLI's configured default and probes the CLI's
+ * init handshake for the concrete model each always-latest alias resolves to.
+ * See `src/main/runners/model-discovery.ts`.
  *
  * The renderer fetches via `models:list` IPC. `MODEL_OPTIONS` below is the
  * boot-time fallback — used for the first paint before the IPC resolves and
- * when the renderer is offline. Keep it short and current; the live
- * discovery layer is the source of truth.
+ * when the IPC is unavailable. Claude rows are the always-latest family
+ * aliases (`opus`/`sonnet`/`haiku`); the backend overlays the resolved version
+ * onto the labels. Keep it short; the discovery layer is the source of truth.
  */
 export interface ModelOption {
   id: string;
@@ -20,9 +20,9 @@ export interface ModelOption {
 
 export const MODEL_OPTIONS: Record<RunnerKind, ModelOption[]> = {
   claude: [
-    { id: 'claude-opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
-    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
-    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
+    { id: 'opus', label: 'Opus', tier: 'flagship' },
+    { id: 'sonnet', label: 'Sonnet', tier: 'balanced' },
+    { id: 'haiku', label: 'Haiku', tier: 'fast' },
   ],
   codex: [
     { id: 'gpt-5.5', label: 'GPT-5.5', tier: 'flagship' },
@@ -50,19 +50,25 @@ export function findModelOption(runner: RunnerKind, id: string): ModelOption | n
   return MODEL_OPTIONS[runner].find((m) => m.id === id) ?? null;
 }
 
+/** Where the version labels came from — drives the refresh-button tooltip. */
+export type ModelSource = 'cli-probe' | 'observed' | 'fallback';
+
 /**
- * Fetch models for a runner from the main process. Falls back to the curated
- * list above on IPC failure (offline, handler not registered, etc.) so the
- * dropdown is never empty.
+ * Fetch models for a runner from the main process. Falls back to the alias
+ * list above on IPC failure (handler not registered, etc.) so the dropdown is
+ * never empty. Pass `refresh` to force a fresh CLI init-probe.
  */
-export async function fetchModelsForRunner(runner: RunnerKind): Promise<{
+export async function fetchModelsForRunner(
+  runner: RunnerKind,
+  refresh = false,
+): Promise<{
   models: ModelOption[];
   defaultModelId: string | null;
-  source: 'live-api' | 'curated';
+  source: ModelSource;
   fetchedAt: string;
 }> {
   try {
-    const res = await window.obelisk.invoke('models:list', { runner });
+    const res = await window.obelisk.invoke('models:list', { runner, refresh });
     if (res.ok) {
       return {
         models: res.value.models,
@@ -72,12 +78,12 @@ export async function fetchModelsForRunner(runner: RunnerKind): Promise<{
       };
     }
   } catch {
-    // fall through to curated
+    // fall through to the alias list
   }
   return {
     models: MODEL_OPTIONS[runner],
     defaultModelId: null,
-    source: 'curated',
+    source: 'fallback',
     fetchedAt: new Date().toISOString(),
   };
 }

@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { MODEL_OPTIONS, fetchModelsForRunner, tierLabel, type ModelOption } from '../models';
+import {
+  MODEL_OPTIONS,
+  fetchModelsForRunner,
+  tierLabel,
+  type ModelOption,
+  type ModelSource,
+} from '../models';
 import type { RunnerKind } from '../../shared/types';
 
 const CUSTOM_SENTINEL = '__custom__';
@@ -18,16 +24,17 @@ interface Props {
 interface FetchState {
   models: ModelOption[];
   defaultModelId: string | null;
-  source: 'live-api' | 'curated' | 'fallback';
+  source: ModelSource;
   fetchedAt: string | null;
   loading: boolean;
 }
 
 /**
  * Runner-aware model picker. Models are fetched dynamically from the main
- * process (which reads the user's CLI config + queries Anthropic / OpenAI
- * `/v1/models` when API keys are set), with a curated fallback used for the
- * first paint and when discovery fails.
+ * process, which is CLI-sourced and never uses an API key: Claude rows are the
+ * always-latest aliases (opus/sonnet/haiku) labelled with the concrete version
+ * the CLI's init handshake resolves to. An alias fallback is used for the first
+ * paint and when discovery is unavailable.
  *
  * State semantics match `resolveRunnerModel` on the backend:
  *   - empty string  → falls through to Settings → CLI default
@@ -54,6 +61,9 @@ export function ModelSelect({ runner, value, onChange, disabled, id }: Props): R
   // Bump to force a re-fetch from a refresh button.
   const [refreshTick, setRefreshTick] = useState(0);
   const aliveRef = useRef(true);
+  // True only for fetches triggered by the refresh button — those force a
+  // fresh CLI init-probe; a plain mount/runner-switch serves cached versions.
+  const manualRef = useRef(false);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -74,7 +84,9 @@ export function ModelSelect({ runner, value, onChange, disabled, id }: Props): R
       return;
     }
     setState((s) => ({ ...s, loading: true }));
-    void fetchModelsForRunner(runner).then((res) => {
+    const manual = manualRef.current;
+    manualRef.current = false;
+    void fetchModelsForRunner(runner, manual).then((res) => {
       if (!aliveRef.current) return;
       setState({
         models: res.models,
@@ -135,14 +147,17 @@ export function ModelSelect({ runner, value, onChange, disabled, id }: Props): R
           <button
             type="button"
             className="btn ghost sm model-select-refresh"
-            onClick={() => setRefreshTick((t) => t + 1)}
+            onClick={() => {
+              manualRef.current = true;
+              setRefreshTick((t) => t + 1);
+            }}
             disabled={disabled || state.loading}
             title={
-              state.source === 'live-api'
-                ? `Live from API · refresh`
-                : state.source === 'curated'
-                  ? `Curated fallback (no API key set) · refresh`
-                  : 'Refresh model list'
+              state.source === 'cli-probe'
+                ? 'Live from your CLI · refresh'
+                : state.source === 'observed'
+                  ? 'From your CLI · refresh to re-check'
+                  : 'Refresh to read the latest model from your CLI'
             }
             aria-label="Refresh model list"
           >

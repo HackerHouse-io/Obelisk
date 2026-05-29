@@ -65,7 +65,21 @@ export async function getGithub(): Promise<Octokit | null> {
     );
   });
   client.hook.error('request', (error, options) => {
-    console.error(`[github] !! ${options.method} ${options.url}:`, error);
+    // Removing a label that isn't on an issue returns 404 "Label does not
+    // exist". Call sites do this idempotently (e.g. publish() strips both
+    // possible trigger labels, clearClaimSignals() removes in-progress
+    // regardless of whether it was applied) and swallow the rejection. It's
+    // an expected no-op, not a failure — log it quietly so it doesn't read
+    // as an error in the audit stream. We still re-throw so the call-site
+    // .catch() sees it.
+    const status = (error as { status?: number }).status;
+    const isBenignLabelRemoval =
+      status === 404 && options.method === 'DELETE' && /\/labels\//.test(String(options.url));
+    if (isBenignLabelRemoval) {
+      console.log(`[github] <- ${options.method} ${options.url} 404 (label already absent)`);
+    } else {
+      console.error(`[github] !! ${options.method} ${options.url}:`, error);
+    }
     throw error;
   });
 

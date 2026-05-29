@@ -640,16 +640,21 @@ export interface IpcMap {
     };
   };
 
-  // Models — dynamic discovery (CLI config + live API + curated fallback).
-  // Replaces the renderer's hardcoded MODEL_OPTIONS for non-stale dropdowns.
+  // Models — dynamic discovery, CLI-sourced (no API key). Claude rows are the
+  // always-latest aliases (opus/sonnet/haiku) labelled with the concrete
+  // version the CLI resolves via its init handshake. See model-discovery.ts.
   'models:list': {
-    req: { runner: RunnerKind };
+    req: {
+      runner: RunnerKind;
+      /** Force a fresh CLI init-probe (the dropdown's refresh button). */
+      refresh?: boolean;
+    };
     res: {
       runner: RunnerKind;
       models: { id: string; label: string; tier: 'flagship' | 'balanced' | 'fast' | 'reasoning' }[];
       /** What the CLI will use when no override is passed (read from CLI config). */
       defaultModelId: string | null;
-      source: 'live-api' | 'curated';
+      source: 'cli-probe' | 'observed' | 'fallback';
       fetchedAt: ISO;
     };
   };

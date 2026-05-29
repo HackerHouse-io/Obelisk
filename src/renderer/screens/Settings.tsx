@@ -305,9 +305,10 @@ function RunnerCard({
         <div className="settings-card-sub" style={{ marginTop: 12 }}>
           Default model per runner. Leave on <span className="mono">Use CLI default</span> to let
           the CLI fall back to its account default — the safe choice if you sign in with a ChatGPT
-          account or aren&rsquo;t sure which models you have access to. The list is read from your
-          CLI config and the live <span className="mono">/v1/models</span> endpoint, so it stays in
-          sync as model names rotate.
+          account or aren&rsquo;t sure which models you have access to. Claude rows are the
+          always-latest <span className="mono">opus</span> / <span className="mono">sonnet</span> /{' '}
+          <span className="mono">haiku</span> aliases, labelled with the version your CLI resolves —
+          read from the CLI itself (no API key), so it stays in sync as models ship.
         </div>
         <ModelSelect
           label="Claude model"
@@ -338,15 +339,16 @@ function ModelSelect({
   onCommit: (next: string) => void;
 }): ReactElement {
   // Mirrors the Agents → Runner & model dropdown: `MODEL_OPTIONS` is the
-  // first-paint fallback, replaced once `models:list` resolves with the live
-  // CLI-config + Anthropic/OpenAI /v1/models list.
+  // first-paint fallback (always-latest aliases), replaced once `models:list`
+  // resolves with the CLI-discovered versions. A non-zero tick means the user
+  // hit refresh, which forces a fresh CLI init-probe.
   const [models, setModels] = useState<ModelOption[]>(MODEL_OPTIONS[runner]);
   const [defaultModelId, setDefaultModelId] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    void fetchModelsForRunner(runner).then((res) => {
+    void fetchModelsForRunner(runner, refreshTick > 0).then((res) => {
       if (!alive) return;
       setModels(res.models);
       setDefaultModelId(res.defaultModelId);
@@ -382,7 +384,7 @@ function ModelSelect({
           type="button"
           className="btn ghost sm"
           onClick={() => setRefreshTick((t) => t + 1)}
-          title="Refresh model list (re-reads CLI config + live API)"
+          title="Refresh model list (re-probes your CLI)"
           aria-label="Refresh model list"
         >
           ↻

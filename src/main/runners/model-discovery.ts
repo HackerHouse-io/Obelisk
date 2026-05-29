@@ -2,26 +2,32 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { RunnerKind } from '../../shared/types';
+import { familyOf, readObserved, recordObserved, type ClaudeFamily } from './observed-models';
+import { probeResolvedModel } from './model-probe';
 
 /**
- * Dynamic model discovery.
+ * Dynamic model discovery — CLI-sourced, never an API key.
  *
- * The renderer used to ship a hardcoded curated list, which rotted as soon as
- * model names shipped (the user reported the dropdown showing `gpt-5.1-codex`
- * after their local Codex CLI was already on `gpt-5.5`).
+ * The renderer used to ship a hardcoded curated list, which rotted the moment
+ * a new model shipped (the dropdown showed `Opus 4.7` after the CLI had already
+ * moved to `Opus 4.8`). An earlier fix queried Anthropic/OpenAI `/v1/models`,
+ * but that only works with an API key — this app authenticates via the CLI's
+ * own subscription/OAuth session, so the API path always fell back to stale
+ * curated data.
  *
- * This module returns a freshly-discovered list at request time, in this
- * order of preference:
- *   1. Live API list (Anthropic for Claude, OpenAI for Codex), when the user
- *      has set ANTHROPIC_API_KEY / OPENAI_API_KEY in the environment.
- *   2. The model the user already has wired into their CLI's config —
- *      surfaced as the "current default" so they see what their CLI will
- *      actually pick when they choose "Use default".
- *   3. A curated fallback list. Updated whenever models ship; kept short.
+ * Instead we treat the CLI as the source of truth, with two no-API-key signals:
  *
- * Results are merged + deduped so a model that shows up in both the API and
- * the curated list appears once. Custom freetext entry is still supported by
- * the renderer's `ModelSelect` component.
+ *   1. **Family aliases are always-latest.** The Claude rows are the bare
+ *      aliases `opus` / `sonnet` / `haiku`; `claude --model opus` resolves to
+ *      the newest model in that family, so a run is always-latest with no code
+ *      change when the CLI updates.
+ *   2. **The init handshake reveals the concrete version, for free.** Every run
+ *      — and a cheap one-line probe (`model-probe.ts`) — announces the resolved
+ *      id (`claude-opus-4-8`) in its `system:init` event. We cache it
+ *      (`observed-models.ts`) and use it to label the alias rows ("Opus 4.8").
+ *
+ * Custom freetext entry is still supported by the renderer's `ModelSelect`, so
+ * a user can pin an exact version for reproducibility.
  */
 
 export interface DiscoveredModel {
@@ -35,67 +41,166 @@ export interface ModelDiscoveryResult {
   models: DiscoveredModel[];
   /** The model the CLI will use when no override is passed (read from CLI config). */
   defaultModelId: string | null;
-  /** Where the list came from — drives a "live"/"cached" pill in the UI. */
-  source: 'live-api' | 'curated';
+  /**
+   * Provenance of the version labels:
+   *   - `cli-probe`: refreshed this call via the init handshake.
+   *   - `observed`:  served from a previously-harvested resolved id.
+   *   - `fallback`:  no concrete version known yet — alias rows only.
+   */
+  source: 'cli-probe' | 'observed' | 'fallback';
   /** ISO timestamp the result was assembled. */
   fetchedAt: string;
 }
 
-const ANTHROPIC_VERSION = '2023-06-01';
-const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
-const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
+interface DiscoverOpts {
+  /** Force a fresh init-probe of every Claude family (the refresh button). */
+  refresh?: boolean;
+  /** Injected clock for deterministic tests. */
+  now?: () => string;
+}
 
-// Curated fallback. Single source of truth — the renderer mirrors this for
-// first-paint, but the IPC always overlays freshly-discovered entries on top.
-export const CURATED_MODELS: Record<RunnerKind, DiscoveredModel[]> = {
-  claude: [
-    // Use full pinned ids — `claude --model` accepts the alias (`sonnet`,
-    // `opus`, `haiku`) or the full name (`claude-sonnet-4-6`), but rejects
-    // version-suffixed shorthand like `sonnet-4-6` with exit 1.
-    { id: 'claude-opus-4-7', label: 'Opus 4.7', tier: 'flagship' },
-    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: 'balanced' },
-    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', tier: 'fast' },
-  ],
-  codex: [
-    { id: 'gpt-5.5', label: 'GPT-5.5', tier: 'flagship' },
-    { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', tier: 'reasoning' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini', tier: 'fast' },
-  ],
-};
+/** Re-probe a family when its cached id is older than this. */
+const OBSERVED_TTL_MS = 6 * 60 * 60 * 1000;
 
-export async function discoverModels(runner: RunnerKind): Promise<ModelDiscoveryResult> {
-  const fetchedAt = new Date().toISOString();
+const CLAUDE_FAMILIES: { family: ClaudeFamily; tier: DiscoveredModel['tier'] }[] = [
+  { family: 'opus', tier: 'flagship' },
+  { family: 'sonnet', tier: 'balanced' },
+  { family: 'haiku', tier: 'fast' },
+];
+
+// Codex has no always-latest alias, so its rows stay concrete. Kept short and
+// updated when models ship; the CLI's configured default (read below) is
+// always surfaced on top so a brand-new model the user already wired in shows.
+const CURATED_CODEX: DiscoveredModel[] = [
+  { id: 'gpt-5.5', label: 'GPT-5.5', tier: 'flagship' },
+  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', tier: 'reasoning' },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', tier: 'fast' },
+];
+
+export async function discoverModels(
+  runner: RunnerKind,
+  opts: DiscoverOpts = {},
+): Promise<ModelDiscoveryResult> {
+  const now = opts.now ?? (() => new Date().toISOString());
+  const fetchedAt = now();
   const defaultModelId = await readCliDefaultModel(runner).catch(() => null);
 
-  const live = await fetchLiveModels(runner).catch(() => null);
-  const curated = CURATED_MODELS[runner];
+  if (runner === 'codex') {
+    return discoverCodex(defaultModelId, fetchedAt);
+  }
+  return discoverClaude(defaultModelId, fetchedAt, Boolean(opts.refresh), now);
+}
 
-  // Dedup by id, prefer live entries' labels/tiers (they may carry richer
-  // display names) while keeping curated entries that the API didn't return.
+/* ---------- Claude (alias rows + CLI-observed versions) ---------- */
+
+async function discoverClaude(
+  defaultModelId: string | null,
+  fetchedAt: string,
+  refresh: boolean,
+  now: () => string,
+): Promise<ModelDiscoveryResult> {
+  const nowMs = Date.parse(fetchedAt);
+
+  // Decide which families need a fresh probe. On a cold store (nothing ever
+  // observed) we await so the first open already shows real versions; on a
+  // warm store we serve cached ids instantly and refresh stale ones in the
+  // background. The refresh button always awaits all three.
+  const observed = new Map<ClaudeFamily, ReturnType<typeof readObserved>>();
+  for (const { family } of CLAUDE_FAMILIES) observed.set(family, readObserved(family));
+  const cold = [...observed.values()].every((o) => o === null);
+
+  const isStale = (family: ClaudeFamily): boolean => {
+    const o = observed.get(family) ?? null;
+    if (!o) return true;
+    const ageMs = nowMs - Date.parse(o.at);
+    return Number.isFinite(ageMs) ? ageMs > OBSERVED_TTL_MS : true;
+  };
+
+  let probed = false;
+  if (refresh || cold) {
+    // Await: caller wants accurate labels now.
+    const targets = CLAUDE_FAMILIES.filter(({ family }) => refresh || isStale(family));
+    const results = await Promise.all(targets.map(({ family }) => probeFamily(family, now)));
+    probed = results.some((id) => id !== null);
+    for (const { family } of targets) observed.set(family, readObserved(family));
+  } else {
+    // Warm: don't block. Kick background probes for anything stale.
+    for (const { family } of CLAUDE_FAMILIES) {
+      if (isStale(family)) void probeFamily(family, now);
+    }
+  }
+
+  const models: DiscoveredModel[] = CLAUDE_FAMILIES.map(({ family, tier }) => {
+    const concrete = observed.get(family)?.id ?? null;
+    return { id: family, label: formatModelLabel(concrete, family), tier };
+  });
+
+  const hasConcrete = [...observed.values()].some((o) => o !== null);
+  const source: ModelDiscoveryResult['source'] = probed
+    ? 'cli-probe'
+    : hasConcrete
+      ? 'observed'
+      : 'fallback';
+
+  return { runner: 'claude', models, defaultModelId, source, fetchedAt };
+}
+
+/**
+ * Probe a family, deduping concurrent probes (multiple dropdowns can mount at
+ * once) and recording the result so the next discovery serves it from cache.
+ */
+const inFlight = new Map<ClaudeFamily, Promise<string | null>>();
+
+function probeFamily(family: ClaudeFamily, now: () => string): Promise<string | null> {
+  const existing = inFlight.get(family);
+  if (existing) return existing;
+  const p = probeResolvedModel(family)
+    .then((id) => {
+      if (id) recordObserved(id, now());
+      return id;
+    })
+    .catch(() => null)
+    .finally(() => inFlight.delete(family));
+  inFlight.set(family, p);
+  return p;
+}
+
+/**
+ * Turn a concrete resolved id into a display label. Strips the `[1m]`
+ * context-window marker and any trailing date suffix:
+ *   `claude-opus-4-8`            → "Opus 4.8"
+ *   `claude-haiku-4-5-20251001`  → "Haiku 4.5"
+ * Falls back to the capitalized family name when no version is known yet.
+ */
+export function formatModelLabel(concreteId: string | null, family: ClaudeFamily): string {
+  const Fam = family.charAt(0).toUpperCase() + family.slice(1);
+  if (!concreteId) return Fam;
+  const clean = concreteId.replace(/\[.*$/, '');
+  const m = /(?:opus|sonnet|haiku)-(\d+)-(\d+)/i.exec(clean);
+  return m ? `${Fam} ${m[1]}.${m[2]}` : Fam;
+}
+
+/* ---------- Codex (curated rows + CLI-configured default) ---------- */
+
+function discoverCodex(defaultModelId: string | null, fetchedAt: string): ModelDiscoveryResult {
   const seen = new Set<string>();
-  const merged: DiscoveredModel[] = [];
-  for (const m of [...(live ?? []), ...curated]) {
+  const models: DiscoveredModel[] = [];
+  // Surface the CLI's configured default first if it isn't already curated, so
+  // a model the user just wired into config.toml shows even when it's new.
+  if (defaultModelId && !CURATED_CODEX.some((m) => m.id === defaultModelId)) {
+    models.push({ id: defaultModelId, label: defaultModelId, tier: 'flagship' });
+    seen.add(defaultModelId);
+  }
+  for (const m of CURATED_CODEX) {
     if (seen.has(m.id)) continue;
     seen.add(m.id);
-    merged.push(m);
+    models.push(m);
   }
-
-  // If the CLI's configured default isn't in the merged list yet, prepend it
-  // so the user sees their actual current model even when it's brand-new and
-  // missing from both live and curated sources.
-  if (defaultModelId && !seen.has(defaultModelId)) {
-    merged.unshift({
-      id: defaultModelId,
-      label: defaultModelId,
-      tier: 'flagship',
-    });
-  }
-
   return {
-    runner,
-    models: merged,
+    runner: 'codex',
+    models,
     defaultModelId,
-    source: live ? 'live-api' : 'curated',
+    source: defaultModelId ? 'observed' : 'fallback',
     fetchedAt,
   };
 }
@@ -146,90 +251,6 @@ export async function readClaudeSettingsModel(): Promise<string | null> {
   }
 }
 
-/* ---------- Live API fetchers ---------- */
-
-async function fetchLiveModels(runner: RunnerKind): Promise<DiscoveredModel[] | null> {
-  if (runner === 'claude') {
-    const key = process.env['ANTHROPIC_API_KEY'];
-    if (!key) return null;
-    return fetchAnthropicModels(key).catch(() => null);
-  }
-  const key = process.env['OPENAI_API_KEY'];
-  if (!key) return null;
-  return fetchOpenAIModels(key).catch(() => null);
-}
-
-interface AnthropicModelsResponse {
-  data?: { id?: string; display_name?: string }[];
-}
-
-async function fetchAnthropicModels(apiKey: string): Promise<DiscoveredModel[]> {
-  const res = await fetch(ANTHROPIC_MODELS_URL, {
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-  });
-  if (!res.ok) throw new Error(`anthropic /v1/models returned ${res.status}`);
-  const json = (await res.json()) as AnthropicModelsResponse;
-  const data = Array.isArray(json.data) ? json.data : [];
-  return data
-    .filter((m): m is { id: string; display_name?: string } => typeof m.id === 'string')
-    .map((m) => ({
-      id: m.id,
-      label: typeof m.display_name === 'string' && m.display_name ? m.display_name : m.id,
-      tier: classifyClaudeTier(m.id),
-    }));
-}
-
-interface OpenAIModelsResponse {
-  data?: { id?: string }[];
-}
-
-async function fetchOpenAIModels(apiKey: string): Promise<DiscoveredModel[]> {
-  const res = await fetch(OPENAI_MODELS_URL, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (!res.ok) throw new Error(`openai /v1/models returned ${res.status}`);
-  const json = (await res.json()) as OpenAIModelsResponse;
-  const data = Array.isArray(json.data) ? json.data : [];
-  // /v1/models returns the entire account-visible catalog (gpt-3.5, embeddings,
-  // tts, etc.). For Codex the only useful subset is the gpt-* / o-* reasoning
-  // family, since codex CLI rejects everything else.
-  return data
-    .filter((m): m is { id: string } => typeof m.id === 'string')
-    .filter((m) => isCodexCompatibleModelId(m.id))
-    .map((m) => ({
-      id: m.id,
-      label: prettifyOpenAILabel(m.id),
-      tier: classifyCodexTier(m.id),
-    }));
-}
-
-function isCodexCompatibleModelId(id: string): boolean {
-  // Codex CLI accepts gpt-* and o-series reasoning models. Filter out audio,
-  // tts, embedding, image, etc.
-  if (/embedding|whisper|tts|audio|image|dall-e|moderation/i.test(id)) return false;
-  return /^(gpt-|o\d|o-mini|codex)/i.test(id);
-}
-
-function prettifyOpenAILabel(id: string): string {
-  // "gpt-5.5" → "GPT-5.5"; "gpt-5-mini" → "GPT-5 Mini"; leave the rest alone.
-  return id
-    .replace(/^gpt-/i, 'GPT-')
-    .replace(/-mini\b/i, ' Mini')
-    .replace(/-codex\b/i, ' Codex');
-}
-
-function classifyClaudeTier(id: string): DiscoveredModel['tier'] {
-  if (/opus/i.test(id)) return 'flagship';
-  if (/haiku/i.test(id)) return 'fast';
-  if (/sonnet/i.test(id)) return 'balanced';
-  return 'balanced';
-}
-
-function classifyCodexTier(id: string): DiscoveredModel['tier'] {
-  if (/mini\b/i.test(id)) return 'fast';
-  if (/codex/i.test(id)) return 'reasoning';
-  return 'flagship';
-}
+// Re-exported for callers that want the family classifier without importing
+// the store module directly.
+export { familyOf };
