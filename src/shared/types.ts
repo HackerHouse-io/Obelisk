@@ -701,7 +701,7 @@ export interface IpcMap {
    * it's committed (same fire-and-resolve contract as `agents:run`).
    */
   'runs:retry': {
-    req: { runId: string };
+    req: { runId: string; userClarification?: string };
     res: { runId: string; taskRef: string | null; taskContext: string | null };
   };
   'runs:delete': { req: { runId: string }; res: { ok: true } };

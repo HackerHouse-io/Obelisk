@@ -26,6 +26,14 @@ import type {
   PublishPlan,
 } from '../types';
 
+/**
+ * Issue labels that mark a bug as not-yet-actionable: the premise still needs
+ * human confirmation, or it's an open question / blocked. Auto-ticks skip
+ * these so the agent never spawns a run that's destined to end in REPRO_FAILED.
+ * Compared case-insensitively. A forced (manual, clarified) retry bypasses this.
+ */
+const NOT_READY_LABELS = new Set(['needs-spec-confirmation', 'question', 'blocked']);
+
 export const bugFixerHandler: AgentHandler = {
   name: 'bug-fixer',
   multiInstance: true,
@@ -123,6 +131,7 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   let triggerGone = 0;
   let crossInstall = 0;
   let allowlistDenied = 0;
+  let needsSpec = 0;
 
   for (let attempts = 0; attempts < 32; attempts++) {
     const item = claimNextBacklogItem(input.repo.id, 'bug', placeholder);
@@ -173,6 +182,19 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
       unlockBacklogItem(item.id);
       deleteBacklogGhIssue(input.repo.id, item.githubIssue);
       triggerGone += 1;
+      continue;
+    }
+
+    // Not-ready guard. An issue still awaiting human confirmation
+    // (`needs-spec-confirmation`) or flagged as a `question`/`blocked` is not a
+    // confirmed, actionable bug — dispatching the agent at it just burns a run
+    // that ends in REPRO_FAILED (exactly issue #52). Skip it here so auto-ticks
+    // never spawn a doomed run; the user can still force it via a clarified
+    // Retry (the forced path above bypasses this filtering). Keep the lock
+    // released but the row in the backlog so it returns once the label clears.
+    if (ctx.labels.some((l) => NOT_READY_LABELS.has(l.toLowerCase()))) {
+      unlockBacklogItem(item.id);
+      needsSpec += 1;
       continue;
     }
 
@@ -258,6 +280,10 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   if (crossInstall > 0) reasons.push(`${crossInstall} already claimed by another Obelisk install`);
   if (allowlistDenied > 0)
     reasons.push(`${allowlistDenied} authored by users not on the allowlist`);
+  if (needsSpec > 0)
+    reasons.push(
+      `${needsSpec} awaiting spec confirmation (labeled needs-spec-confirmation/question/blocked)`,
+    );
   // Diagnostic fallback — reached when tried.size === 0 (every local row
   // is locked by a live run) or every iteration silently skipped via
   // the !ctx path (issue removed from GitHub between sync and fetch).

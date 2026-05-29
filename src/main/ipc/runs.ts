@@ -13,6 +13,8 @@ import {
 } from '../db/runs';
 import { listArtifacts } from '../db/evidence';
 import { getAgent } from '../db/agents';
+import { getRepo } from '../db/repos';
+import { getGithub } from '../github/client';
 import { dispatchAgentRun } from './agents';
 import { ObeliskError } from '../../shared/errors';
 import { getDb } from '../db';
@@ -67,7 +69,12 @@ export async function handleRunsRetry(
 ): Promise<IpcMap['runs:retry']['res']> {
   const run = getRun(payload.runId);
   if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${payload.runId} not found`);
-  if (run.state !== 'failed' && run.state !== 'cancelled' && run.state !== 'done') {
+  if (
+    run.state !== 'failed' &&
+    run.state !== 'cancelled' &&
+    run.state !== 'done' &&
+    run.state !== 'paused'
+  ) {
     throw new ObeliskError(
       'RUN_ACTIVE',
       'This run is still active — stop it before retrying.',
@@ -91,12 +98,49 @@ export async function handleRunsRetry(
   const agent = getAgent(run.agentId);
   if (!agent) throw new ObeliskError('AGENT_NOT_FOUND', `agent ${run.agentId} not found`);
 
+  // When the user supplied clarification (retrying a REPRO_FAILED pause), post
+  // it as a comment on the linked GitHub issue first — durable, visible to
+  // teammates, and a paper trail for why the agent was re-run. Best-effort: a
+  // comment failure must not block the (more important) re-run.
+  const clarification = payload.userClarification?.trim();
+  if (clarification) {
+    await postClarificationComment(run.repoId, run.taskRef, clarification).catch(() => undefined);
+  }
+
   // Force the exact task the failed run targeted, bypassing dedup/caps; the
   // atomic claim still prevents true duplicates.
   return dispatchAgentRun(agent, {
     taskId: run.taskRef,
     forceTask: true,
     retryOfRunId: run.id,
+    ...(clarification ? { userClarification: clarification } : {}),
+  });
+}
+
+/**
+ * Post the user's retry clarification as a comment on the linked GitHub issue
+ * (`issue#<n>` task refs only). Best-effort and self-contained: resolves
+ * silently when there's no GitHub-backed issue, no auth, or a bad repo name.
+ */
+async function postClarificationComment(
+  repoId: string,
+  taskRef: string | null,
+  clarification: string,
+): Promise<void> {
+  if (!taskRef?.startsWith('issue#')) return;
+  const issueNumber = Number.parseInt(taskRef.slice('issue#'.length), 10);
+  if (!Number.isInteger(issueNumber)) return;
+  const repo = getRepo(repoId);
+  if (!repo) return;
+  const [owner, repoName] = repo.githubFullName.split('/');
+  if (!owner || !repoName) return;
+  const gh = await getGithub();
+  if (!gh) return;
+  await gh.issues.createComment({
+    owner,
+    repo: repoName,
+    issue_number: issueNumber,
+    body: `**Obelisk — clarification provided on retry:**\n\n${clarification}`,
   });
 }
 

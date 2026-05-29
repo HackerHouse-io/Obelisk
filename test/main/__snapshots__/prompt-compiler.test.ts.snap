@@ -82,14 +82,23 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     {
       "contents": "{
   "permissions": {
-    "allowedTools": [
-      "fs.read",
-      "fs.write",
-      "shell.run",
-      "git.commit"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": [
-      "github.merge"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh merge:*)"
     ]
   }
 }",
@@ -103,6 +112,8 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--permission-mode",
+    "acceptEdits",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -652,14 +663,23 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     {
       "contents": "{
   "permissions": {
-    "allowedTools": [
-      "fs.read",
-      "fs.write",
-      "shell.run",
-      "git.commit"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": [
-      "github.merge"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh merge:*)"
     ]
   }
 }",
@@ -673,6 +693,8 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--permission-mode",
+    "acceptEdits",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -1136,14 +1158,23 @@ Find the root cause, not a symptom that quiets the alarm.
     {
       "contents": "{
   "permissions": {
-    "allowedTools": [
-      "fs.read",
-      "fs.write",
-      "shell.run",
-      "git.commit"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": [
-      "github.merge"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh merge:*)"
     ]
   }
 }",
@@ -1157,6 +1188,8 @@ Find the root cause, not a symptom that quiets the alarm.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--permission-mode",
+    "acceptEdits",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -1491,17 +1524,25 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     {
       "contents": "{
   "permissions": {
-    "allowedTools": [
-      "fs.read",
-      "fs.write",
-      "shell.run",
-      "git.commit"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": [
-      "git.push",
-      "github.create_issue",
-      "github.create_pr",
-      "github.merge"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh merge:*)",
+      "Bash(gh issue create:*)",
+      "Bash(gh issue edit:*)"
     ]
   }
 }",
@@ -1515,6 +1556,8 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--permission-mode",
+    "acceptEdits",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -1973,17 +2016,25 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     {
       "contents": "{
   "permissions": {
-    "allowedTools": [
-      "fs.read",
-      "fs.write",
-      "shell.run",
-      "git.commit"
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": [
-      "git.push",
-      "github.create_issue",
-      "github.create_pr",
-      "github.merge"
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh merge:*)",
+      "Bash(gh issue create:*)",
+      "Bash(gh issue edit:*)"
     ]
   }
 }",
@@ -1997,6 +2048,8 @@ Write the test first. The Prove-It Pattern is non-negotiable for Bug Fixer.
     ".claude/SYSTEM.md",
     "--settings",
     ".claude/settings.json",
+    "--permission-mode",
+    "acceptEdits",
     "--output-format",
     "stream-json",
     "--verbose",

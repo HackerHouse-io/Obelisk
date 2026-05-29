@@ -95,6 +95,13 @@ export interface RunAgentInput {
    * `pulls.create`. See `agents/types.ts:ResumeContext`.
    */
   resumeContext?: import('../agents/types').ResumeContext;
+  /**
+   * Free-text clarification the user supplied when retrying a run that paused
+   * for spec input (REPRO_FAILED). Spliced into the selected task's context so
+   * the agent sees the missing repro/spec on the re-run. Same mechanism
+   * `resumeContext` uses to inject CI logs.
+   */
+  userClarification?: string;
 }
 
 export interface RunAgentOutput {
@@ -156,6 +163,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       });
   if (!selected) {
     return { runId: '', finalState: 'done', reason: 'nothing to do' };
+  }
+
+  // Thread any user clarification (supplied when retrying a REPRO_FAILED pause)
+  // into the task context so the agent sees the missing repro/spec this time.
+  // Mirrors how resumeContext splices CI logs into context (see below).
+  if (input.userClarification && input.userClarification.trim().length > 0) {
+    selected.task.context = [
+      selected.task.context,
+      '',
+      '---',
+      '',
+      '## User clarification on retry',
+      'A previous attempt could not confirm this bug. The user provided the',
+      'following clarification / repro steps — treat it as authoritative:',
+      '',
+      input.userClarification.trim(),
+    ].join('\n');
   }
 
   // 2) Pick a runner: per-call override (Test Plans popover) → per-task
@@ -430,6 +454,32 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       result.reason === 'no_changes' &&
       (handler.producesPatch === false || reasoningHasMarker);
 
+    // A patch-producing agent that ends with no changes but explicitly declared
+    // it could not confirm the bug (`REPRO_FAILED: <reason>`) is NOT a crash —
+    // it followed agents/bug-fixer.md and is waiting on the user for clearer
+    // repro/spec. The prompt promises "the run will be paused and the user asked
+    // for clearer repro steps", so honour that: pause (not fail), surface the
+    // reason, and let the drawer's spec-clarification card collect input for a
+    // retry. Don't auto-retry — a re-run with the same input repeats the verdict.
+    const reproReason =
+      !result.ok && result.reason === 'no_changes' && !isReadOnlyNoChanges
+        ? parseReproFailed(result.reasoning ?? '')
+        : null;
+    if (reproReason !== null) {
+      appendAudit({
+        runId: run.id,
+        kind: 'state',
+        payload: { from: 'running', to: 'paused', reason: 'repro_failed', detail: reproReason },
+      });
+      transitionRun(run.id, 'paused', {
+        errorCode: 'REPRO_FAILED',
+        outputSummary: reproReason.slice(0, 500),
+        runnerUsed: runResult.runnerUsed,
+        fallbackUsed: runResult.fallbackUsed,
+      });
+      return { runId: run.id, finalState: 'paused', reason: 'REPRO_FAILED' };
+    }
+
     if (!result.ok && !isReadOnlyNoChanges) {
       const errorCode = errorCodeForFailure(result.reason, result.detail);
       appendAudit({
@@ -672,6 +722,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     // the body field is unused and rendering it is wasted work.
     const published: Awaited<ReturnType<typeof publish>>[] = [];
     const failures: string[] = [];
+    // Hold the first publish error object so its ObeliskError code (e.g.
+    // PUSH_REJECTED) survives — rethrowing a plain Error below would launder
+    // every publish failure into a generic INTERNAL.
+    let firstPublishError: unknown = null;
     // Resume (CI-retry fix-up) takes precedence over fix-mode attach so
     // a CI retry on top of an Obelisk PR keeps the original PR linkage.
     const existingPrNumber =
@@ -716,13 +770,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         appendAudit({ runId: run.id, kind: 'published', payload: result });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        if (firstPublishError === null) firstPublishError = e;
         failures.push(message);
         appendAudit({ runId: run.id, kind: 'publish_failed', payload: { plan, error: message } });
       }
     }
 
     if (published.length === 0) {
-      throw new Error(failures[0] ?? 'publish failed for every plan');
+      // Preserve the original error so a typed code (e.g. PUSH_REJECTED) reaches
+      // the run row's error_code instead of being flattened to INTERNAL.
+      throw firstPublishError ?? new Error(failures[0] ?? 'publish failed for every plan');
     }
 
     // If we shipped a PR linked to a GitHub issue, drop the backlog row
@@ -1145,8 +1202,25 @@ function errorCodeForFailure(
       if (/with no output\b/i.test(detail)) return 'RUNNER_NO_OUTPUT';
       return 'INTERNAL';
     case 'no_changes':
-      return 'INTERNAL';
+      // The agent ran cleanly but produced no patch and no `REPRO_FAILED`
+      // marker (that case is paused upstream, not failed). Distinct, calm code
+      // so the UI says "no fix produced" instead of a red INTERNAL crash.
+      return 'NO_CHANGES';
   }
+}
+
+/**
+ * Pull the human-readable reason out of an agent's `REPRO_FAILED: <reason>`
+ * declaration in its reasoning trace, or return null if the agent never
+ * declared one. The marker is emitted on its own when the agent (per
+ * agents/bug-fixer.md) cannot reproduce/confirm a bug and deliberately commits
+ * nothing — that's a "needs spec clarification" pause, not a failure.
+ */
+function parseReproFailed(reasoning: string): string | null {
+  const m = reasoning.match(/REPRO_FAILED:\s*([^\n]*(?:\n(?!\s*$)[^\n]*)*)/);
+  if (!m) return null;
+  const reason = (m[1] ?? '').trim();
+  return reason.length > 0 ? reason : 'The agent could not reproduce or confirm the reported bug.';
 }
 
 function oneLine(text: string): string {

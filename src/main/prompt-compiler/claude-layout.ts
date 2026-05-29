@@ -127,8 +127,45 @@ export function renderCaseContract(): string {
   ].join('\n');
 }
 
+/**
+ * Tool rules denied for every run regardless of mode. The agent must NEVER
+ * push or open/merge PRs itself — the harness (publisher) is the only thing
+ * that pushes the branch and opens the PR (see agents/bug-fixer.md). Phrased
+ * as `Bash(<cmd>:*)` rules because the agent reaches git/gh through Bash.
+ */
+const ALWAYS_DENY = [
+  'Bash(git push:*)',
+  'Bash(gh pr create:*)',
+  'Bash(gh pr merge:*)',
+  'Bash(gh merge:*)',
+];
+
+function denyForMode(mode: CompileInput['permissions']['mode']): string[] {
+  switch (mode) {
+    case 'observe':
+      // Read/triage only — no GitHub mutations at all.
+      return [...ALWAYS_DENY, 'Bash(gh issue create:*)', 'Bash(gh issue edit:*)'];
+    case 'issues':
+      // May file issues, but not open/merge PRs.
+      return [...ALWAYS_DENY];
+    case 'prs':
+    case 'automerge':
+      // May open PRs (the harness does it); never self-merge.
+      return [...ALWAYS_DENY];
+  }
+}
+
 function renderClaudeSettings(input: CompileInput): string {
-  // The shape mirrors what the `claude` CLI consumes for tool gating.
+  // Claude Code's real settings.json schema: `permissions.{defaultMode,allow,
+  // deny}` with tool NAMES (`Read`, `Edit`, `Bash`, `Bash(git push:*)`), NOT a
+  // bespoke `allowedTools: ['fs.write', …]`. The old shape used an unrecognized
+  // key with invented names, so the CLI silently ignored it: in headless `-p`
+  // mode that left `Edit`/`Write` un-allowed (auto-denied with no human to
+  // prompt) and turned the safety `deny` list into a no-op. `acceptEdits`
+  // auto-approves file edits headlessly; `Bash` is allowed broadly so the agent
+  // can run the repo's test suite, while `deny` (which takes precedence) keeps
+  // push/PR/merge off-limits.
+  //
   // `defaultModel` is set when (a) the caller passed a per-run modelOverride
   // (Test Plans popover) OR (b) the user configured a Claude model in
   // Settings. Hardcoding a name like `claude-sonnet-4-6` rots fast as new
@@ -137,15 +174,19 @@ function renderClaudeSettings(input: CompileInput): string {
   const claudeModel = resolveRunnerModel('claude', input.modelOverride);
   const settings: Record<string, unknown> = {
     permissions: {
-      allowedTools: ['fs.read', 'fs.write', 'shell.run', 'git.commit'],
-      deny:
-        input.permissions.mode === 'observe'
-          ? ['git.push', 'github.create_issue', 'github.create_pr', 'github.merge']
-          : input.permissions.mode === 'issues'
-            ? ['github.create_pr', 'github.merge']
-            : input.permissions.mode === 'prs'
-              ? ['github.merge']
-              : [],
+      defaultMode: 'acceptEdits',
+      allow: [
+        'Read',
+        'Edit',
+        'Write',
+        'MultiEdit',
+        'Grep',
+        'Glob',
+        'Bash',
+        'WebFetch',
+        'WebSearch',
+      ],
+      deny: denyForMode(input.permissions.mode),
     },
   };
   if (claudeModel) settings['defaultModel'] = claudeModel;
@@ -154,6 +195,12 @@ function renderClaudeSettings(input: CompileInput): string {
 
 function renderRunnerArgs(_input: CompileInput): string[] {
   // `-p` runs claude non-interactively; the user message is piped on stdin.
+  //
+  // `--permission-mode acceptEdits` is the robust, flag-level guarantee that
+  // file edits auto-approve in headless mode — without it (and without a
+  // permissive global ~/.claude on the host) the CLI would block every Edit/
+  // Write, which is exactly why Bug Fixer ran read-only and produced no fix.
+  // The `deny` rules in .claude/settings.json still gate push/PR/merge.
   //
   // `--output-format stream-json --include-partial-messages` gives us live
   // text deltas instead of the default text-mode behaviour, which buffers
@@ -170,6 +217,8 @@ function renderRunnerArgs(_input: CompileInput): string[] {
     '.claude/SYSTEM.md',
     '--settings',
     '.claude/settings.json',
+    '--permission-mode',
+    'acceptEdits',
     '--output-format',
     'stream-json',
     '--verbose',

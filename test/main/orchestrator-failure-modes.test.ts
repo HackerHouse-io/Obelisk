@@ -123,6 +123,27 @@ function factoryFor(recipe: MockRecipe): (kind: 'claude' | 'codex') => CodingAge
   return (kind) => new MockRunner(kind, recipe);
 }
 
+/**
+ * Factory that records the compiled userMessage the runner received, so tests
+ * can assert what context reached the agent (e.g. a threaded clarification).
+ */
+function capturingFactory(recipe: MockRecipe): {
+  factory: (kind: 'claude' | 'codex') => CodingAgentRunner;
+  prompts: string[];
+} {
+  const prompts: string[] = [];
+  const inner = new MockRunner('claude', recipe);
+  const factory = (): CodingAgentRunner => ({
+    kind: 'claude',
+    isInstalled: () => inner.isInstalled(),
+    run: (opts, abort) => {
+      prompts.push(opts.prompt.userMessage);
+      return inner.run(opts, abort);
+    },
+  });
+  return { factory, prompts };
+}
+
 describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
   it('EVIDENCE_INCOMPLETE — UI touched but no screenshot pauses the run', async () => {
     const repo = createRepo({
@@ -304,6 +325,71 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
 
     expect(result.finalState).toBe('failed');
     expect(result.reason).toBe('no_changes');
+  });
+
+  it('no_changes + REPRO_FAILED from a PR-opening agent PAUSES (not fails) for spec input', async () => {
+    const repo = createRepo({
+      githubFullName: 'test/x',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'prs',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'bug-fixer' });
+    addToAllowlist(repo.id, 'fixture-author', 'auto');
+    createBacklogItem({
+      repoId: repo.id,
+      source: 'manual',
+      title: 'X',
+      kind: 'bug',
+      priorityLabel: 'P1',
+    });
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      trigger: 'manual',
+      runnerFactory: factoryFor({
+        filesToWrite: [],
+        reasoning:
+          'Investigated thoroughly.\nREPRO_FAILED: the issue premise is unconfirmed and contradicted by the codebase.',
+      }),
+    });
+
+    expect(result.finalState).toBe('paused');
+    expect(result.reason).toBe('REPRO_FAILED');
+  });
+
+  it('userClarification on retry is threaded into the agent task context', async () => {
+    const repo = createRepo({
+      githubFullName: 'test/x',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'prs',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'bug-fixer' });
+    addToAllowlist(repo.id, 'fixture-author', 'auto');
+    createBacklogItem({
+      repoId: repo.id,
+      source: 'manual',
+      title: 'Paywall brand mismatch',
+      kind: 'bug',
+      priorityLabel: 'P1',
+    });
+
+    const { factory, prompts } = capturingFactory(bugFixerRecipe([]));
+    await runAgent({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      trigger: 'manual',
+      forceTask: true,
+      userClarification: 'The brand SHOULD read "WealthLab+" on the paywall — confirmed by product.',
+      runnerFactory: factory,
+    });
+
+    expect(prompts[0]).toContain('User clarification on retry');
+    expect(prompts[0]).toContain('WealthLab+');
   });
 
   it('no_changes from a read-only agent (qa-hunter) is the success path', async () => {

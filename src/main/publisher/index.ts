@@ -174,6 +174,14 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
       // `git commit` would fail with "nothing to commit" and we'd lose
       // the agent's already-landed commits.
       await git.add('--all');
+      // Never let git-internal / local-only artifacts ride along in our
+      // commit. These are categorically not source (lockfile-class) and tripped
+      // a remote pre-receive/LFS hook before — see WealthLab issue, a committed
+      // `.git-local/objects/*` got the whole push `[remote rejected]`. Unstage
+      // them defensively; best-effort so a missing path isn't fatal.
+      await git
+        .raw(['reset', '--quiet', '--', '.git-local', '.git', '**/.git', '**/.git-local'])
+        .catch(() => undefined);
       const stagedStatus = await git.status();
       if (stagedStatus.files.length > 0) {
         const commitMessage = renderCommitMessage({
@@ -202,8 +210,27 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
 
       // Push the per-run branch to origin. For resume publishes the branch
       // already has an upstream tracking ref, so set-upstream is a no-op
-      // (and harmless if re-set).
-      await git.push(['--set-upstream', 'origin', branch]);
+      // (and harmless if re-set). A remote that rejects the push (protected
+      // branch, pre-receive hook, LFS quota) surfaces as a distinct
+      // PUSH_REJECTED with the remote's message verbatim — actionable, instead
+      // of a generic INTERNAL crash.
+      try {
+        await git.push(['--set-upstream', 'origin', branch]);
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        if (
+          /\[remote rejected\]|pre-receive hook declined|! \[rejected\]|protected branch|GH006|exceeded.*quota|gh\.io\/lfs/i.test(
+            detail,
+          )
+        ) {
+          throw new ObeliskError(
+            'PUSH_REJECTED',
+            `GitHub rejected the push to ${branch}: ${detail.slice(0, 400)}`,
+            'A protected-branch rule, pre-receive hook, or LFS limit blocked the push. Check the repo’s branch protections / hooks, then retry.',
+          );
+        }
+        throw e;
+      }
 
       // Resume publishes (CI-retry fix-up) skip `pulls.create` because the PR
       // already exists; the push above is enough — GitHub auto-attaches the

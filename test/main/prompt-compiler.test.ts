@@ -140,23 +140,40 @@ describe('prompt-compiler', () => {
       }
     });
 
-    it('emits a settings.json attachment with mode-aware deny list', () => {
-      const observe = compile(build('qa-hunter', 'claude'));
-      const settings = observe.attachments.find((a) => a.path === '.claude/settings.json');
+    it('emits a settings.json using Claude Code real schema (allow + acceptEdits)', () => {
+      const out = compile(build('bug-fixer', 'claude'));
+      const settings = out.attachments.find((a) => a.path === '.claude/settings.json');
       expect(settings).toBeDefined();
       const parsed = JSON.parse(settings!.contents) as {
-        permissions: { deny: string[] };
+        permissions: { defaultMode: string; allow: string[]; deny: string[] };
       };
-      expect(parsed.permissions.deny).toContain('git.push');
-      expect(parsed.permissions.deny).toContain('github.create_issue');
+      // Real tool names, not the old bespoke `fs.write` / `allowedTools`.
+      expect(parsed.permissions.defaultMode).toBe('acceptEdits');
+      expect(parsed.permissions.allow).toEqual(
+        expect.arrayContaining(['Read', 'Edit', 'Write', 'MultiEdit', 'Bash']),
+      );
     });
 
-    it('deny list shrinks at higher safety modes', () => {
+    it('denies push / PR-create / merge in EVERY safety mode', () => {
+      const modes: Permissions[] = [
+        PERMS_OBSERVE,
+        { mode: 'issues', canCreateIssues: true, canOpenPRs: false, canMergePRs: false },
+        PERMS_PRS,
+        { mode: 'automerge', canCreateIssues: true, canOpenPRs: true, canMergePRs: true },
+      ];
+      for (const permissions of modes) {
+        const out = compile({ ...build('bug-fixer', 'claude'), permissions });
+        const parsed = JSON.parse(
+          out.attachments.find((a) => a.path === '.claude/settings.json')!.contents,
+        ) as { permissions: { deny: string[] } };
+        expect(parsed.permissions.deny).toContain('Bash(git push:*)');
+        expect(parsed.permissions.deny).toContain('Bash(gh pr merge:*)');
+      }
+    });
+
+    it('deny list is widest in observe mode (no issue/PR mutations)', () => {
       const observe = compile(build('qa-hunter', 'claude'));
-      const prs = compile({
-        ...build('bug-fixer', 'claude'),
-        permissions: PERMS_PRS,
-      });
+      const prs = compile({ ...build('bug-fixer', 'claude'), permissions: PERMS_PRS });
       const observeDeny = JSON.parse(
         observe.attachments.find((a) => a.path === '.claude/settings.json')!.contents,
       ) as { permissions: { deny: string[] } };
@@ -164,15 +181,18 @@ describe('prompt-compiler', () => {
         prs.attachments.find((a) => a.path === '.claude/settings.json')!.contents,
       ) as { permissions: { deny: string[] } };
       expect(observeDeny.permissions.deny.length).toBeGreaterThan(prsDeny.permissions.deny.length);
+      expect(observeDeny.permissions.deny).toContain('Bash(gh issue create:*)');
     });
 
-    it('runner args reference the materialized system prompt + settings paths', () => {
+    it('runner args reference the system prompt + settings + acceptEdits permission mode', () => {
       const out = compile(build('bug-fixer', 'claude'));
       expect(out.runnerArgs).toContain('-p');
       expect(out.runnerArgs).toContain('--system-prompt-file');
       expect(out.runnerArgs).toContain('.claude/SYSTEM.md');
       expect(out.runnerArgs).toContain('--settings');
       expect(out.runnerArgs).toContain('.claude/settings.json');
+      expect(out.runnerArgs).toContain('--permission-mode');
+      expect(out.runnerArgs).toContain('acceptEdits');
     });
   });
 

@@ -81,6 +81,7 @@ export async function dispatchAgentRun(
     retryOfRunId?: string;
     runnerOverride?: RunnerKind;
     modelOverride?: string;
+    userClarification?: string;
   },
 ): Promise<IpcMap['agents:run']['res']> {
   await ensureRunnerAvailable();
@@ -118,6 +119,7 @@ export async function dispatchAgentRun(
       ...(opts.retryOfRunId ? { retryOfRunId: opts.retryOfRunId } : {}),
       ...(opts.runnerOverride ? { runnerOverride: opts.runnerOverride } : {}),
       ...(opts.modelOverride !== undefined ? { modelOverride: opts.modelOverride } : {}),
+      ...(opts.userClarification ? { userClarification: opts.userClarification } : {}),
       onStarted: ({ runId, taskRef, taskContext }) =>
         settle(() => resolve({ runId, taskRef, taskContext })),
     }).then(

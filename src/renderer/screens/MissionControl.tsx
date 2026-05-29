@@ -8,7 +8,9 @@ import { RemoveRunDialog, type RemoveAction } from '../components/RemoveRunDialo
 import { showApiAlert } from '../state/alert-store';
 import { showConfirm } from '../state/confirm-store';
 import { RunnerLoginActionCard } from '../components/RunnerLoginActionCard';
+import { SpecClarificationModal } from '../components/SpecClarificationModal';
 import { RunInspector } from '../components/RunInspector';
+import { retryRun } from '../lib/retry-run';
 import { labelForAgent, humanizeAgo, humanizeDuration } from '../format';
 import type { Agent, Run, RunState, TestPlan, TestPlanSummary } from '../../shared/types';
 import type { ErrorCode } from '../../shared/errors';
@@ -249,6 +251,7 @@ export function MissionControl(): ReactElement {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const [removeTarget, setRemoveTarget] = useState<{ runId: string; label: string } | null>(null);
+  const [clarifyRun, setClarifyRun] = useState<Run | null>(null);
   const [archivedCount, setArchivedCount] = useState<number>(0);
 
   const refreshArchivedCount = useCallback(async () => {
@@ -315,9 +318,18 @@ export function MissionControl(): ReactElement {
   };
 
   const handleRetryRun = async (runId: string): Promise<void> => {
-    // Re-run the same task this run targeted. The new run appears via the bus
-    // broadcast; nothing to mutate optimistically here.
-    const res = await window.obelisk.invoke('runs:retry', { runId });
+    const run = runs[runId];
+    if (!run) return;
+    // A run that paused for spec clarification (REPRO_FAILED) must not be
+    // blindly re-dispatched — it would hit the same wall. Open the modal to
+    // collect the missing repro/spec; the modal threads it into the retry.
+    if (run.errorCode === 'REPRO_FAILED') {
+      setClarifyRun(run);
+      return;
+    }
+    // Normal retry: re-run the same task and surface the run-started toast so
+    // the user gets feedback (the new run also arrives via the bus broadcast).
+    const res = await retryRun(run);
     if (!res.ok) showApiAlert(res.error, 'retry run');
   };
 
@@ -495,6 +507,7 @@ export function MissionControl(): ReactElement {
       {drawerOpen ? (
         <RunDrawer
           run={selectedRun}
+          planNames={planNames}
           onClose={() => setSelectedRunId(null)}
           onToggle={() => setDrawerOpen(false)}
           onDelete={(id) => void handleDeleteRun(id)}
@@ -530,6 +543,12 @@ export function MissionControl(): ReactElement {
           }
           await performRemove(target.runId, choice);
         }}
+      />
+      <SpecClarificationModal
+        open={clarifyRun !== null}
+        run={clarifyRun}
+        onClose={() => setClarifyRun(null)}
+        onRetried={() => setClarifyRun(null)}
       />
     </div>
   );
@@ -872,8 +891,12 @@ const ERROR_CODE_HELP: Partial<Record<ErrorCode, string>> = {
   RUNNER_NOT_INSTALLED: 'The CLI runner (claude or codex) is not on PATH. Install it and retry.',
   EVIDENCE_INCOMPLETE:
     'The agent did not produce the required evidence files (patch, tests, etc.).',
-  REPRO_FAILED: 'The agent could not reproduce the reported issue.',
-  PUSH_REJECTED: 'The branch push to GitHub was rejected.',
+  REPRO_FAILED:
+    'The agent couldn’t confirm the reported bug and paused for your input. Add the missing repro steps or spec, then retry.',
+  NO_CHANGES:
+    'The agent investigated but produced no code change. Open the Activity tab to see what it found, then refine the issue or retry.',
+  PUSH_REJECTED:
+    'GitHub rejected the branch push (e.g. a protected-branch or pre-receive/LFS hook). See the message in the summary.',
   TEST_LOOP_EXHAUSTED: 'Tests kept failing after the agent’s retry budget ran out.',
   SPEC_AMBIGUOUS: 'The task description was too vague for the agent to act on.',
   TEST_RUNNER_MISSING: 'No test runner detected in the repo (e.g. no package.json scripts).',
@@ -922,6 +945,7 @@ function runStateHelp(state: RunState): string {
 
 function RunDrawer({
   run,
+  planNames,
   onClose,
   onToggle,
   onDelete,
@@ -929,6 +953,7 @@ function RunDrawer({
   onRetry,
 }: {
   run: Run | null;
+  planNames: Map<string, string>;
   onClose: () => void;
   onToggle: () => void;
   onDelete: (runId: string) => void;
@@ -940,6 +965,16 @@ function RunDrawer({
     if (!run) return null;
     return repos.find((r) => r.id === run.repoId)?.githubFullName ?? null;
   }, [run, repos]);
+  // Match the run card's title: the descriptive issue/PR/plan title from
+  // taskContext, not the raw `issue#52` ref. Falls back to the ref when there's
+  // no context to describe.
+  const drawerDesc = useMemo(
+    () =>
+      run
+        ? describeTaskRef(run.taskRef, run.taskContext, planNames, repoFullName)
+        : { title: '', subtitle: null, issueHref: null },
+    [run, planNames, repoFullName],
+  );
 
   const toggleBtn = (
     <button
@@ -1007,7 +1042,12 @@ function RunDrawer({
         {toggleBtn}
       </div>
       <div className="mc-drawer-header">
-        <div className="mc-drawer-title">{run.taskRef ?? '(no task ref)'}</div>
+        <div className="mc-drawer-title" title={run.taskRef ?? undefined}>
+          {drawerDesc.title}
+        </div>
+        {drawerDesc.subtitle ? (
+          <div className="mc-drawer-subtitle">{drawerDesc.subtitle}</div>
+        ) : null}
         <div className="mc-drawer-meta">
           <span className="pill" title={`Agent type: ${labelForAgent(run.agentName)}`}>
             {labelForAgent(run.agentName)}
@@ -1035,6 +1075,28 @@ function RunDrawer({
             runner={run.runnerUsed}
             onRetry={canRetry ? () => onRetry(run.id) : undefined}
           />
+        ) : null}
+        {run.errorCode === 'REPRO_FAILED' ? (
+          <div className="mc-needs-spec-card" role="alert">
+            <div className="mc-needs-spec-icon" aria-hidden="true">
+              <Icon.Help size={14} />
+            </div>
+            <div className="mc-needs-spec-body">
+              <div className="mc-needs-spec-title">The agent needs your input</div>
+              <div className="mc-needs-spec-text">
+                {labelForAgent(run.agentName)} investigated this issue but couldn’t confirm the bug.
+                Add the missing repro steps or spec and it’ll try again.
+              </div>
+              <button
+                type="button"
+                className="btn primary sm"
+                onClick={() => onRetry(run.id)}
+                data-testid="mc-needs-spec-clarify"
+              >
+                <Icon.Refresh size={11} /> Provide details &amp; retry
+              </button>
+            </div>
+          </div>
         ) : null}
       </div>
       <RunInspector run={run} repoFullName={repoFullName} />
