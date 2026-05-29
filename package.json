@@ -6,6 +6,9 @@
   "license": "MIT",
   "author": "Obelisk contributors",
   "main": "out/main/index.js",
+  "engines": {
+    "node": ">=20 <23"
+  },
   "scripts": {
     "predev": "node scripts/ensure-electron-abi.mjs",
     "dev": "electron-vite dev",
