@@ -83,8 +83,16 @@ export const prReviewerHandler: AgentHandler = {
     if (!gh) {
       throw new ObeliskError('AUTH_REQUIRED', 'Sign in to GitHub before running agents.');
     }
+    const isManual = input.trigger === 'manual';
     const [owner, name] = input.repo.githubFullName.split('/');
-    if (!owner || !name) return null;
+    if (!owner || !name) {
+      if (!isManual) return null;
+      throw new ObeliskError(
+        'INVALID_INPUT',
+        `Repo "${input.repo.githubFullName}" is not a valid GitHub <owner>/<name>.`,
+        'Reconnect the repo from the Repos screen so its GitHub name is set correctly.',
+      );
+    }
 
     const { data: prs } = await gh.pulls.list({
       owner,
@@ -112,8 +120,14 @@ export const prReviewerHandler: AgentHandler = {
         .get({ owner, repo: name, pull_number: forcedPr.prNumber })
         .then((r) => r.data)
         .catch(() => null);
-      if (!pr || pr.state !== 'open') return null;
-      return prepareReviewTask({
+      if (!pr || pr.state !== 'open') {
+        throw new ObeliskError(
+          'PRS_ALL_FILTERED',
+          `PR #${forcedPr.prNumber} is closed or no longer exists — nothing to re-review.`,
+          'Pick a different run to retry, or run PR Reviewer to sweep open PRs.',
+        );
+      }
+      const result = await prepareReviewTask({
         gh,
         owner,
         name,
@@ -123,23 +137,48 @@ export const prReviewerHandler: AgentHandler = {
         agentId,
         force: true,
       });
+      if ('skip' in result) {
+        throw new ObeliskError(
+          'PRS_ALL_FILTERED',
+          `PR #${pr.number} can't be reviewed: ${skipPhrase(result.skip)}.`,
+          hintForSkip(result.skip),
+        );
+      }
+      return result;
     }
+
+    // Tally why each open PR was passed over, so a manual Run now can report
+    // the specific reason instead of the opaque "nothing to do" sentinel.
+    const skipped = {
+      alreadyReviewed: 0,
+      failedCap: 0,
+      not_allowlisted: 0,
+      claimed_elsewhere: 0,
+      claim_lost: 0,
+      no_author: 0,
+    };
 
     for (const pr of prs) {
       const headSha = pr.head.sha;
       const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
 
       // Skip if any instance already reviewed this exact SHA.
-      if (wasReviewedAtSha(input.repo.id, pr.number, headSha)) continue;
-      if (alreadyReviewed(input.repo.id, taskRef)) continue;
+      if (
+        wasReviewedAtSha(input.repo.id, pr.number, headSha) ||
+        alreadyReviewed(input.repo.id, taskRef)
+      ) {
+        skipped.alreadyReviewed++;
+        continue;
+      }
 
       // Stop re-claiming a SHA that keeps failing — otherwise a doomed review
       // re-runs on every tick (its 'failed' claim doesn't block re-claim).
       if (failedAttemptCount(input.repo.id, pr.number, headSha) >= FAILED_REVIEW_ATTEMPT_CAP) {
+        skipped.failedCap++;
         continue;
       }
 
-      const selected = await prepareReviewTask({
+      const result = await prepareReviewTask({
         gh,
         owner,
         name,
@@ -148,11 +187,51 @@ export const prReviewerHandler: AgentHandler = {
         connectedLogin,
         agentId,
       });
-      if (!selected) continue;
-      return selected;
+      if ('skip' in result) {
+        skipped[result.skip]++;
+        continue;
+      }
+      return result;
     }
 
-    return null;
+    // Nothing claimable. Scheduled / webhook sweeps stay quiet (the
+    // orchestrator turns null into the "nothing to do" sentinel) so the cron
+    // tick doesn't spam scheduler_error rows. A manual Run now gets the why.
+    if (!isManual) return null;
+
+    if (prs.length === 0) {
+      throw new ObeliskError(
+        'NO_OPEN_PRS',
+        `No open pull requests in ${owner}/${name} to review.`,
+        'PR Reviewer reviews open PRs. Open one (or push a commit to an existing PR), then run again.',
+      );
+    }
+
+    const n = prs.length;
+    const reasons: string[] = [];
+    if (skipped.alreadyReviewed > 0)
+      reasons.push(`${skipped.alreadyReviewed} already reviewed at the latest commit`);
+    if (skipped.failedCap > 0)
+      reasons.push(`${skipped.failedCap} past the failed-review attempt cap`);
+    if (skipped.not_allowlisted > 0)
+      reasons.push(`${skipped.not_allowlisted} authored by users not on the allowlist`);
+    if (skipped.claimed_elsewhere > 0)
+      reasons.push(`${skipped.claimed_elsewhere} claimed by another Obelisk install`);
+    if (skipped.claim_lost > 0)
+      reasons.push(`${skipped.claim_lost} just claimed by another reviewer instance`);
+    if (skipped.no_author > 0) reasons.push(`${skipped.no_author} missing an author`);
+
+    const message =
+      reasons.length > 0
+        ? `All ${n} open PR${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} skipped: ${reasons.join(', ')}.`
+        : `None of the ${n} open PR${n === 1 ? '' : 's'} could be claimed for review.`;
+    const hint =
+      skipped.not_allowlisted > 0
+        ? 'Add the PR authors via the Allowlist settings.'
+        : skipped.failedCap > 0
+          ? 'Use Retry on the failed run to force another attempt.'
+          : 'Push a new commit to a PR to trigger a fresh review.';
+    throw new ObeliskError('PRS_ALL_FILTERED', message, hint);
   },
 
   async interpretResult(input: InterpretResultInput): Promise<PublishPlan[]> {
@@ -242,10 +321,41 @@ interface ReviewablePr {
   assignees?: ReadonlyArray<{ login?: string | null } | null> | null;
 }
 
+/** Why a PR was passed over by `prepareReviewTask` (for user-facing reasons). */
+type PrSkip = 'no_author' | 'not_allowlisted' | 'claimed_elsewhere' | 'claim_lost';
+
+/** Short phrase describing a skip reason, for a single-PR (forced retry) message. */
+function skipPhrase(skip: PrSkip): string {
+  switch (skip) {
+    case 'no_author':
+      return 'it has no author';
+    case 'not_allowlisted':
+      return 'its author is not on the allowlist';
+    case 'claimed_elsewhere':
+      return 'another Obelisk install already claimed it';
+    case 'claim_lost':
+      return 'another reviewer instance just claimed it';
+  }
+}
+
+/** Actionable next step for a skip reason. */
+function hintForSkip(skip: PrSkip): string {
+  switch (skip) {
+    case 'not_allowlisted':
+      return 'Add the PR author via the Allowlist settings.';
+    case 'claimed_elsewhere':
+    case 'claim_lost':
+      return 'Another instance owns this PR — wait for it to finish.';
+    case 'no_author':
+      return 'This usually means a deleted GitHub account; pick a different PR.';
+  }
+}
+
 /**
  * Apply the per-PR gates (actor allowlist, cross-install guard, atomic claim,
- * fix-mode gating) and build the SelectedTask. Returns null when the PR should
- * be skipped (not allowlisted, claimed elsewhere, lost the claim race).
+ * fix-mode gating) and build the SelectedTask. Returns `{ skip }` when the PR
+ * should be passed over (not allowlisted, claimed elsewhere, lost the claim
+ * race) so the caller can report the specific reason.
  *
  * Shared by the normal sweep and the forced-retry fast path. `force` bypasses
  * the fix-mode livelock cap (a manual retry is the user's explicit call); the
@@ -261,20 +371,20 @@ async function prepareReviewTask(opts: {
   connectedLogin: string | undefined;
   agentId: string | null;
   force?: boolean;
-}): Promise<SelectedTask | null> {
+}): Promise<SelectedTask | { skip: PrSkip }> {
   const { gh, owner, name, pr, repo, connectedLogin, agentId, force } = opts;
   const headSha = pr.head.sha;
   const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
 
   const author = pr.user?.login?.toLowerCase();
-  if (!author) return null;
+  if (!author) return { skip: 'no_author' };
 
   // Auto-allow the connected user so we review our own / Obelisk-opened PRs
   // (PRD §8.1: same Evidence-Pack enforcement loop). The allowlist gate stays
   // even on a forced retry — it's a non-negotiable safety control.
   if (author !== connectedLogin) {
     const allow = checkActorAllowlist({ repoId: repo.id, login: author, source: taskRef });
-    if (!allow.ok) return null;
+    if (!allow.ok) return { skip: 'not_allowlisted' };
   }
 
   // Cross-installation guard: skip PRs another Obelisk install already claimed
@@ -288,7 +398,7 @@ async function prepareReviewTask(opts: {
       source: taskRef,
     })
   ) {
-    return null;
+    return { skip: 'claimed_elsewhere' };
   }
 
   // Atomic claim — guarantees only one reviewer instance picks this PR/SHA.
@@ -312,7 +422,7 @@ async function prepareReviewTask(opts: {
     };
   }
   const claim = claimPrReview({ repoId: repo.id, prNumber: pr.number, headSha, agentId });
-  if (!claim) return null;
+  if (!claim) return { skip: 'claim_lost' };
 
   // Fix-mode gating. All three conditions must hold:
   //  - PR was opened by Obelisk (head ref `obelisk/<run-id>`).

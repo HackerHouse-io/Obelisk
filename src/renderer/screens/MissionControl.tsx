@@ -890,6 +890,9 @@ const ERROR_CODE_HELP: Partial<Record<ErrorCode, string>> = {
     'No issues with the `obelisk:fix` (bug-fixer) or `obelisk:feature` (feature-builder) label. Apply one to a GitHub issue, or add a manual backlog item.',
   BACKLOG_ALL_FILTERED:
     'Every candidate issue was filtered out (closed, locked, claimed elsewhere, or not on the actor allowlist).',
+  NO_OPEN_PRS: 'There are no open pull requests in this repo for PR Reviewer to review.',
+  PRS_ALL_FILTERED:
+    'Every open PR was skipped (already reviewed at its latest commit, not on the actor allowlist, claimed elsewhere, or past the failed-review cap).',
   WORKTREE_BUSY:
     'The PR branch is still checked out by another live run. Wait for it to finish, then retry.',
 };

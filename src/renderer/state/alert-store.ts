@@ -62,6 +62,10 @@ export function titleForError(code: ErrorCode, actionLabel?: string): string {
       return 'No issues to fix';
     case 'BACKLOG_ALL_FILTERED':
       return 'Nothing claimable right now';
+    case 'NO_OPEN_PRS':
+      return 'No open pull requests';
+    case 'PRS_ALL_FILTERED':
+      return 'Nothing to review right now';
     case 'MODE_TOO_LOW':
       return 'Safety mode blocks this';
     case 'AUTH_REQUIRED':
