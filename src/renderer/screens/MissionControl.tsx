@@ -738,6 +738,21 @@ export function describeTaskRef(
         : null;
     return { title, subtitle: `GitHub issue #${num}`, issueHref: href };
   }
+  // PR Reviewer claim refs: `pr#<n>@<short-sha>` (the sha is provenance only).
+  if (taskRef.startsWith('pr#')) {
+    const num = taskRef.slice('pr#'.length).split('@')[0];
+    // task_context is "Reviewing/Fixing PR #<n>: <title>" — strip the
+    // verb+number prefix so the card shows just the descriptive PR title,
+    // matching the issue# card (which shows the bare issue title).
+    const ctx = taskContext?.trim() ?? '';
+    const stripped = ctx.replace(/^(?:Reviewing|Fixing) PR #\d+:\s*/, '').trim();
+    const title = stripped || `PR #${num}`;
+    const href =
+      repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName)
+        ? `https://github.com/${repoFullName}/pull/${num}`
+        : null;
+    return { title, subtitle: `GitHub PR #${num}`, issueHref: href };
+  }
   if (taskRef.startsWith('backlog#')) {
     const title = taskContext?.trim() ? taskContext.trim() : 'Manual backlog item';
     return { title, subtitle: 'Manual backlog', issueHref: null };

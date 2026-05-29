@@ -37,6 +37,47 @@ describe('describeTaskRef', () => {
     });
   });
 
+  describe('PR Reviewer (pr#N@sha)', () => {
+    it('strips the "Reviewing PR #N:" prefix so the card shows the bare PR title', () => {
+      const out = describeTaskRef(
+        'pr#64@9941807138bb',
+        'Reviewing PR #64: Add retry logic to webhook handler',
+        NO_PLANS,
+        'acme/app',
+      );
+      expect(out.title).toBe('Add retry logic to webhook handler');
+      expect(out.subtitle).toBe('GitHub PR #64');
+    });
+
+    it('strips the "Fixing PR #N:" prefix too (fix-mode runs)', () => {
+      const out = describeTaskRef(
+        'pr#12@abc123',
+        'Fixing PR #12: Resolve flaky login test',
+        NO_PLANS,
+        'acme/app',
+      );
+      expect(out.title).toBe('Resolve flaky login test');
+    });
+
+    it('falls back to "PR #N" when no taskContext is stored', () => {
+      const out = describeTaskRef('pr#7@deadbeef', null, NO_PLANS, 'acme/app');
+      expect(out.title).toBe('PR #7');
+      expect(out.subtitle).toBe('GitHub PR #7');
+    });
+
+    it('builds a clickable github.com PR link when repoFullName is well-formed', () => {
+      const out = describeTaskRef('pr#64@9941807138bb', 'Reviewing PR #64: x', NO_PLANS, 'acme/app');
+      expect(out.issueHref).toBe('https://github.com/acme/app/pull/64');
+    });
+
+    it('refuses to build a link when repoFullName is malformed (defends against URL injection)', () => {
+      expect(describeTaskRef('pr#64@s', 'x', NO_PLANS, null).issueHref).toBeNull();
+      expect(describeTaskRef('pr#64@s', 'x', NO_PLANS, 'no-slash').issueHref).toBeNull();
+      expect(describeTaskRef('pr#64@s', 'x', NO_PLANS, 'a/b/c').issueHref).toBeNull();
+      expect(describeTaskRef('pr#64@s', 'x', NO_PLANS, 'evil.com/path?x=y').issueHref).toBeNull();
+    });
+  });
+
   describe('Manual backlog (backlog#<id>)', () => {
     it('uses the manual title from task_context', () => {
       const out = describeTaskRef('backlog#01HXYZ', 'Polish onboarding', NO_PLANS, 'acme/app');
