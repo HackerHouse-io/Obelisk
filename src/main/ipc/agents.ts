@@ -55,35 +55,52 @@ export async function handleAgentsRun(
   if (!agent) {
     throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
   }
+  // If the caller didn't specify a task, fall back to the agent's saved
+  // default plan. The Agents screen exposes a "Default test plan" dropdown
+  // that writes this — clicking Run now then dispatches that plan.
+  const effectiveTaskId =
+    payload.taskId ?? (agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined);
+  return dispatchAgentRun(agent, {
+    ...(effectiveTaskId !== undefined ? { taskId: effectiveTaskId } : {}),
+    ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
+    ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+  });
+}
+
+/**
+ * Shared dispatch core for `agents:run` and `runs:retry`. Runs the publish
+ * pre-flight checks, then drives the run in the background and resolves as
+ * soon as the run row exists (the orchestrator fires `onStarted` right after
+ * createRun) — never waiting for the (minutes-long) CLI invocation.
+ */
+export async function dispatchAgentRun(
+  agent: Agent,
+  opts: {
+    taskId?: string;
+    forceTask?: boolean;
+    retryOfRunId?: string;
+    runnerOverride?: RunnerKind;
+    modelOverride?: string;
+  },
+): Promise<IpcMap['agents:run']['res']> {
   await ensureRunnerAvailable();
 
-  // Pre-flight: refuse to dispatch a run that's guaranteed to fail at
-  // publish. Bug Fixer / Feature Builder produce patches; the publisher
-  // needs commit + push + open_pr permissions, which the `observe` and
-  // `issues` safety modes block. Without this check, the LLM runs for
-  // minutes (~$$ tokens) and gets rejected at the very end with
-  // MODE_TOO_LOW. Better to fail-fast here with an actionable hint.
+  // Pre-flight: refuse to dispatch a run that's guaranteed to fail at publish.
+  // Bug Fixer / Feature Builder produce patches; the publisher needs commit +
+  // push + open_pr permissions, which the `observe` and `issues` safety modes
+  // block. Fail-fast here with an actionable hint instead of burning minutes
+  // of tokens and getting rejected at the very end with MODE_TOO_LOW.
   const handler = getAgentHandler(agent.name);
   const repo = getRepo(agent.repoId);
   if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${agent.repoId} not found`);
   assertModeAllowsAgent(repo, handler, agent.displayName);
 
-  // Per-repo cap on patch-producing multi-instance agents (bug-fixer,
-  // feature-builder). The scheduled-dispatch path enforces the same cap
-  // in scheduler/tick.ts; this pre-flight covers manual Run-now so the
-  // user gets an actionable cap message instead of "No claimable issue
-  // right now" — every backlog item is locked by the in-flight runs.
+  // Per-repo cap on patch-producing multi-instance agents.
   if (handler.multiInstance && isPatchAgent(agent.name)) {
     const liveCount = listLiveRuns(agent.repoId).filter((r) => r.agentName === agent.name).length;
     assertPatchAgentCap(agent.repoId, agent.name, agent.displayName, liveCount);
   }
 
-  // runAgent drives the entire run synchronously — selectTask, createRun,
-  // CLI spawn, publish — and that takes anywhere from seconds to minutes.
-  // The IPC must NOT wait for that whole journey, or the renderer's "Run
-  // now" / "Run QA Hunter" spinners stay spinning until the run completes.
-  // Resolve as soon as the run row exists (orchestrator fires `onStarted`
-  // right after createRun) and let the rest happen in the background.
   return new Promise<IpcMap['agents:run']['res']>((resolve, reject) => {
     let settled = false;
     const settle = (fn: () => void): void => {
@@ -91,30 +108,23 @@ export async function handleAgentsRun(
       settled = true;
       fn();
     };
-    // If the caller didn't specify a task, fall back to the agent's saved
-    // default plan. The Agents screen exposes a "Default test plan"
-    // dropdown that writes this — clicking Run now then dispatches that
-    // plan without any extra prompting.
-    const effectiveTaskId =
-      payload.taskId ?? (agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined);
     runAgent({
       repoId: agent.repoId,
       agentName: agent.name,
       agentId: agent.id,
       trigger: 'manual',
-      taskId: effectiveTaskId,
-      ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
-      ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
+      ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
+      ...(opts.forceTask ? { forceTask: true } : {}),
+      ...(opts.retryOfRunId ? { retryOfRunId: opts.retryOfRunId } : {}),
+      ...(opts.runnerOverride ? { runnerOverride: opts.runnerOverride } : {}),
+      ...(opts.modelOverride !== undefined ? { modelOverride: opts.modelOverride } : {}),
       onStarted: ({ runId, taskRef, taskContext }) =>
         settle(() => resolve({ runId, taskRef, taskContext })),
     }).then(
       (result) => {
-        // selectTask returned null (or some other path that completed
-        // without ever firing onStarted, e.g. a same-agent-already-running
-        // error). Surface as NOT_FOUND so the renderer can show a useful
-        // message instead of a stuck spinner. Bug-fixer / feature-builder
-        // throw categorized ObeliskErrors instead of returning null, so
-        // those land in the err-branch below with their own code+hint.
+        // selectTask returned null (or another path that completed without
+        // firing onStarted). Surface as NOT_FOUND so the renderer shows a
+        // useful message instead of a stuck spinner.
         settle(() =>
           result.runId
             ? resolve({ runId: result.runId, taskRef: null, taskContext: null })
@@ -124,10 +134,7 @@ export async function handleAgentsRun(
         );
       },
       (err) => {
-        // Pre-onStarted failure: ObeliskErrors (e.g. BACKLOG_EMPTY,
-        // BACKLOG_ALL_FILTERED, RUN_ACTIVE) flow through unchanged so
-        // the renderer can show their actionable hint. Anything else is
-        // wrapped as INTERNAL by the IPC bridge.
+        // Pre-onStarted failure: ObeliskErrors flow through unchanged.
         settle(() => reject(err));
       },
     );

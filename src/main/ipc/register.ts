@@ -37,6 +37,7 @@ import {
   handleRunsGet,
   handleRunsStats,
   handleRunsHistogram,
+  handleRunsRetry,
   handleRunsDelete,
   handleRunsDeleteCompleted,
   handleRunsArchive,
@@ -161,6 +162,7 @@ export function registerIpcHandlers(): void {
   register('runs:get', handleRunsGet);
   register('runs:stats', handleRunsStats);
   register('runs:histogram', handleRunsHistogram);
+  register('runs:retry', handleRunsRetry);
   register('runs:delete', handleRunsDelete);
   register('runs:deleteCompleted', handleRunsDeleteCompleted);
   register('runs:archive', handleRunsArchive);

@@ -61,3 +61,40 @@ export function parsePlanIdFromTaskRef(taskRef: string | null): string | null {
   const ios = parseIosQaTaskRef(taskRef);
   return ios?.planId ?? null;
 }
+
+/**
+ * Decode a backlog task ref produced by Bug Fixer / Feature Builder:
+ *   - `issue#<n>`      — a GitHub issue
+ *   - `backlog#<ulid>` — a manual backlog item
+ *
+ * Returns null for any other shape. Used by the retry path to re-target the
+ * exact backlog item a failed run was working on.
+ */
+export type ParsedBacklogTaskRef =
+  | { kind: 'issue'; issueNumber: number }
+  | { kind: 'backlog'; id: string };
+
+export function parseBacklogTaskRef(ref: string | null): ParsedBacklogTaskRef | null {
+  if (!ref) return null;
+  const issue = /^issue#(\d+)$/.exec(ref);
+  if (issue) return { kind: 'issue', issueNumber: Number(issue[1]) };
+  const backlog = /^backlog#(.+)$/.exec(ref);
+  if (backlog) return { kind: 'backlog', id: backlog[1]! };
+  return null;
+}
+
+/**
+ * Decode the PR Reviewer task ref: `pr#<n>@<short_sha>`. Returns null for
+ * other shapes. Used by the retry path to re-review a specific PR.
+ */
+export interface ParsedPrTaskRef {
+  prNumber: number;
+  shortSha: string;
+}
+
+export function parsePrTaskRef(ref: string | null): ParsedPrTaskRef | null {
+  if (!ref) return null;
+  const match = /^pr#(\d+)@([0-9a-f]+)$/i.exec(ref);
+  if (!match) return null;
+  return { prNumber: Number(match[1]), shortSha: match[2]! };
+}

@@ -253,12 +253,20 @@ export function claimNextFlow(
   repoId: string,
   runId: string,
   preferredFlowId?: string,
+  opts?: { force?: boolean },
 ): QaFlowRow | null {
   const db = getDb();
   const now = new Date().toISOString();
   const cycle = getRepoCycle(repoId);
 
-  const tryClaim = (flowId: string): QaFlowRow | null => {
+  // `force` (manual Retry / infra auto-retry) lets the preferred flow be
+  // reclaimed even when it already 'passed' this cycle — the user explicitly
+  // asked to re-run it. We never steal a flow another LIVE run holds, so
+  // `claimed_run_id IS NULL` always applies.
+  const tryClaim = (flowId: string, allowPassed = false): QaFlowRow | null => {
+    const statuses = allowPassed
+      ? "('pending','outdated','failed','inconclusive','passed')"
+      : "('pending','outdated','failed','inconclusive')";
     const upd = db
       .prepare(
         `UPDATE qa_ios_flows
@@ -266,7 +274,7 @@ export function claimNextFlow(
           WHERE flow_id = ?
             AND repo_id = ?
             AND claimed_run_id IS NULL
-            AND status IN ('pending','outdated','failed','inconclusive')`,
+            AND status IN ${statuses}`,
       )
       .run(runId, now, flowId, repoId);
     if (upd.changes !== 1) return null;
@@ -276,7 +284,7 @@ export function claimNextFlow(
 
   const tx = db.transaction((): QaFlowRow | null => {
     if (preferredFlowId) {
-      const claimed = tryClaim(preferredFlowId);
+      const claimed = tryClaim(preferredFlowId, opts?.force === true);
       if (claimed) return claimed;
     }
 

@@ -10,6 +10,7 @@ import {
   normalizeGithubLabels,
 } from '../lib/cross-install-guard';
 import { parseFencedJson } from '../lib/parse-fenced-json';
+import { parsePrTaskRef } from '../../../shared/task-refs';
 import { crossCheckEvidence, isEvidenceComplete } from './evidence-cross-check';
 import {
   claimPrReview,
@@ -101,6 +102,29 @@ export const prReviewerHandler: AgentHandler = {
     // instance. SelectTaskInput was extended at the orchestrator boundary.
     const agentId = input.agentId ?? null;
 
+    // Forced retry (manual Retry button / infra auto-retry): re-review the
+    // exact PR the failed run targeted, bypassing the sweep's dedup + caps.
+    // We still fetch the PR fresh (its head SHA may have moved) and keep the
+    // allowlist / cross-install / atomic-claim safety gates.
+    const forcedPr = input.forceTask ? parsePrTaskRef(input.taskId ?? null) : null;
+    if (forcedPr) {
+      const pr = await gh.pulls
+        .get({ owner, repo: name, pull_number: forcedPr.prNumber })
+        .then((r) => r.data)
+        .catch(() => null);
+      if (!pr || pr.state !== 'open') return null;
+      return prepareReviewTask({
+        gh,
+        owner,
+        name,
+        pr,
+        repo: input.repo,
+        connectedLogin,
+        agentId,
+        force: true,
+      });
+    }
+
     for (const pr of prs) {
       const headSha = pr.head.sha;
       const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
@@ -115,109 +139,17 @@ export const prReviewerHandler: AgentHandler = {
         continue;
       }
 
-      const author = pr.user?.login?.toLowerCase();
-      if (!author) continue;
-
-      // Auto-allow the connected user so we review our own / Obelisk-opened
-      // PRs (PRD §8.1: same Evidence-Pack enforcement loop).
-      if (author !== connectedLogin) {
-        const allow = checkActorAllowlist({
-          repoId: input.repo.id,
-          login: author,
-          source: taskRef,
-        });
-        if (!allow.ok) continue;
-      }
-
-      // Cross-installation guard: skip PRs another Obelisk install already
-      // claimed (label + self-assignee signature). Run before the DB claim
-      // so we don't churn the claim table on PRs we don't own.
-      if (
-        isClaimedByAnotherInstall({
-          labels: normalizeGithubLabels(pr.labels),
-          assignees: normalizeGithubAssignees(pr.assignees),
-          connectedLogin: connectedLogin ?? null,
-          source: taskRef,
-        })
-      ) {
-        continue;
-      }
-
-      // Atomic claim — guarantees only one reviewer instance picks this PR/SHA.
-      // If another instance got here first the partial-unique index returns 0
-      // changes and we fall through to the next candidate.
-      if (!agentId) {
-        // No agent id available (legacy callers). Skip the claim and rely on
-        // alreadyReviewed dedup; behavior matches pre-multi-instance.
-        // Legacy callers also miss out on fix mode — that's intentional, fix
-        // mode requires the claim row to attribute the eventual push.
-        return {
-          task: {
-            ref: taskRef,
-            kind: 'review',
-            summary: `Reviewing PR #${pr.number}: ${pr.title}`,
-            context: prContextFor(pr, {
-              fixMode: false,
-              hasConflicts: false,
-              baseBranch: input.repo.defaultBranch,
-            }),
-            githubNumber: pr.number,
-          },
-        };
-      }
-      const claim = claimPrReview({
-        repoId: input.repo.id,
-        prNumber: pr.number,
-        headSha,
+      const selected = await prepareReviewTask({
+        gh,
+        owner,
+        name,
+        pr,
+        repo: input.repo,
+        connectedLogin,
         agentId,
       });
-      if (!claim) continue;
-
-      // Fix-mode gating. All three conditions must hold:
-      //  - PR was opened by Obelisk (head ref `obelisk/<run-id>`).
-      //  - Repo safety mode permits commit + push (publisher would reject
-      //    otherwise; refuse the dispatch up front rather than spawning
-      //    a doomed run).
-      //  - We haven't already cycled through too many fix attempts on
-      //    this PR (livelock guard — the reviewer's own push creates a
-      //    new SHA which would otherwise let the next sweep re-claim).
-      const isObeliskPr = pr.head.ref.startsWith(OBELISK_BRANCH_PREFIX);
-      const safetyAllowsFix = input.repo.mode === 'prs' || input.repo.mode === 'automerge';
-      const priorRuns = priorReviewerRunCount(input.repo.id, pr.number);
-      const livelockOk = priorRuns < REVIEW_LIVELOCK_CAP;
-      const fixMode = isObeliskPr && safetyAllowsFix && livelockOk;
-
-      // mergeable_state is computed lazily by GitHub. pulls.list returns it
-      // stale or absent; pulls.get triggers / returns the current value.
-      // We only need it for fix-mode PRs (the agent can't push conflict
-      // resolutions on a human PR anyway).
-      const hasConflicts = fixMode
-        ? await prHasConflicts(gh, owner, name, pr.number).catch(() => false)
-        : false;
-      const baseBranch =
-        pr.base?.ref && typeof pr.base.ref === 'string' && pr.base.ref.length > 0
-          ? pr.base.ref
-          : input.repo.defaultBranch;
-
-      await postClaimSignal({
-        repo: input.repo,
-        issueNumber: pr.number,
-        source: taskRef,
-      });
-
-      return {
-        task: {
-          ref: taskRef,
-          kind: 'review',
-          summary: `${fixMode ? 'Fixing' : 'Reviewing'} PR #${pr.number}: ${pr.title}`,
-          context: prContextFor(pr, { fixMode, hasConflicts, baseBranch }),
-          githubNumber: pr.number,
-        },
-        prReviewClaimId: claim.id,
-        ...(fixMode
-          ? { attachToBranch: { branch: pr.head.ref, existingPrNumber: pr.number } }
-          : {}),
-      };
+      if (!selected) continue;
+      return selected;
     }
 
     return null;
@@ -296,6 +228,127 @@ export const prReviewerHandler: AgentHandler = {
     return [verdictPlan];
   },
 };
+
+/* ---------- task preparation ---------- */
+
+interface ReviewablePr {
+  number: number;
+  title: string;
+  body?: string | null;
+  head: { sha: string; ref: string };
+  base?: { ref?: string | null } | null;
+  user?: { login?: string | null } | null;
+  labels?: ReadonlyArray<string | { name?: string | null } | null> | null;
+  assignees?: ReadonlyArray<{ login?: string | null } | null> | null;
+}
+
+/**
+ * Apply the per-PR gates (actor allowlist, cross-install guard, atomic claim,
+ * fix-mode gating) and build the SelectedTask. Returns null when the PR should
+ * be skipped (not allowlisted, claimed elsewhere, lost the claim race).
+ *
+ * Shared by the normal sweep and the forced-retry fast path. `force` bypasses
+ * the fix-mode livelock cap (a manual retry is the user's explicit call); the
+ * sweep's SHA-level dedup checks live in selectTask and are simply not run on
+ * the forced path.
+ */
+async function prepareReviewTask(opts: {
+  gh: NonNullable<Awaited<ReturnType<typeof getGithub>>>;
+  owner: string;
+  name: string;
+  pr: ReviewablePr;
+  repo: SelectTaskInput['repo'];
+  connectedLogin: string | undefined;
+  agentId: string | null;
+  force?: boolean;
+}): Promise<SelectedTask | null> {
+  const { gh, owner, name, pr, repo, connectedLogin, agentId, force } = opts;
+  const headSha = pr.head.sha;
+  const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
+
+  const author = pr.user?.login?.toLowerCase();
+  if (!author) return null;
+
+  // Auto-allow the connected user so we review our own / Obelisk-opened PRs
+  // (PRD §8.1: same Evidence-Pack enforcement loop). The allowlist gate stays
+  // even on a forced retry — it's a non-negotiable safety control.
+  if (author !== connectedLogin) {
+    const allow = checkActorAllowlist({ repoId: repo.id, login: author, source: taskRef });
+    if (!allow.ok) return null;
+  }
+
+  // Cross-installation guard: skip PRs another Obelisk install already claimed
+  // (label + self-assignee signature). Run before the DB claim so we don't
+  // churn the claim table on PRs we don't own.
+  if (
+    isClaimedByAnotherInstall({
+      labels: normalizeGithubLabels(pr.labels),
+      assignees: normalizeGithubAssignees(pr.assignees),
+      connectedLogin: connectedLogin ?? null,
+      source: taskRef,
+    })
+  ) {
+    return null;
+  }
+
+  // Atomic claim — guarantees only one reviewer instance picks this PR/SHA.
+  if (!agentId) {
+    // No agent id available (legacy callers). Skip the claim and rely on
+    // alreadyReviewed dedup; behavior matches pre-multi-instance. Legacy
+    // callers also miss out on fix mode — that's intentional, fix mode
+    // requires the claim row to attribute the eventual push.
+    return {
+      task: {
+        ref: taskRef,
+        kind: 'review',
+        summary: `Reviewing PR #${pr.number}: ${pr.title}`,
+        context: prContextFor(pr, {
+          fixMode: false,
+          hasConflicts: false,
+          baseBranch: repo.defaultBranch,
+        }),
+        githubNumber: pr.number,
+      },
+    };
+  }
+  const claim = claimPrReview({ repoId: repo.id, prNumber: pr.number, headSha, agentId });
+  if (!claim) return null;
+
+  // Fix-mode gating. All three conditions must hold:
+  //  - PR was opened by Obelisk (head ref `obelisk/<run-id>`).
+  //  - Repo safety mode permits commit + push.
+  //  - We haven't cycled through too many fix attempts on this PR (livelock
+  //    guard) — bypassed on a forced retry.
+  const isObeliskPr = pr.head.ref.startsWith(OBELISK_BRANCH_PREFIX);
+  const safetyAllowsFix = repo.mode === 'prs' || repo.mode === 'automerge';
+  const livelockOk =
+    force === true || priorReviewerRunCount(repo.id, pr.number) < REVIEW_LIVELOCK_CAP;
+  const fixMode = isObeliskPr && safetyAllowsFix && livelockOk;
+
+  // mergeable_state is computed lazily by GitHub. We only need it for fix-mode
+  // PRs (the agent can't push conflict resolutions on a human PR anyway).
+  const hasConflicts = fixMode
+    ? await prHasConflicts(gh, owner, name, pr.number).catch(() => false)
+    : false;
+  const baseBranch =
+    pr.base?.ref && typeof pr.base.ref === 'string' && pr.base.ref.length > 0
+      ? pr.base.ref
+      : repo.defaultBranch;
+
+  await postClaimSignal({ repo, issueNumber: pr.number, source: taskRef });
+
+  return {
+    task: {
+      ref: taskRef,
+      kind: 'review',
+      summary: `${fixMode ? 'Fixing' : 'Reviewing'} PR #${pr.number}: ${pr.title}`,
+      context: prContextFor(pr, { fixMode, hasConflicts, baseBranch }),
+      githubNumber: pr.number,
+    },
+    prReviewClaimId: claim.id,
+    ...(fixMode ? { attachToBranch: { branch: pr.head.ref, existingPrNumber: pr.number } } : {}),
+  };
+}
 
 /* ---------- output parsing ---------- */
 
@@ -478,7 +531,7 @@ interface PrContextOpts {
 }
 
 function prContextFor(
-  pr: { title: string; body: string | null; number: number; head: { ref: string } },
+  pr: { title: string; body?: string | null; number: number; head: { ref: string } },
   opts: PrContextOpts,
 ): string {
   const modeHint = opts.fixMode

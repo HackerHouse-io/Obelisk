@@ -140,6 +140,14 @@ export interface SelectTaskInput {
    */
   taskId?: string;
   /**
+   * Retry override. When set alongside an explicit `taskId`, the handler
+   * should re-target that exact task and bypass its dedup/caps (e.g.
+   * pr-reviewer's already-reviewed / failed-attempt cap, bug-fixer's stale
+   * filters). Atomic claims still apply, so two concurrent retries can't
+   * both win. Set by the manual Retry button and the infra auto-retry path.
+   */
+  forceTask?: boolean;
+  /**
    * Calling instance's id, when available. Multi-instance handlers attach
    * this to their atomic claim rows (e.g. pr_review_claims.agent_id).
    * Optional so legacy / test callers don't have to provide it.

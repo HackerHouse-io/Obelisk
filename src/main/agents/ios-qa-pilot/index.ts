@@ -91,14 +91,21 @@ export const iosQaPilotHandler: AgentHandler = {
       );
     }
 
+    // Forced retry passes the failed run's own task ref
+    // (`ios-qa:<flow>:<run>:plan:<id>`) as taskId. Decode it back into the
+    // flow + plan hints the rest of selectTask expects.
+    const retryRef = input.forceTask ? parseIosQaTaskRef(input.taskId ?? null) : null;
+
     // Plan gate: iOS QA Pilot needs a plan for context, but the flow-registry
     // is still what picks WHICH flow to execute. parsePlanHint accepts the
     // explicit `plan:<id>` form; without it, resolvePlanForAgentRun looks up
     // the (single) plan registered for this agent or throws TEST_PLAN_REQUIRED.
-    const planTaskId = parsePlanHint(input.taskId)
-      ? input.taskId
-      : `${PLAN_HINT_PREFIX}` +
-        resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', undefined).frontmatter.id;
+    const planTaskId = retryRef?.planId
+      ? `${PLAN_HINT_PREFIX}${retryRef.planId}`
+      : parsePlanHint(input.taskId)
+        ? input.taskId
+        : `${PLAN_HINT_PREFIX}` +
+          resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', undefined).frontmatter.id;
     const plan = resolvePlanForAgentRun(input.repo, 'ios-qa-pilot', planTaskId);
     const assigned = toAssignedPlan(plan);
 
@@ -126,10 +133,14 @@ export const iosQaPilotHandler: AgentHandler = {
     }
     syncFlowsToRegistry(input.repo.id, flowsParsed);
 
-    const preferredFlowId = parseFlowHint(input.taskId);
+    const preferredFlowId = retryRef?.flowId ?? parseFlowHint(input.taskId);
     const tempRunId = ulid(); // claim before the orchestrator's run row exists
 
-    const flow = claimNextFlow(input.repo.id, tempRunId, preferredFlowId);
+    // A forced retry may target a flow that already 'passed' this cycle — let
+    // claimNextFlow reclaim it (it still refuses flows held by a live run).
+    const flow = claimNextFlow(input.repo.id, tempRunId, preferredFlowId, {
+      force: input.forceTask === true,
+    });
     if (!flow) {
       // claimNextFlow returns null when every flow is either already
       // claimed by another live run or has status 'passed' in the current

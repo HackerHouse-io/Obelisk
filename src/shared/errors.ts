@@ -43,6 +43,7 @@ export const ERROR_CODES = [
   'BACKLOG_EMPTY',
   'BACKLOG_ALL_FILTERED',
   'PATCH_AGENT_CAP_REACHED',
+  'WORKTREE_BUSY',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

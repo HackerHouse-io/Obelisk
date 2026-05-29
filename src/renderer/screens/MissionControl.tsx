@@ -314,6 +314,13 @@ export function MissionControl(): ReactElement {
     if (!res.ok) showApiAlert(res.error, 'stop run');
   };
 
+  const handleRetryRun = async (runId: string): Promise<void> => {
+    // Re-run the same task this run targeted. The new run appears via the bus
+    // broadcast; nothing to mutate optimistically here.
+    const res = await window.obelisk.invoke('runs:retry', { runId });
+    if (!res.ok) showApiAlert(res.error, 'retry run');
+  };
+
   const handleClearCompleted = async (): Promise<void> => {
     if (!repo || completedCount === 0) return;
     const ok = await showConfirm({
@@ -475,6 +482,7 @@ export function MissionControl(): ReactElement {
                         }}
                         onDelete={() => void handleDeleteRun(run.id)}
                         onCancel={() => void handleCancelRun(run.id)}
+                        onRetry={() => void handleRetryRun(run.id)}
                       />
                     ))
                   )}
@@ -491,6 +499,7 @@ export function MissionControl(): ReactElement {
           onToggle={() => setDrawerOpen(false)}
           onDelete={(id) => void handleDeleteRun(id)}
           onCancel={(id) => void handleCancelRun(id)}
+          onRetry={(id) => void handleRetryRun(id)}
         />
       ) : (
         <aside className="mc-drawer-rail">
@@ -537,6 +546,7 @@ function RunCard({
   onClick,
   onDelete,
   onCancel,
+  onRetry,
 }: {
   run: Run;
   instanceName?: string;
@@ -548,6 +558,7 @@ function RunCard({
   onClick: () => void;
   onDelete: () => void;
   onCancel: () => void;
+  onRetry: () => void;
 }): ReactElement {
   const typeLabel = labelForAgent(run.agentName);
   const showInstance = instanceName && instanceName !== typeLabel;
@@ -557,6 +568,9 @@ function RunCard({
 
   const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
   const canCancel = run.state === 'queued' || run.state === 'running';
+  // Retry re-runs the same task; only meaningful once the run has settled and
+  // is linked to an agent instance with a task ref.
+  const canRetry = !isActive && run.agentId !== null && run.taskRef !== null;
 
   // A friendlier title than raw `plan:<id>` / `issue#<n>` / `backlog#<id>`
   // task refs. Pulls in the snapshotted task_context so the user sees the
@@ -636,6 +650,20 @@ function RunCard({
                   }}
                 >
                   <Icon.Pause size={11} /> Stop
+                </button>
+              ) : null}
+              {canRetry ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="mc-card-menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    onRetry();
+                  }}
+                >
+                  <Icon.Refresh size={11} /> Retry
                 </button>
               ) : null}
               <button
@@ -862,6 +890,8 @@ const ERROR_CODE_HELP: Partial<Record<ErrorCode, string>> = {
     'No issues with the `obelisk:fix` (bug-fixer) or `obelisk:feature` (feature-builder) label. Apply one to a GitHub issue, or add a manual backlog item.',
   BACKLOG_ALL_FILTERED:
     'Every candidate issue was filtered out (closed, locked, claimed elsewhere, or not on the actor allowlist).',
+  WORKTREE_BUSY:
+    'The PR branch is still checked out by another live run. Wait for it to finish, then retry.',
 };
 
 function errorCodeHelp(code: string): string {
@@ -893,12 +923,14 @@ function RunDrawer({
   onToggle,
   onDelete,
   onCancel,
+  onRetry,
 }: {
   run: Run | null;
   onClose: () => void;
   onToggle: () => void;
   onDelete: (runId: string) => void;
   onCancel: (runId: string) => void;
+  onRetry: (runId: string) => void;
 }): ReactElement {
   const repos = useStore((s) => s.repos);
   const repoFullName = useMemo(() => {
@@ -929,6 +961,7 @@ function RunDrawer({
 
   const isActive = run.state === 'queued' || run.state === 'running' || run.state === 'publishing';
   const canCancel = run.state === 'queued' || run.state === 'running';
+  const canRetry = !isActive && run.agentId !== null && run.taskRef !== null;
 
   return (
     <aside className="mc-drawer">
@@ -951,6 +984,17 @@ function RunDrawer({
             data-testid="mc-drawer-stop"
           >
             <Icon.Pause size={11} /> Stop
+          </button>
+        ) : null}
+        {canRetry ? (
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => onRetry(run.id)}
+            title="Re-run this run against the same task"
+            data-testid="mc-drawer-retry"
+          >
+            <Icon.Refresh size={11} /> Retry
           </button>
         ) : null}
         <div style={{ flex: 1 }} />
@@ -986,21 +1030,7 @@ function RunDrawer({
         {run.errorCode === 'RUNNER_LOGIN_REQUIRED' ? (
           <RunnerLoginActionCard
             runner={run.runnerUsed}
-            onRetry={
-              run.agentId
-                ? () => {
-                    const taskId = run.taskRef ?? undefined;
-                    void window.obelisk
-                      .invoke('agents:run', {
-                        agentId: run.agentId!,
-                        ...(taskId ? { taskId } : {}),
-                      })
-                      .then((res) => {
-                        if (!res.ok) showApiAlert(res.error, 'retry');
-                      });
-                  }
-                : undefined
-            }
+            onRetry={canRetry ? () => onRetry(run.id) : undefined}
           />
         ) : null}
       </div>

@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { walkMarkdownFiles } from '../util/walk-markdown';
 import { app } from 'electron';
 import { ObeliskError } from '../../shared/errors';
-import type { AgentName, Repo } from '../../shared/types';
+import type { Agent, AgentName, Repo } from '../../shared/types';
 import { getRepo } from '../db/repos';
 import { listAgentsForRepo, getAgent, updateAgent } from '../db/agents';
 import { lockBacklogItem, unlockBacklogItem, deleteBacklogGhIssue } from '../db/backlog';
@@ -49,6 +49,18 @@ export interface RunAgentInput {
    * support targeting a specific task (e.g. iOS QA Pilot's `flow:<id>`).
    */
   taskId?: string;
+  /**
+   * Retry semantics. When true and `taskId` is set, the agent re-targets
+   * that exact task and bypasses dedup/caps (already-reviewed, failed-attempt
+   * cap, backlog stale filters). Atomic claims still prevent true duplicates.
+   * Set by the manual Retry button and the infra auto-retry path.
+   */
+  forceTask?: boolean;
+  /**
+   * The failed run this run is retrying, when applicable. Used for audit
+   * linkage and to scope the one-shot auto-retry guard.
+   */
+  retryOfRunId?: string;
   /**
    * One-shot runner override for this run only — does not persist on the
    * agent row. Used by the Test Plans "Run" popover so the user can pick a
@@ -139,6 +151,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         defaultRunner: repoDefaultRunner,
         trigger: input.trigger,
         taskId: input.taskId,
+        ...(input.forceTask ? { forceTask: true } : {}),
         ...(agentRow ? { agentId: agentRow.id } : {}),
       });
   if (!selected) {
@@ -227,6 +240,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
 
   let worktreeHandle: { worktreePath: string; branch: string } | null = null;
   let runInfra: import('../agents/types').RunInfra | null = null;
+  // When a run fails on a transient infra error, we fire one automatic retry —
+  // but only AFTER the finally block releases this run's claims / backlog lock
+  // / worktree, so the retry's selectTask doesn't collide with them. The
+  // failure branches set this thunk; the finally block invokes it last.
+  let scheduledAutoRetry: (() => void) | null = null;
   try {
     // 4) Worktree. Three paths:
     //    - Resumed runs (CI auto-fix retry) attach to the existing PR branch
@@ -240,6 +258,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         repoId: repo.id,
         slot: `${input.resumeContext.originalRunId}-resume-${run.id}`,
         branch: input.resumeContext.prBranch,
+        canReclaimHolder: holderIsReclaimable,
       });
     } else if (selected.attachToBranch) {
       worktreeHandle = await attachWorktree({
@@ -247,6 +266,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         repoId: repo.id,
         slot: `${run.id}-pr${selected.attachToBranch.existingPrNumber}`,
         branch: selected.attachToBranch.branch,
+        canReclaimHolder: holderIsReclaimable,
       });
     } else {
       worktreeHandle = await createWorktree({
@@ -254,6 +274,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         repoId: repo.id,
         runId: run.id,
         baseBranch: repo.defaultBranch,
+        canReclaimHolder: holderIsReclaimable,
       });
     }
     transitionRun(run.id, 'running', { worktreePath: worktreeHandle.worktreePath });
@@ -466,6 +487,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
           // 3-strike breaker will catch us within a few minutes anyway.
         }
       }
+      scheduledAutoRetry = planInfraAutoRetry({
+        runId: run.id,
+        errorCode,
+        taskRef: selected.task.ref ?? null,
+        input,
+        agentRow,
+      });
       return { runId: run.id, finalState: 'failed', reason: result.reason };
     }
 
@@ -747,9 +775,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       kind: 'state',
       payload: { from: 'running', to: 'failed', error: message },
     });
+    const errorCode = e instanceof ObeliskError ? e.code : 'INTERNAL';
     transitionRun(run.id, 'failed', {
-      errorCode: e instanceof ObeliskError ? e.code : 'INTERNAL',
+      errorCode,
       outputSummary: message.slice(0, 500),
+    });
+    scheduledAutoRetry = planInfraAutoRetry({
+      runId: run.id,
+      errorCode,
+      taskRef: selected.task.ref ?? null,
+      input,
+      agentRow,
     });
     return { runId: run.id, finalState: 'failed', reason: message };
   } finally {
@@ -789,6 +825,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     if (selected.task.githubNumber && !input.resumeContext) {
       await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
+    // Fire the one-shot infra auto-retry LAST — after claims, backlog lock,
+    // and (on a clean run) the worktree are released — so the retry's
+    // selectTask sees a clean slate. Fire-and-forget: a new run drives itself.
+    if (scheduledAutoRetry) scheduledAutoRetry();
   }
 }
 
@@ -1015,6 +1055,76 @@ function maybeRepoOverrideDirs(repoPath: string): {
   if (existsSync(agents)) out.repoAgentsDir = agents;
   if (existsSync(skills)) out.repoSkillsDir = skills;
   return out;
+}
+
+/**
+ * Reclaim guard for the worktree layer: given the directory of a worktree
+ * that already holds the branch we're trying to check out, decide whether
+ * it's safe to force-remove. Worktree slots embed the owning run id as the
+ * leading ULID of the basename (`<runId>`, `<runId>-pr<n>`, `<runId>-resume-…`,
+ * `<runId>-ci-retry-…`). We only steal worktrees whose run is terminal (or
+ * unknown — a foreign/legacy dir we don't track); a live run keeps its
+ * worktree and the caller surfaces WORKTREE_BUSY instead of corrupting it.
+ */
+function holderIsReclaimable(holderPath: string): boolean {
+  const id = /^([0-9A-HJKMNP-TV-Z]{26})/i.exec(basename(holderPath))?.[1];
+  if (!id) return true;
+  const holderRun = getRun(id);
+  if (!holderRun) return true;
+  return (
+    holderRun.state === 'done' || holderRun.state === 'failed' || holderRun.state === 'cancelled'
+  );
+}
+
+/**
+ * Error codes that represent transient INFRASTRUCTURE failures — the agent
+ * never got a fair shot, so an automatic one-shot retry is worthwhile. Genuine
+ * agent/code failures (rejected review, unparseable findings, etc.) are NOT
+ * here; those wait for a deliberate manual Retry click.
+ */
+const INFRA_AUTO_RETRY_CODES = new Set<string>(['WORKTREE_BUSY', 'RUNNER_NO_OUTPUT', 'TIMEOUT']);
+
+/**
+ * Decide whether a failed run earns one automatic retry, and if so return a
+ * thunk that fires it (the caller invokes it after cleanup). Returns null when
+ * the failure doesn't qualify.
+ *
+ * The one-shot cap is enforced by `retryOfRunId`: an auto-retry sets it on the
+ * follow-up run, and a run that already carries it never schedules another —
+ * so a chain can auto-retry at most once. An `auto_retry` audit row is written
+ * for observability + run linkage.
+ */
+function planInfraAutoRetry(opts: {
+  runId: string;
+  errorCode: string;
+  taskRef: string | null;
+  input: RunAgentInput;
+  agentRow: Agent | null;
+}): (() => void) | null {
+  const { runId, errorCode, taskRef, input, agentRow } = opts;
+  if (!INFRA_AUTO_RETRY_CODES.has(errorCode)) return null;
+  // Already a retry (manual or auto), a CI-resume run, or missing the bits we
+  // need to re-target the exact task → don't auto-retry.
+  if (input.retryOfRunId || input.resumeContext) return null;
+  if (!agentRow || !taskRef) return null;
+
+  appendAudit({
+    runId,
+    kind: 'auto_retry',
+    payload: { taskRef, errorCode, agentId: agentRow.id },
+  });
+
+  return () => {
+    void runAgent({
+      repoId: input.repoId,
+      agentName: input.agentName,
+      agentId: agentRow.id,
+      trigger: input.trigger,
+      taskId: taskRef,
+      forceTask: true,
+      retryOfRunId: runId,
+    }).catch(() => undefined);
+  };
 }
 
 function errorCodeForFailure(

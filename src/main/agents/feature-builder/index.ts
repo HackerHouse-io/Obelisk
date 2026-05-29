@@ -15,6 +15,8 @@ import { appendAudit } from '../../logger/audit';
 import { syncBacklogForRepo } from '../../scheduler/backlog-sync';
 import { ObeliskError } from '../../../shared/errors';
 import { registerArtifactFromPath } from '../lib/register-artifact';
+import { parseBacklogTaskRef } from '../../../shared/task-refs';
+import { forcedBacklogItem } from '../lib/forced-backlog';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -33,6 +35,37 @@ export const featureBuilderHandler: AgentHandler = {
   producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
+    // Forced retry (manual Retry button / infra auto-retry): re-target the
+    // exact backlog item the failed run worked on, bypassing the sweep.
+    const forcedRef = input.forceTask ? parseBacklogTaskRef(input.taskId ?? null) : null;
+    if (forcedRef) {
+      const item = forcedBacklogItem({
+        repoId: input.repo.id,
+        kind: 'feature',
+        ref: forcedRef,
+        placeholder: `pending:${ulid()}`,
+      });
+      if (!item) return null;
+      if (item.githubIssue) {
+        await postClaimSignal({
+          repo: input.repo,
+          issueNumber: item.githubIssue,
+          source: `issue#${item.githubIssue}`,
+        }).catch(() => undefined);
+      }
+      return {
+        backlogItem: item,
+        task: {
+          ref: item.githubIssue ? `issue#${item.githubIssue}` : `backlog#${item.id}`,
+          kind: 'feature',
+          summary: item.title,
+          context: item.title,
+          ...(item.githubIssue ? { githubNumber: item.githubIssue } : {}),
+        },
+        runnerOverride: item.runnerOverride,
+      };
+    }
+
     // Inline backlog sync for manual triggers when the local table has
     // no claimable feature rows. Mirrors the bug-fixer fix for the same
     // "Run now → nothing to do" failure mode.

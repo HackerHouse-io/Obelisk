@@ -694,6 +694,16 @@ export interface IpcMap {
     req: { runId: string };
     res: Run & { auditLog: AuditLine[]; evidence: EvidenceItem[] };
   };
+  /**
+   * Re-run a terminal (failed/cancelled/done) run against the SAME task it
+   * targeted. Forces the exact task (bypassing dedup/caps); the atomic claim
+   * still prevents true duplicates. Resolves with the new run's id as soon as
+   * it's committed (same fire-and-resolve contract as `agents:run`).
+   */
+  'runs:retry': {
+    req: { runId: string };
+    res: { runId: string; taskRef: string | null; taskContext: string | null };
+  };
   'runs:delete': { req: { runId: string }; res: { ok: true } };
   'runs:deleteCompleted': {
     req: { repoId: string; states?: RunState[] };

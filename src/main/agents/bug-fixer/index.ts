@@ -7,6 +7,8 @@ import {
   listBacklog,
   releaseStaleBacklogLocks,
 } from '../../db/backlog';
+import { parseBacklogTaskRef } from '../../../shared/task-refs';
+import { forcedBacklogItem } from '../lib/forced-backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
 import { postClaimSignal } from '../lib/claim-on-github';
@@ -59,6 +61,27 @@ export const bugFixerHandler: AgentHandler = {
 /* ---------- internals ---------- */
 
 async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTask | null> {
+  // Forced retry (manual Retry button / infra auto-retry): re-target the exact
+  // backlog item the failed run worked on, bypassing the sweep's filters.
+  const forcedRef = input.forceTask ? parseBacklogTaskRef(input.taskId ?? null) : null;
+  if (forcedRef) {
+    const item = forcedBacklogItem({
+      repoId: input.repo.id,
+      kind: 'bug',
+      ref: forcedRef,
+      placeholder: `pending:${ulid()}`,
+    });
+    if (!item) return null;
+    if (item.githubIssue) {
+      await postClaimSignal({
+        repo: input.repo,
+        issueNumber: item.githubIssue,
+        source: `issue#${item.githubIssue}`,
+      }).catch(() => undefined);
+    }
+    return wrap(item);
+  }
+
   // Stale-lock + sync pre-pass on manual Run-now. Two failure modes
   // we used to surface as the misleading "No claimable issue right now":
   //

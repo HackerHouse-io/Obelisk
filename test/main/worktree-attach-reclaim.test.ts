@@ -67,4 +67,29 @@ describe('attachWorktree', () => {
     // The stale worktree was removed during reclaim.
     expect(existsSync(first.worktreePath)).toBe(false);
   });
+
+  it('refuses to steal a live run’s worktree (WORKTREE_BUSY)', async () => {
+    const live = await attachWorktree({
+      repoPath: repoDir,
+      repoId,
+      slot: 'slot-live',
+      branch: 'pr-branch',
+    });
+    expect(existsSync(live.worktreePath)).toBe(true);
+
+    // canReclaimHolder returns false → the holder belongs to a live run, so
+    // the reclaim path must NOT remove it and must surface WORKTREE_BUSY.
+    await expect(
+      attachWorktree({
+        repoPath: repoDir,
+        repoId,
+        slot: 'slot-blocked',
+        branch: 'pr-branch',
+        canReclaimHolder: () => false,
+      }),
+    ).rejects.toMatchObject({ code: 'WORKTREE_BUSY' });
+
+    // The live worktree was left intact.
+    expect(existsSync(live.worktreePath)).toBe(true);
+  });
 });

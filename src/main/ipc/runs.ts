@@ -12,6 +12,8 @@ import {
   deleteArchivedRunsForRepo,
 } from '../db/runs';
 import { listArtifacts } from '../db/evidence';
+import { getAgent } from '../db/agents';
+import { dispatchAgentRun } from './agents';
 import { ObeliskError } from '../../shared/errors';
 import { getDb } from '../db';
 import type { IpcMap, AuditLine } from '../../shared/types';
@@ -58,6 +60,44 @@ export async function handleRunsGet(
     sha256: a.sha256,
   }));
   return { ...run, auditLog, evidence };
+}
+
+export async function handleRunsRetry(
+  payload: IpcMap['runs:retry']['req'],
+): Promise<IpcMap['runs:retry']['res']> {
+  const run = getRun(payload.runId);
+  if (!run) throw new ObeliskError('RUN_NOT_FOUND', `run ${payload.runId} not found`);
+  if (run.state !== 'failed' && run.state !== 'cancelled' && run.state !== 'done') {
+    throw new ObeliskError(
+      'RUN_ACTIVE',
+      'This run is still active — stop it before retrying.',
+      'Wait for the run to finish (or click Stop), then retry.',
+    );
+  }
+  if (!run.agentId) {
+    throw new ObeliskError(
+      'AGENT_NOT_FOUND',
+      'This run is not linked to an agent instance, so it can’t be retried.',
+      'Run the agent again from the Agents screen.',
+    );
+  }
+  if (!run.taskRef) {
+    throw new ObeliskError(
+      'NOT_FOUND',
+      'This run has no task reference to retry.',
+      'Run the agent again from the Agents screen.',
+    );
+  }
+  const agent = getAgent(run.agentId);
+  if (!agent) throw new ObeliskError('AGENT_NOT_FOUND', `agent ${run.agentId} not found`);
+
+  // Force the exact task the failed run targeted, bypassing dedup/caps; the
+  // atomic claim still prevents true duplicates.
+  return dispatchAgentRun(agent, {
+    taskId: run.taskRef,
+    forceTask: true,
+    retryOfRunId: run.id,
+  });
 }
 
 export async function handleRunsDelete(
