@@ -115,9 +115,82 @@ export async function attachWorktree(input: AttachWorktreeInput): Promise<Worktr
   // the new worktree without creating a new local branch. Fetching first
   // ensures the local ref matches origin so the agent sees the latest tip.
   await git.fetch('origin', input.branch).catch(() => undefined);
-  await git.raw(['worktree', 'add', dir, input.branch]);
+
+  // Prune worktree entries whose directories were already deleted (e.g. a
+  // prior failed run's worktree dir was reaped from disk but git still has
+  // it registered). Cheap and idempotent.
+  await git.raw(['worktree', 'prune']).catch(() => undefined);
+
+  try {
+    await git.raw(['worktree', 'add', dir, input.branch]);
+  } catch (e) {
+    // Git refuses to check out a branch that's already checked out in
+    // another worktree. That worktree belongs to a TERMINAL (failed) run —
+    // createRun's single-flight on task_ref (`pr#<n>@<sha>`) guarantees no
+    // other LIVE run holds this branch — and failed runs intentionally
+    // retain their worktree for the debug window. Reclaim it so the retry
+    // isn't dead on arrival with no agent output (the "failed, no logs" bug).
+    const message = e instanceof Error ? e.message : String(e);
+    if (!/already (checked out|used by worktree)/i.test(message)) throw e;
+    const stale = await findWorktreeForBranch(git, input.branch);
+    if (!stale) throw e;
+    await git.raw(['worktree', 'remove', '--force', stale]).catch(() => undefined);
+    if (existsSync(stale)) rmSync(stale, { recursive: true, force: true });
+    await git.raw(['worktree', 'prune']).catch(() => undefined);
+    // Retry once. A second failure is a genuine error — let it propagate.
+    await git.raw(['worktree', 'add', dir, input.branch]);
+  }
 
   return { worktreePath: dir, branch: input.branch };
+}
+
+/**
+ * Find the path of the existing worktree that has `branch` checked out.
+ * Returns null when no worktree holds the branch (the collision was something
+ * else, e.g. a bare ref lock).
+ */
+async function findWorktreeForBranch(
+  git: ReturnType<typeof simpleGit>,
+  branch: string,
+): Promise<string | null> {
+  const raw = await git.raw(['worktree', 'list', '--porcelain']).catch(() => '');
+  return parseWorktreeList(raw).find((w) => w.branch === branch)?.path ?? null;
+}
+
+export interface WorktreeEntry {
+  path: string;
+  branch: string;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output. Each block is:
+ *   worktree /abs/path
+ *   HEAD <sha>
+ *   branch refs/heads/<name>
+ * Blocks are separated by blank lines; the `refs/heads/` prefix is stripped.
+ * Blocks without a branch (detached HEAD) are skipped.
+ */
+export function parseWorktreeList(raw: string): WorktreeEntry[] {
+  const out: WorktreeEntry[] = [];
+  let current: Partial<WorktreeEntry> = {};
+  const flush = (): void => {
+    if (current.path && current.branch) out.push({ path: current.path, branch: current.branch });
+    current = {};
+  };
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim() === '') {
+      flush();
+      continue;
+    }
+    if (line.startsWith('worktree ')) {
+      current.path = line.slice('worktree '.length).trim();
+    } else if (line.startsWith('branch ')) {
+      const ref = line.slice('branch '.length).trim();
+      current.branch = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+    }
+  }
+  flush();
+  return out;
 }
 
 export async function destroyWorktree(repoPath: string, worktreePath: string): Promise<void> {

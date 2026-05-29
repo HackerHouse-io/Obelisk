@@ -83,6 +83,25 @@ export function attachRunToPrReviewClaim(claimId: string, runId: string): void {
   getDb().prepare('UPDATE pr_review_claims SET run_id = ? WHERE id = ?').run(runId, claimId);
 }
 
+/**
+ * How many times has a review of this exact (repo, PR, sha) failed?
+ * Counts released claims with `result = 'failed'` — written both by the
+ * orchestrator's finally block and the heartbeat reaper's
+ * `releaseClaimsForRun`. Used by `selectTask` to stop re-claiming a SHA that
+ * keeps failing (timeout, runner crash, worktree collision, …) so the agent
+ * doesn't burn a full run on every tick. A new commit produces a new SHA with
+ * a fresh (zero) count, so genuine progress always gets re-reviewed.
+ */
+export function failedAttemptCount(repoId: string, prNumber: number, headSha: string): number {
+  const row = getDb()
+    .prepare<[string, number, string], { c: number }>(
+      `SELECT COUNT(*) AS c FROM pr_review_claims
+       WHERE repo_id = ? AND pr_number = ? AND head_sha = ? AND result = 'failed'`,
+    )
+    .get(repoId, prNumber, headSha);
+  return row?.c ?? 0;
+}
+
 /** Has any agent successfully reviewed this (repo, PR, sha) yet? */
 export function wasReviewed(repoId: string, prNumber: number, headSha: string): boolean {
   const row = getDb()

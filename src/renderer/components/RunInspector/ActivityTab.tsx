@@ -33,11 +33,16 @@ import {
 export function ActivityTab({
   lines,
   runState,
+  errorCode,
+  outputSummary,
 }: {
   lines: AuditLine[];
   runState: RunState;
+  errorCode?: string | null;
+  outputSummary?: string | null;
 }): ReactElement {
   const isLive = runState === 'queued' || runState === 'running' || runState === 'publishing';
+  const failed = runState === 'failed' || runState === 'cancelled';
   const [showAll, setShowAll] = useState(false);
 
   const rows = useMemo(() => buildActivityRows(lines, showAll), [lines, showAll]);
@@ -66,7 +71,9 @@ export function ActivityTab({
           newest first
         </span>
       </div>
-      {rows.length === 0 ? (
+      {rows.length === 0 && failed ? (
+        <FailureCard errorCode={errorCode} outputSummary={outputSummary} />
+      ) : rows.length === 0 ? (
         <Empty>{isLive ? 'Waiting for the runner’s first output…' : 'No activity yet.'}</Empty>
       ) : (
         <div className="mc-act-stack">
@@ -75,6 +82,41 @@ export function ActivityTab({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Shown when a run reached a terminal failed/cancelled state but produced no
+ * visible activity rows — e.g. the runner was killed before emitting any
+ * tool calls, or the orchestrator failed at setup (worktree, auth) so only
+ * `state` audit rows exist (which the timeline filters out). The failure
+ * reason is always persisted on the run (`error_code` + `output_summary`); a
+ * failed run must never read as "No activity yet" with no explanation.
+ */
+function FailureCard({
+  errorCode,
+  outputSummary,
+}: {
+  errorCode?: string | null;
+  outputSummary?: string | null;
+}): ReactElement {
+  const code = errorCode?.trim();
+  const summary = outputSummary?.trim();
+  return (
+    <div className="mc-act-stack">
+      <div className="mc-act-pill is-result tone-bad" role="listitem">
+        <span className="mc-act-pill-icon" aria-hidden="true">
+          <Icon.Close size={11} color="var(--bad)" />
+        </span>
+        <span className="mc-act-pill-text">Run failed</span>
+        {code ? <span className="mc-act-pill-meta">{code}</span> : null}
+      </div>
+      <div className="mc-act-prose">
+        {summary && summary.length > 0
+          ? summary
+          : 'The run failed before producing any activity. No further detail was recorded.'}
+      </div>
     </div>
   );
 }

@@ -151,7 +151,11 @@ const DEFAULT_TIMEOUT: Record<AgentName, number> = {
   'manual-qa': 45 * 60 * 1000,
   'bug-fixer': 30 * 60 * 1000,
   'feature-builder': 60 * 60 * 1000,
-  'pr-reviewer': 10 * 60 * 1000,
+  // PR Reviewer compiles + runs the repo's test suite (and reruns it after
+  // each fix in fix mode). 10 min was far too short for repos with real
+  // build+test cycles (e.g. Xcode), so reviews were SIGKILL'd mid-test.
+  // Match the read/test agents at 30 min. Migration 013 bumps existing rows.
+  'pr-reviewer': 30 * 60 * 1000,
   'ios-qa-pilot': 45 * 60 * 1000,
 };
 

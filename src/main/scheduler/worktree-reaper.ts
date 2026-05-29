@@ -2,7 +2,7 @@ import { simpleGit } from 'simple-git';
 import { existsSync } from 'node:fs';
 import { listRepos } from '../db/repos';
 import { getRun } from '../db/runs';
-import { destroyWorktree } from '../git/worktree';
+import { destroyWorktree, parseWorktreeList } from '../git/worktree';
 import { appendAudit } from '../logger/audit';
 import type { Repo } from '../../shared/types';
 
@@ -77,43 +77,6 @@ async function destroyAndAudit(
       reason,
     },
   });
-}
-
-interface WorktreeEntry {
-  path: string;
-  branch: string;
-}
-
-/**
- * Parse `git worktree list --porcelain` output.
- * Each block is:
- *   worktree /abs/path
- *   HEAD <sha>
- *   branch refs/heads/<name>
- * Blocks are separated by blank lines.
- */
-export function parseWorktreeList(raw: string): WorktreeEntry[] {
-  const out: WorktreeEntry[] = [];
-  let current: Partial<WorktreeEntry> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    if (line.trim() === '') {
-      if (current.path && current.branch) {
-        out.push({ path: current.path, branch: current.branch });
-      }
-      current = {};
-      continue;
-    }
-    if (line.startsWith('worktree ')) {
-      current.path = line.slice('worktree '.length).trim();
-    } else if (line.startsWith('branch ')) {
-      const ref = line.slice('branch '.length).trim();
-      current.branch = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
-    }
-  }
-  if (current.path && current.branch) {
-    out.push({ path: current.path, branch: current.branch });
-  }
-  return out;
 }
 
 function parseRunIdFromBranch(branch: string): string | null {

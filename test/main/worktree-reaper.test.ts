@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseWorktreeList } from '../../src/main/scheduler/worktree-reaper';
+import { parseWorktreeList } from '../../src/main/git/worktree';
 
 describe('parseWorktreeList', () => {
   it('parses a single worktree block', () => {

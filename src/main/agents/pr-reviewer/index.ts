@@ -11,7 +11,11 @@ import {
 } from '../lib/cross-install-guard';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { crossCheckEvidence, isEvidenceComplete } from './evidence-cross-check';
-import { claimPrReview, wasReviewed as wasReviewedAtSha } from '../../db/pr-review-claims';
+import {
+  claimPrReview,
+  failedAttemptCount,
+  wasReviewed as wasReviewedAtSha,
+} from '../../db/pr-review-claims';
 import type {
   AgentHandler,
   SelectTaskInput,
@@ -28,6 +32,18 @@ import type {
  * agent could spend forever fixing-then-fixing-its-fixes.
  */
 const REVIEW_LIVELOCK_CAP = 3;
+
+/**
+ * After this many FAILED reviews of the same (PR, SHA), stop re-claiming it.
+ * A failed/timed-out review releases its claim with `result='failed'`, which
+ * the dedup checks (`wasReviewedAtSha`, `alreadyReviewed`) intentionally don't
+ * count — they only block on a completed review. Without this cap a PR whose
+ * review reliably fails (e.g. a 30-min Xcode suite that still overruns, or a
+ * runner that crashes on that diff) gets re-reviewed on every 30s scheduler
+ * tick forever, burning a full run each time. The cap bounds the damage; a new
+ * commit (new SHA) resets the count to zero so real progress is always retried.
+ */
+const FAILED_REVIEW_ATTEMPT_CAP = 2;
 
 /**
  * Branch-name convention for Obelisk-opened PRs (Bug Fixer / Feature
@@ -92,6 +108,12 @@ export const prReviewerHandler: AgentHandler = {
       // Skip if any instance already reviewed this exact SHA.
       if (wasReviewedAtSha(input.repo.id, pr.number, headSha)) continue;
       if (alreadyReviewed(input.repo.id, taskRef)) continue;
+
+      // Stop re-claiming a SHA that keeps failing — otherwise a doomed review
+      // re-runs on every tick (its 'failed' claim doesn't block re-claim).
+      if (failedAttemptCount(input.repo.id, pr.number, headSha) >= FAILED_REVIEW_ATTEMPT_CAP) {
+        continue;
+      }
 
       const author = pr.user?.login?.toLowerCase();
       if (!author) continue;

@@ -197,7 +197,14 @@ export function RunInspector({
             readOnly={readOnly}
           />
         )}
-        {tab === 'activity' && <ActivityTab lines={details?.auditLog ?? []} runState={run.state} />}
+        {tab === 'activity' && (
+          <ActivityTab
+            lines={details?.auditLog ?? []}
+            runState={run.state}
+            errorCode={run.errorCode}
+            outputSummary={run.outputSummary}
+          />
+        )}
         {tab === 'evidence' && <EvidenceTab evidence={details?.evidence ?? []} />}
         {tab === 'reasoning' && <ReasoningTab lines={details?.auditLog ?? []} />}
         {tab === 'files' && <FilesTab evidence={details?.evidence ?? []} />}

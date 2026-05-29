@@ -12,6 +12,7 @@ import {
   wasReviewed,
   releaseClaimsForRun,
   attachRunToPrReviewClaim,
+  failedAttemptCount,
 } from '../../src/main/db/pr-review-claims';
 
 let tmp: string;
@@ -86,6 +87,32 @@ describe('claimPrReview', () => {
     // After release, the same agent (or another) can re-claim.
     const recovered = claimPrReview({ repoId, prNumber: 1, headSha: 'sha1', agentId: agentB });
     expect(recovered).not.toBeNull();
+  });
+
+  it('failedAttemptCount counts released failed claims for the exact (PR, sha)', () => {
+    expect(failedAttemptCount(repoId, 1, 'sha1')).toBe(0);
+
+    const a = claimPrReview({ repoId, prNumber: 1, headSha: 'sha1', agentId: agentA });
+    releasePrReviewClaim(a!.id, 'failed');
+    expect(failedAttemptCount(repoId, 1, 'sha1')).toBe(1);
+
+    const b = claimPrReview({ repoId, prNumber: 1, headSha: 'sha1', agentId: agentB });
+    releasePrReviewClaim(b!.id, 'failed');
+    expect(failedAttemptCount(repoId, 1, 'sha1')).toBe(2);
+
+    // Scoped per SHA: a force-push (new sha) starts fresh.
+    expect(failedAttemptCount(repoId, 1, 'sha2')).toBe(0);
+    // Done / paused releases don't count as failures.
+    const c = claimPrReview({ repoId, prNumber: 2, headSha: 'sha-x', agentId: agentA });
+    releasePrReviewClaim(c!.id, 'done');
+    expect(failedAttemptCount(repoId, 2, 'sha-x')).toBe(0);
+  });
+
+  it('reaper-released claims count as failed attempts', () => {
+    const claim = claimPrReview({ repoId, prNumber: 3, headSha: 'sha-r', agentId: agentA });
+    attachRunToPrReviewClaim(claim!.id, 'run-y');
+    releaseClaimsForRun('run-y'); // heartbeat reaper path → result='failed'
+    expect(failedAttemptCount(repoId, 3, 'sha-r')).toBe(1);
   });
 
   it('10 concurrent claims for one PR/SHA — exactly one wins', () => {
