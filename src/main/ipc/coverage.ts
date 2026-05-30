@@ -8,6 +8,9 @@ import { matchesAnyGlob, parseCoverageMap } from '../coverage/coverage-map';
 import { scanFromTrackedFiles } from '../coverage/feature-scan';
 import { startMapGenerationJob } from '../coverage/generate-map';
 import { dismissJob, listJobs } from '../coverage/jobs';
+import { cancelCoverageRun, coverageLoopPreflight, startCoverageRun } from '../coverage/agent-loop';
+import { getLatestCoverageRun } from '../db/coverage-runs';
+import { getCoverageSchedule, setCoverageSchedule } from '../scheduler/coverage-schedule';
 import { getRepo } from '../db/repos';
 
 export async function handleCoverageList(
@@ -228,6 +231,57 @@ export async function handleCoverageDismissJob(
 ): Promise<IpcMap['coverage:dismissJob']['res']> {
   dismissJob(payload.jobId);
   return { ok: true };
+}
+
+/* ---------- Coverage Agent (autonomous loop) ---------- */
+
+export async function handleCoverageStartLoop(
+  payload: IpcMap['coverage:startLoop']['req'],
+): Promise<IpcMap['coverage:startLoop']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  const coverageRunId = startCoverageRun(payload.repoId, {
+    trigger: 'manual',
+    ...(payload.gapThreshold !== undefined ? { gapThreshold: payload.gapThreshold } : {}),
+    ...(payload.budgetSpawns !== undefined ? { budgetSpawns: payload.budgetSpawns } : {}),
+  });
+  return { coverageRunId };
+}
+
+export async function handleCoverageCancelLoop(
+  payload: IpcMap['coverage:cancelLoop']['req'],
+): Promise<IpcMap['coverage:cancelLoop']['res']> {
+  cancelCoverageRun(payload.coverageRunId);
+  return { ok: true };
+}
+
+export async function handleCoverageLoopStatus(
+  payload: IpcMap['coverage:loopStatus']['req'],
+): Promise<IpcMap['coverage:loopStatus']['res']> {
+  return getLatestCoverageRun(payload.repoId);
+}
+
+export async function handleCoverageLoopPreflight(
+  payload: IpcMap['coverage:loopPreflight']['req'],
+): Promise<IpcMap['coverage:loopPreflight']['res']> {
+  return coverageLoopPreflight(payload.repoId);
+}
+
+export async function handleCoverageGetSchedule(
+  payload: IpcMap['coverage:getSchedule']['req'],
+): Promise<IpcMap['coverage:getSchedule']['res']> {
+  return getCoverageSchedule(payload.repoId);
+}
+
+export async function handleCoverageSetSchedule(
+  payload: IpcMap['coverage:setSchedule']['req'],
+): Promise<IpcMap['coverage:setSchedule']['res']> {
+  const repo = getRepo(payload.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${payload.repoId} not found`);
+  return setCoverageSchedule(payload.repoId, {
+    ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {}),
+    ...(payload.cron !== undefined ? { cron: payload.cron } : {}),
+  });
 }
 
 async function listTrackedFiles(repoPath: string): Promise<string[]> {

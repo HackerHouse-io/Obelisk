@@ -10,6 +10,7 @@ import {
   registerObeliskProtocolHandler,
 } from './protocol/obelisk-protocol';
 import { startScheduler, stopScheduler } from './scheduler/tick';
+import { reconcileCoverageRuns } from './coverage/agent-loop';
 
 // Two run-timeouts (60min) is a safe ceiling for "this claim is dead, free it".
 const STALE_CLAIM_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -60,6 +61,17 @@ app.whenReady().then(() => {
     );
   } catch (e) {
     console.error('[obelisk] migrations failed:', e);
+  }
+
+  // Coverage Agent passes live in memory; a pass interrupted by an app
+  // restart can't resume, so fail any orphaned non-terminal pass cleanly.
+  try {
+    const orphaned = reconcileCoverageRuns();
+    if (orphaned > 0) {
+      console.log(`[obelisk] coverage runs: ${orphaned} interrupted pass(es) reconciled`);
+    }
+  } catch (e) {
+    console.error('[obelisk] coverage run reconcile failed:', e);
   }
 
   // iOS QA Pilot stale-claim sweep on boot — releases any flow / slot whose

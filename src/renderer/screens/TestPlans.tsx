@@ -91,6 +91,8 @@ export function TestPlans(): ReactElement {
   const repos = useStore((s) => s.repos);
   const selectedRepoId = useStore((s) => s.selectedRepoId);
   const setRoute = useStore((s) => s.setRoute);
+  const pendingPlanId = useStore((s) => s.pendingPlanId);
+  const clearPendingPlan = useStore((s) => s.clearPendingPlan);
   const repo = repos.find((r) => r.id === selectedRepoId);
 
   const [plans, setPlans] = useState<TestPlanSummary[]>([]);
@@ -143,6 +145,14 @@ export function TestPlans(): ReactElement {
   useEffect(() => {
     if (activePlanId) void loadPlan(activePlanId);
   }, [activePlanId, loadPlan]);
+
+  // Deep-link from Coverage: open the requested plan, then clear the pending
+  // selection so a later visit falls back to the default (first plan).
+  useEffect(() => {
+    if (!pendingPlanId) return;
+    setActivePlanId(pendingPlanId);
+    clearPendingPlan();
+  }, [pendingPlanId, clearPendingPlan]);
 
   // The generation toast dispatches this event when the user clicks "Open"
   // on a finished job — focus the new plan in the editor.

@@ -83,6 +83,12 @@ import {
   handleCoverageGenerationJobs,
   handleCoverageDismissJob,
   handleCoverageCleanStaleLabels,
+  handleCoverageStartLoop,
+  handleCoverageCancelLoop,
+  handleCoverageLoopStatus,
+  handleCoverageLoopPreflight,
+  handleCoverageGetSchedule,
+  handleCoverageSetSchedule,
 } from './coverage';
 import {
   handleQaDoctor,
@@ -212,6 +218,14 @@ export function registerIpcHandlers(): void {
   register('coverage:generationJobs', handleCoverageGenerationJobs);
   register('coverage:dismissJob', handleCoverageDismissJob);
   register('coverage:cleanStaleLabels', handleCoverageCleanStaleLabels);
+
+  // Coverage Agent — the autonomous map → gaps → draft → hunt loop.
+  register('coverage:startLoop', handleCoverageStartLoop);
+  register('coverage:cancelLoop', handleCoverageCancelLoop);
+  register('coverage:loopStatus', handleCoverageLoopStatus);
+  register('coverage:loopPreflight', handleCoverageLoopPreflight);
+  register('coverage:getSchedule', handleCoverageGetSchedule);
+  register('coverage:setSchedule', handleCoverageSetSchedule);
 
   // iOS QA Pilot
   register('qa:list', handleQaList);

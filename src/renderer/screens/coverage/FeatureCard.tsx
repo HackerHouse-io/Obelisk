@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
 import { showApiAlert } from '../../state/alert-store';
+import { useStore } from '../../state/store';
 import { runAgentByName } from '../../state/agent-actions';
 import { ModelSelect } from '../../components/ModelSelect';
 import { labelForAgent } from '../../format';
@@ -26,6 +27,19 @@ export function findActiveRun(
 ): ActiveRun | null {
   const taskRef = `plan:${planId}`;
   return activeRuns.find((r) => r.taskRef === taskRef && r.agentName === agentName) ?? null;
+}
+
+/**
+ * The first live run targeting ANY of a feature's plans, if one exists — i.e.
+ * "is a QA agent currently working this feature?". Drives the "Running" badge
+ * so the user can see the Coverage Agent's hunt landing on each feature.
+ */
+export function featureActiveRun(
+  activeRuns: ActiveRun[],
+  feature: Pick<CoverageFeature, 'planRefs'>,
+): ActiveRun | null {
+  const refs = new Set(feature.planRefs.map((p) => `plan:${p.id}`));
+  return activeRuns.find((r) => r.taskRef !== null && refs.has(r.taskRef)) ?? null;
 }
 
 interface Props {
@@ -138,6 +152,7 @@ export function FeatureCard({
   }
 
   const tone = toneForPct(feature.coveragePct);
+  const activeRun = featureActiveRun(activeRuns, feature);
 
   // Flatten plan × agentNames into the rows the card renders. Order: by plan
   // updatedAt desc (already pre-sorted in aggregate.ts), then by agent type
@@ -153,7 +168,7 @@ export function FeatureCard({
     <div
       className={`coverage-feature-card coverage-feature-card-${tone}${
         selected ? ' selected' : ''
-      }`}
+      }${activeRun ? ' running' : ''}`}
     >
       <button
         type="button"
@@ -162,7 +177,18 @@ export function FeatureCard({
         title={selected ? 'Clear selection' : 'Show this feature’s files below'}
       >
         <div className="coverage-feature-card-label">{feature.label}</div>
-        <div className="coverage-feature-card-pct">{feature.coveragePct}%</div>
+        <div className="coverage-feature-card-head-right">
+          {activeRun ? (
+            <span
+              className="coverage-feature-card-running"
+              title={`${labelForAgent(activeRun.agentName)} is running on this feature`}
+            >
+              <Icon.Spinner size={9} style={{ animation: 'spin 0.9s linear infinite' }} />
+              Running
+            </span>
+          ) : null}
+          <div className="coverage-feature-card-pct">{feature.coveragePct}%</div>
+        </div>
       </button>
 
       <div className="coverage-feature-card-bar">
@@ -323,6 +349,7 @@ export function RunRow({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const closePopover = useCallback(() => setPopoverOpen(false), []);
   useClickOutside(popoverOpen, wrapRef, closePopover);
+  const openPlan = useStore((s) => s.openPlan);
 
   const agentLabel = labelForAgent(agentName);
   const running = activeRun !== null;
@@ -377,6 +404,16 @@ export function RunRow({
           {plan.name}
         </span>
         {running ? <span className="coverage-feature-card-run-status">Running…</span> : null}
+      </button>
+      <button
+        type="button"
+        className="btn ghost icon coverage-feature-card-run-edit"
+        onClick={() => openPlan(plan.id)}
+        title={`Open "${plan.name}" in the editor`}
+        aria-label={`Edit ${plan.name}`}
+        data-testid={`feature-card-edit-${featureLabel}-${plan.id}`}
+      >
+        <Icon.Doc size={11} />
       </button>
       {popoverOpen && !running ? (
         <div className="coverage-feature-card-run-pop">

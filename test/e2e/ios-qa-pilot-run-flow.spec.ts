@@ -414,7 +414,9 @@ test('Plan reuse across agents: a QA Hunter plan can be extended to ios-qa-pilot
   // 2. Going to the Agents page and clicking Run now WOULD fail with
   // TEST_PLAN_REQUIRED because the only plan is for qa-hunter — so we
   // first open Test Plans and add ios-qa-pilot to the existing plan.
-  await page.getByRole('button', { name: 'Test Plans', exact: true }).click();
+  // (Test Plans is now reached from inside Coverage, not the sidebar.)
+  await page.getByRole('button', { name: 'Coverage', exact: true }).click();
+  await page.getByTestId('coverage-open-plans-btn').click();
 
   // The plan editor renders chips for each QA agent. Click iOS QA Pilot
   // to add it to the plan's agentNames.

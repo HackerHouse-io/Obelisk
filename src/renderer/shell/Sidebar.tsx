@@ -14,7 +14,9 @@ const NAV: NavRow[] = [
   { id: 'mission', label: 'Mission Control', icon: 'Pipeline' },
   { id: 'backlog', label: 'Backlog', icon: 'Backlog' },
   { id: 'agents', label: 'Agents', icon: 'Agents' },
-  { id: 'test-plans', label: 'Test Plans', icon: 'Playbook' },
+  // Test Plans is no longer a top-level destination — plans are nested under
+  // Coverage (per feature) and opened via deep-link. The 'test-plans' route
+  // still exists for that editor view.
   { id: 'coverage', label: 'Coverage', icon: 'Sliders' },
   { id: 'qa', label: 'iOS QA Pilot', icon: 'Phone' },
   { id: 'connect', label: 'Connect Repo', icon: 'Connect' },

@@ -956,6 +956,28 @@ export interface IpcMap {
   };
   'coverage:dismissJob': { req: { jobId: string }; res: { ok: true } };
 
+  // Coverage Agent — the autonomous loop. Starts a pass that maps features,
+  // detects gaps, auto-drafts the missing test plans, then runs the Bug
+  // Hunter against new + stale plans. Returns immediately with a coverageRunId;
+  // progress is broadcast via the `coverageRun.progress` bus event.
+  'coverage:startLoop': {
+    req: { repoId: string; gapThreshold?: number; budgetSpawns?: number };
+    res: { coverageRunId: string };
+  };
+  'coverage:cancelLoop': { req: { coverageRunId: string }; res: { ok: true } };
+  // The latest pass for this repo (active one if present, else most recent
+  // terminal one). Null when the loop has never run.
+  'coverage:loopStatus': { req: { repoId: string }; res: CoverageRunSummary | null };
+  // Backend ground truth for whether a pass can run right now (a coding-agent
+  // CLI must be installed). The renderer disables the Run button on `!canRun`.
+  'coverage:loopPreflight': { req: { repoId: string }; res: { canRun: boolean; reason?: string } };
+  // Per-repo schedule for the autonomous sweep (enable + cron), like any agent.
+  'coverage:getSchedule': { req: { repoId: string }; res: CoverageSchedule };
+  'coverage:setSchedule': {
+    req: { repoId: string; enabled?: boolean; cron?: string };
+    res: CoverageSchedule;
+  };
+
   // iOS QA Pilot
   'qa:list': { req: { repoId: string }; res: QaFlow[] };
   'qa:plan': {
@@ -1065,6 +1087,63 @@ export interface CoverageReport {
   lastDoneAt: ISO | null;
 }
 
+/* ---------- Coverage Agent (autonomous loop) ---------- */
+
+export type CoverageRunTrigger = 'manual' | 'schedule';
+
+/**
+ * A coverage "pass" walks these stages in order. `queued` is the brief gap
+ * between row creation and the first await; the three middle stages mirror
+ * the pipeline (map the repo → detect gaps → draft missing plans → hunt the
+ * plans). The pass always ends in one of the three terminal stages.
+ */
+export type CoverageRunStage =
+  | 'queued'
+  | 'mapping'
+  | 'detecting'
+  | 'drafting'
+  | 'hunting'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export type CoverageRunStepKind = 'map' | 'generate' | 'hunt';
+export type CoverageRunStepState = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+
+/** One spawned unit of work inside a pass (a map job, a plan generation, a hunt). */
+export interface CoverageRunStep {
+  id: number;
+  kind: CoverageRunStepKind;
+  featureLabel: string | null;
+  ref: string | null;
+  state: CoverageRunStepState;
+  detail: string | null;
+  at: ISO;
+}
+
+/** The full pass record the renderer renders in the Coverage Agent card. */
+export interface CoverageRunSummary {
+  id: string;
+  repoId: string;
+  trigger: CoverageRunTrigger;
+  stage: CoverageRunStage;
+  status: string | null;
+  budgetSpawns: number;
+  spawnsUsed: number;
+  gapThreshold: number;
+  startedAt: ISO;
+  finishedAt: ISO | null;
+  errorMessage: string | null;
+  errorHint: string | null;
+  steps: CoverageRunStep[];
+}
+
+/** Per-repo schedule for the autonomous Coverage Agent sweep. */
+export interface CoverageSchedule {
+  enabled: boolean;
+  cron: string;
+}
+
 /* ---------- Bus events ---------- */
 
 export type BusEvent =
@@ -1098,6 +1177,7 @@ export type BusEvent =
   | { type: 'testPlans.changed'; repoId: string }
   | { type: 'testPlanGeneration.progress'; job: TestPlanGenerationJob }
   | { type: 'coverageMapGeneration.progress'; job: CoverageMapGenerationJob }
+  | { type: 'coverageRun.progress'; run: CoverageRunSummary }
   | {
       type: 'agent.autoPaused';
       repoId: string;

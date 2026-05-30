@@ -19,6 +19,15 @@ interface ObeliskState {
   route: Route;
   setRoute: (route: Route) => void;
 
+  /**
+   * Deep-link target for the (now nested) test-plan editor. Coverage opens a
+   * plan by setting this + routing to 'test-plans'; the editor consumes it on
+   * mount and clears it. Null = no pending selection (editor picks its own).
+   */
+  pendingPlanId: string | null;
+  openPlan: (planId: string) => void;
+  clearPendingPlan: () => void;
+
   /* auth */
   auth: AuthStatus;
   setAuth: (auth: AuthStatus) => void;
@@ -55,6 +64,10 @@ interface ObeliskState {
 export const useStore = create<ObeliskState>((set) => ({
   route: 'home',
   setRoute: (route) => set({ route }),
+
+  pendingPlanId: null,
+  openPlan: (planId) => set({ pendingPlanId: planId, route: 'test-plans' }),
+  clearPendingPlan: () => set({ pendingPlanId: null }),
 
   auth: { signedIn: false },
   setAuth: (auth) => set({ auth }),

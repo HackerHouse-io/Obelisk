@@ -105,8 +105,9 @@ test('Test Plans screen lists seeded plans and the Run button dispatches with pl
   });
   const page = ctx.window;
 
-  // Navigate to Test Plans via the sidebar
-  await page.getByRole('button', { name: 'Test Plans', exact: true }).click();
+  // Test Plans is now reached from inside Coverage (no longer a sidebar tab).
+  await page.getByRole('button', { name: 'Coverage', exact: true }).click();
+  await page.getByTestId('coverage-open-plans-btn').click();
 
   // Plan in the sidebar list
   await expect(page.getByTestId('plan-item-full-app')).toBeVisible();

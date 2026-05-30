@@ -13,6 +13,9 @@ import { backlogSyncSweep } from './backlog-sync';
 import { worktreeReaperSweep } from './worktree-reaper';
 import { claimSignalReaperSweep } from './claim-signal-reaper';
 import { defaultCronFor, isDue } from './cron';
+import { getCoverageSchedule } from './coverage-schedule';
+import { startCoverageRun } from '../coverage/agent-loop';
+import { getActiveCoverageRun, getLatestCoverageRun } from '../db/coverage-runs';
 import { broadcast } from '../ipc/bus';
 import { appendAudit } from '../logger/audit';
 import type { Agent, AgentName, Repo, Run } from '../../shared/types';
@@ -31,10 +34,15 @@ const AUTO_MERGE_EVERY_N_TICKS = 10; // = 5 min
 // instantly. Earlier 2-min cadence felt chatty without much benefit.
 const BACKLOG_SYNC_EVERY_N_TICKS = 10; // = 5 min
 const WORKTREE_REAPER_EVERY_N_TICKS = 20; // = 10 min
+// The Coverage Agent is heavy (it spawns generation + hunt runs) and converges
+// over many passes, so a slow cadence is plenty — we only check whether a
+// repo's cron is due every 10 min.
+const COVERAGE_SWEEP_EVERY_N_TICKS = 20; // = 10 min
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let tickCount = 0;
 const inFlightDispatch = new Set<string>();
+const inFlightCoverageLoop = new Set<string>();
 
 export interface SchedulerHandle {
   stop: () => void;
@@ -57,6 +65,7 @@ export function stopScheduler(): void {
   }
   tickCount = 0;
   inFlightDispatch.clear();
+  inFlightCoverageLoop.clear();
 }
 
 async function tick(): Promise<void> {
@@ -81,6 +90,44 @@ async function tick(): Promise<void> {
     // governs both, and rolling them onto adjacent ticks keeps the audit
     // log easier to read.
     void claimSignalReaperSweep();
+  }
+  if (tickCount % COVERAGE_SWEEP_EVERY_N_TICKS === 0) {
+    for (const repo of listRepos()) {
+      coverageLoopSweep(repo);
+    }
+  }
+}
+
+/**
+ * Dispatch the autonomous Coverage Agent when a repo's cron is due. Opt-in
+ * per repo via `coverage.enabled`. Single-flight: never overlap with an
+ * in-flight pass (DB-level) or another sweep tick (in-memory set). The pass
+ * itself is budget-bounded, so a scheduled run can't run away.
+ */
+function coverageLoopSweep(repo: Repo): void {
+  const schedule = getCoverageSchedule(repo.id);
+  if (!schedule.enabled) return;
+  if (inFlightCoverageLoop.has(repo.id)) return;
+  if (getActiveCoverageRun(repo.id)) return;
+
+  const latest = getLatestCoverageRun(repo.id);
+  const basis = latest ? new Date(latest.startedAt) : new Date(repo.connectedAt);
+  if (!isDue(schedule.cron, basis)) return;
+
+  inFlightCoverageLoop.add(repo.id);
+  try {
+    startCoverageRun(repo.id, { trigger: 'schedule' });
+  } catch (e) {
+    appendAudit({
+      runId: 'system',
+      kind: 'scheduler_error',
+      payload: { repo: repo.githubFullName, agent: 'coverage-agent', error: String(e) },
+    });
+  } finally {
+    // startCoverageRun returns synchronously (the pass runs in the
+    // background and is guarded by getActiveCoverageRun on the next tick),
+    // so we only need this set to dedup within a single sweep pass.
+    inFlightCoverageLoop.delete(repo.id);
   }
 }
 

@@ -1,8 +1,10 @@
 import { useMemo, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
 import { showApiAlert } from '../../state/alert-store';
-import { findActiveRun, RunRow, type ActiveRun, type RunnerInstalled } from './FeatureCard';
-import type { AgentName, CoverageFeature, TestPlanGenerationJob } from '../../../shared/types';
+import { runAgentByName } from '../../state/agent-actions';
+import { labelForAgent } from '../../format';
+import { featureActiveRun, type ActiveRun, type RunnerInstalled } from './FeatureCard';
+import type { CoverageFeature, TestPlanGenerationJob } from '../../../shared/types';
 
 interface Props {
   repoId: string;
@@ -117,6 +119,21 @@ export function CoverageFeaturesTable({
     }
   }
 
+  /** Run the Bug Hunter (qa-hunter) on a feature's plan — the common action.
+   *  Prefer a plan the agent is already attached to; fall back to the first. */
+  async function handleRun(f: CoverageFeature): Promise<void> {
+    const plan = f.planRefs.find((p) => p.agentNames.includes('qa-hunter')) ?? f.planRefs[0];
+    if (!plan) return;
+    setBusy(`run:${f.label}`);
+    try {
+      const res = await runAgentByName(repoId, 'qa-hunter', { taskId: `plan:${plan.id}` });
+      if (!res.ok) showApiAlert(res.error, 'run agent');
+      else onChange();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="coverage-table-card" data-testid="coverage-features-table">
       <div className="coverage-table-filter-strip" role="radiogroup" aria-label="Feature filter">
@@ -188,12 +205,7 @@ export function CoverageFeaturesTable({
             const job = jobByLabel.get(f.label);
             const generating = job !== undefined;
             const hasPlan = f.planRefs.length > 0;
-            const planRows: { plan: (typeof f.planRefs)[number]; agentName: AgentName }[] = [];
-            for (const plan of f.planRefs) {
-              for (const agentName of plan.agentNames) {
-                planRows.push({ plan, agentName });
-              }
-            }
+            const activeRun = featureActiveRun(activeRuns, f);
             return (
               <div
                 key={f.label}
@@ -223,54 +235,73 @@ export function CoverageFeaturesTable({
                 <div className={`coverage-features-cell num${f.openFindings > 0 ? ' bad' : ''}`}>
                   {f.openFindings}
                 </div>
-                <div className="coverage-features-cell">
-                  {hasPlan
-                    ? f.planRefs.length === 1
-                      ? f.planRefs[0]!.name
-                      : `${f.planRefs.length} plans`
-                    : '—'}
+                <div className="coverage-features-cell coverage-features-cell-plan">
+                  <span
+                    className={`coverage-features-plan-name${hasPlan ? '' : ' none'}`}
+                    title={
+                      hasPlan
+                        ? f.planRefs.map((p) => p.name).join(', ')
+                        : 'No test plan covers this feature yet'
+                    }
+                  >
+                    {hasPlan
+                      ? f.planRefs.length === 1
+                        ? f.planRefs[0]!.name
+                        : `${f.planRefs.length} plans`
+                      : 'No plan'}
+                  </span>
+                  {activeRun ? (
+                    <span
+                      className="coverage-features-running"
+                      title={`${labelForAgent(activeRun.agentName)} is running on this feature`}
+                    >
+                      <Icon.Spinner size={9} style={{ animation: 'spin 0.9s linear infinite' }} />
+                      Running
+                    </span>
+                  ) : null}
                 </div>
                 <div
                   className="coverage-features-cell coverage-features-cell-actions"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {!hasPlan ? (
+                  {generating ? (
+                    <span className="coverage-features-action-status" title={job!.status}>
+                      <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+                      {stageShort(job!)}…
+                    </span>
+                  ) : !hasPlan ? (
                     <button
                       type="button"
                       className="btn sm primary"
-                      disabled={busy !== null || generating || installed === null || !runnersOk}
+                      disabled={busy !== null || installed === null || !runnersOk}
                       onClick={(e) => {
                         e.stopPropagation();
                         void handleGenerate(f.label);
                       }}
-                      title={generating ? job!.status : 'Generate a feature-scoped test plan'}
+                      title={runnersHint ?? 'Generate a feature-scoped test plan'}
                       data-testid={`coverage-table-generate-${f.label}`}
                     >
-                      {generating ? (
-                        <Icon.Spinner
-                          size={11}
-                          style={{ animation: 'spin 0.9s linear infinite' }}
-                        />
-                      ) : (
-                        <Icon.Sparkles size={11} />
-                      )}{' '}
-                      {generating ? stageShort(job!) : 'Plan'}
+                      <Icon.Sparkles size={11} /> Generate test plan
                     </button>
+                  ) : activeRun ? (
+                    <span className="coverage-features-action-status">
+                      <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+                      Running…
+                    </span>
                   ) : (
-                    planRows.map(({ plan, agentName }) => (
-                      <RunRow
-                        key={`${plan.id}:${agentName}`}
-                        repoId={repoId}
-                        featureLabel={f.label}
-                        plan={plan}
-                        agentName={agentName}
-                        installed={installed}
-                        runnersOk={runnersOk}
-                        runnersHint={runnersHint}
-                        activeRun={findActiveRun(activeRuns, plan.id, agentName)}
-                        onChange={onChange}
-                      />
-                    ))
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={busy !== null || installed === null || !runnersOk}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRun(f);
+                      }}
+                      title={runnersHint ?? 'Run the Bug Hunter on this feature’s test plan'}
+                      data-testid={`coverage-table-run-${f.label}`}
+                    >
+                      <Icon.Play size={11} /> Run QA Hunter
+                    </button>
                   )}
                 </div>
               </div>

@@ -6074,6 +6074,225 @@ body {
   border-radius: 8px;
   font-size: 12px;
 }
+
+/* ---------- Coverage Agent card ---------- */
+.coverage-agent-card {
+  border: 1px solid oklch(72% 0.05 230 / 0.18);
+  border-radius: 10px;
+  background: var(--bg-1);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.coverage-agent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.coverage-agent-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--t-0);
+}
+.coverage-agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t-3);
+  flex: 0 0 auto;
+}
+.coverage-agent-dot.running {
+  background: var(--brand);
+  box-shadow: 0 0 0 3px oklch(60% 0.12 240 / 0.2);
+  animation: coverage-agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes coverage-agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.coverage-agent-sub {
+  font-size: 12px;
+  color: var(--t-2);
+  line-height: 1.4;
+}
+.coverage-agent-phases {
+  display: flex;
+  gap: 6px;
+}
+.coverage-agent-phase {
+  flex: 1 1 0;
+  text-align: center;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid oklch(72% 0.05 230 / 0.14);
+  color: var(--t-3);
+  background: var(--bg-2);
+}
+.coverage-agent-phase-active {
+  color: var(--brand-text);
+  border-color: oklch(60% 0.12 240 / 0.45);
+  background: oklch(60% 0.12 240 / 0.12);
+  font-weight: 600;
+}
+.coverage-agent-phase-done {
+  color: var(--t-1);
+  border-color: oklch(72% 0.05 230 / 0.24);
+}
+.coverage-agent-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--t-1);
+}
+.coverage-agent-status-budget {
+  color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.coverage-agent-error {
+  font-size: 12px;
+  color: var(--t-1);
+  background: var(--bad-soft);
+  border: 1px solid oklch(66% 0.18 18 / 0.4);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.coverage-agent-error-hint {
+  flex-basis: 100%;
+  color: var(--t-2);
+}
+.coverage-agent-preflight {
+  font-size: 11px;
+  color: var(--t-3);
+}
+.coverage-agent-schedule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px solid oklch(72% 0.05 230 / 0.12);
+  padding-top: 10px;
+}
+.coverage-agent-schedule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--t-1);
+}
+.coverage-agent-schedule-cron {
+  max-width: 160px;
+}
+
+/* ---------- Coverage guided tour ---------- */
+.coverage-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+/* Dim everything except the spotlit element via one giant box-shadow. */
+.coverage-tour-spotlight {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 9999px oklch(20% 0.02 250 / 0.62),
+    0 0 0 2px var(--brand);
+  pointer-events: none;
+  transition:
+    top 160ms ease,
+    left 160ms ease,
+    width 160ms ease,
+    height 160ms ease;
+}
+/* Plain scrim for centered (unanchored) steps. */
+.coverage-tour-scrim {
+  position: fixed;
+  inset: 0;
+  background: oklch(20% 0.02 250 / 0.62);
+}
+.coverage-tour-card {
+  position: fixed;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  background: var(--bg-1);
+  border: 1px solid oklch(72% 0.05 230 / 0.28);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 18px 48px oklch(15% 0.02 250 / 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.coverage-tour-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.coverage-tour-step-count {
+  font-size: 11px;
+  color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+}
+.coverage-tour-skip {
+  background: none;
+  border: none;
+  color: var(--t-3);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.coverage-tour-skip:hover {
+  color: var(--t-1);
+}
+.coverage-tour-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--t-0);
+}
+.coverage-tour-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--t-1);
+}
+.coverage-tour-dots {
+  display: flex;
+  gap: 5px;
+  padding: 2px 0;
+}
+.coverage-tour-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  transition: background 120ms ease;
+}
+.coverage-tour-dot.active {
+  background: var(--brand);
+}
+.coverage-tour-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
 .coverage-banner-error {
   background: var(--bad-soft);
   color: var(--t-1);
@@ -6733,11 +6952,10 @@ body {
 .coverage-features-table-head,
 .coverage-features-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) minmax(140px, 1.2fr) 70px 70px 70px 80px minmax(
-      180px,
-      1.5fr
-    );
-  gap: 8px;
+  grid-template-columns:
+    minmax(120px, 1.3fr) minmax(120px, 1.1fr) 64px 64px 64px minmax(120px, 1.4fr)
+    150px;
+  gap: 10px;
   align-items: center;
   padding: 8px 12px;
 }
@@ -6835,9 +7053,52 @@ body {
 }
 .coverage-features-cell-actions {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
   justify-content: flex-end;
+  min-width: 0;
+}
+.coverage-features-cell-actions .btn {
+  white-space: nowrap;
+}
+/* Plan column: name (truncated) + an optional Running chip. */
+.coverage-features-cell-plan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.coverage-features-plan-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.coverage-features-plan-name.none {
+  color: var(--t-3);
+}
+/* "Running" chip — shared shape for the table Plan cell + feature-card head. */
+.coverage-features-running,
+.coverage-feature-card-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--brand-text);
+  background: oklch(60% 0.12 240 / 0.14);
+  border: 1px solid oklch(60% 0.12 240 / 0.4);
+  border-radius: 999px;
+  padding: 1px 7px 1px 5px;
+  white-space: nowrap;
+}
+.coverage-features-action-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--brand-text);
+  white-space: nowrap;
 }
 .coverage-table-empty {
   padding: 24px;
@@ -6902,6 +7163,20 @@ body {
   color: var(--t-0);
   text-align: left;
   text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.coverage-feature-card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+/* A feature whose plan is being hunted right now gets a brand-tinted border. */
+.coverage-feature-card.running {
+  border-color: oklch(60% 0.12 240 / 0.45);
 }
 .coverage-feature-card-pct {
   font-size: 22px;
@@ -7037,11 +7312,19 @@ body {
 }
 .coverage-feature-card-run-row {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.coverage-feature-card-run-edit {
+  flex: 0 0 auto;
 }
 .coverage-feature-card-run-trigger {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   text-align: left;
   background: var(--bg-1);

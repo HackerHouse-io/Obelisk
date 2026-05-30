@@ -34,6 +34,13 @@ export interface LaunchOptions {
    */
   pathOverride?: string;
   /**
+   * First-run guided tours (e.g. the Coverage tour) auto-show on a user's
+   * first visit. By default tests run as a *returning* user — the fixture
+   * pre-marks those tours as seen so they don't overlay the screen under
+   * test. Set `true` to run as a brand-new user and exercise the auto-show.
+   */
+  freshTour?: boolean;
+  /**
    * Point Octokit at a stub HTTP server (see `github-stub.ts`). Sets
    * `OBELISK_GITHUB_BASE_URL` for the spawned Electron process so every
    * Octokit call hits the stub instead of api.github.com — the only way
@@ -101,6 +108,20 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
 
   const window = await app.firstWindow({ timeout: 30_000 });
   await window.waitForLoadState('domcontentloaded');
+
+  // Default to a "returning user": pre-mark first-run tours as seen so they
+  // don't overlay the screen under test. The SPA never reloads, so setting
+  // this before the test navigates is enough. `freshTour` opts back in.
+  if (!opts.freshTour) {
+    await window.evaluate(() => {
+      try {
+        localStorage.setItem('obelisk:coverageTourSeen:v1', '1');
+      } catch {
+        // storage unavailable — tours simply auto-show, which the consuming
+        // spec can still dismiss.
+      }
+    });
+  }
 
   return {
     app,

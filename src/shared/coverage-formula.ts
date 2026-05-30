@@ -32,6 +32,53 @@ export interface FeatureScoreBreakdown {
   coveragePct: number;
 }
 
+import type { CoverageFeature, CoverageReport, CoverageRunStage } from './types';
+
+/** The stages a coverage pass can end in. Shared so main + renderer agree. */
+export const COVERAGE_TERMINAL_STAGES: ReadonlySet<CoverageRunStage> = new Set([
+  'done',
+  'failed',
+  'cancelled',
+]);
+
+export function isCoverageRunTerminal(stage: CoverageRunStage): boolean {
+  return COVERAGE_TERMINAL_STAGES.has(stage);
+}
+
+export interface PickGapsOptions {
+  /** Features whose coveragePct is below this (0..100) are gaps. Default 70. */
+  threshold?: number;
+  /** Hard cap on how many gaps a single pass works. Default 6. */
+  max?: number;
+}
+
+/**
+ * Pick the features the Coverage Agent should work this pass, worst-first.
+ *
+ * A "gap" is a real feature scoring below `threshold`. We exclude:
+ *   - stale labels (referenced by a case but matching zero tracked files) —
+ *     working them would chase a phantom, and the user fixes those by
+ *     editing `qa/coverage-map.md`.
+ *   - zero-file labels (`filesInGlob === 0`) for the same reason.
+ *
+ * Ordering: lowest coverage first, then most cases (a feature with cases that
+ * are failing/stale is a more urgent gap than one that was never touched but
+ * is tiny). Capped at `max` so a single pass stays bounded on big repos.
+ *
+ * Pure + shared so both the loop and its unit tests agree on the selection.
+ */
+export function pickGaps(report: CoverageReport, opts: PickGapsOptions = {}): CoverageFeature[] {
+  const threshold = opts.threshold ?? 70;
+  const max = opts.max ?? 6;
+  const stale = new Set(report.staleLabels.map((l) => l.toLowerCase()));
+  return report.features
+    .filter((f) => f.filesInGlob > 0)
+    .filter((f) => !stale.has(f.label.toLowerCase()))
+    .filter((f) => f.coveragePct < threshold)
+    .sort((a, b) => a.coveragePct - b.coveragePct || b.caseCount - a.caseCount)
+    .slice(0, Math.max(0, max));
+}
+
 export function clamp01(n: number): number {
   if (Number.isNaN(n)) return 0;
   if (n < 0) return 0;

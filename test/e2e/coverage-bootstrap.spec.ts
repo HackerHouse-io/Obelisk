@@ -381,6 +381,10 @@ test('Expand modal shows a SORTABLE TABLE, not a giant radar', async () => {
     .count();
   expect(modalRadarCount).toBe(0);
 
+  // The action for a plan-less feature is explicit, not a cryptic "Plan".
+  const genBtn = page.locator('[data-testid^="coverage-table-generate-"]').first();
+  await expect(genBtn).toContainText('Generate test plan');
+
   // Sort by Coverage % — already default. Click "Feature" header to sort alphabetically.
   await page.getByTestId('coverage-table-sort-name').click();
   // First visible row label should be alphabetically earliest among feat0..feat13.

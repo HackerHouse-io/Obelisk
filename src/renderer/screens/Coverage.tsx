@@ -5,6 +5,8 @@ import { showApiAlert, showAlert } from '../state/alert-store';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { EmptyState } from '../ui/EmptyState';
 import { CoverageRadar } from './coverage/CoverageRadar';
+import { CoverageAgentCard } from './coverage/CoverageAgentCard';
+import { CoverageTour, type TourStep } from './coverage/CoverageTour';
 import { CoverageFeaturesTable } from './coverage/CoverageFeaturesTable';
 import { FeatureCard, type ActiveRun, type RunnerInstalled } from './coverage/FeatureCard';
 import { WholeAppPlansCard } from './coverage/WholeAppPlansCard';
@@ -36,9 +38,44 @@ const FILTERS: { id: Filter; label: string; help: string }[] = [
   },
 ];
 
+/** Bumped when the tour content changes materially, so returning users see it again. */
+const TOUR_SEEN_KEY = 'obelisk:coverageTourSeen:v1';
+
+const COVERAGE_TOUR_STEPS: TourStep[] = [
+  {
+    title: 'Welcome to Coverage',
+    body: 'This is where Obelisk keeps your whole app tested — automatically. Here’s the 30-second tour. You can replay it anytime from the ? button.',
+  },
+  {
+    targetTestId: 'coverage-agent-card',
+    title: 'The Coverage Agent',
+    body: 'It scans your repo, finds features that are under-tested, writes the missing test plans, and runs the Bug Hunter on them — all on its own.',
+  },
+  {
+    targetTestId: 'coverage-agent-run',
+    title: 'Run a pass now',
+    body: 'One click does the whole thing: map your features → find the gaps → draft the missing plans → hunt for bugs. Watch the phases light up as it works.',
+  },
+  {
+    targetTestId: 'coverage-agent-schedule',
+    title: 'Or let it run itself',
+    body: 'Turn this on and the agent runs that same pass on a schedule — daily, every 6 hours, or weekly — so coverage keeps improving with zero clicks.',
+  },
+  {
+    targetTestId: 'coverage-open-plans-btn',
+    title: 'See and edit the plans',
+    body: 'Every plan the agent drafts is a real, editable file. Open them here, or click a plan on any feature card to jump straight into the editor.',
+  },
+  {
+    title: 'That’s it!',
+    body: 'Click “Run coverage pass” to start, or just turn on the schedule and walk away. Need this again? Hit the ? in the top-right anytime.',
+  },
+];
+
 export function Coverage(): ReactElement {
   const repos = useStore((s) => s.repos);
   const selectedRepoId = useStore((s) => s.selectedRepoId);
+  const setRoute = useStore((s) => s.setRoute);
   const repo = repos.find((r) => r.id === selectedRepoId);
 
   const [report, setReport] = useState<CoverageReport | null>(null);
@@ -56,6 +93,8 @@ export function Coverage(): ReactElement {
   const [regenKeepExisting, setRegenKeepExisting] = useState(false);
   const [cleanStaleConfirmOpen, setCleanStaleConfirmOpen] = useState(false);
   const [cleanStaleBusy, setCleanStaleBusy] = useState(false);
+  /** First-run guided tour. Auto-opens once; replayable from the header ? button. */
+  const [tourOpen, setTourOpen] = useState(false);
   /**
    * All in-flight test plan generation jobs for this repo. Keyed by jobId
    * so updates from the bus replace rather than append. Passed to each
@@ -107,6 +146,29 @@ export function Coverage(): ReactElement {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Auto-show the guided tour the first time a user lands on Coverage. The
+  // "seen" flag is persisted so it never nags again — but the ? button in the
+  // header always replays it on demand.
+  useEffect(() => {
+    if (!repo) return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem(TOUR_SEEN_KEY) === '1';
+    } catch {
+      // Private mode / storage disabled — treat as unseen (tour still works).
+    }
+    if (!seen) setTourOpen(true);
+  }, [repo]);
+
+  const closeTour = useCallback((): void => {
+    setTourOpen(false);
+    try {
+      localStorage.setItem(TOUR_SEEN_KEY, '1');
+    } catch {
+      // Best-effort — the tour simply re-shows next visit if storage is blocked.
+    }
+  }, []);
 
   // Probe runner availability so feature-card CTAs can disable themselves
   // when no CLI is on PATH. Match the same shape TestPlans uses.
@@ -436,6 +498,25 @@ export function Coverage(): ReactElement {
           </div>
         </div>
         <div className="coverage-header-actions">
+          <button
+            type="button"
+            className="btn ghost icon coverage-tour-replay-btn"
+            onClick={() => setTourOpen(true)}
+            title="Show the Coverage tour"
+            aria-label="Show the Coverage tour"
+            data-testid="coverage-tour-replay-btn"
+          >
+            <Icon.Help size={13} />
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setRoute('test-plans')}
+            title="Open the test-plan editor"
+            data-testid="coverage-open-plans-btn"
+          >
+            <Icon.Doc size={11} /> Plans
+          </button>
           {report?.hasCoverageMap ? (
             <button
               type="button"
@@ -470,6 +551,8 @@ export function Coverage(): ReactElement {
           <div>{error}</div>
         </div>
       ) : null}
+
+      <CoverageAgentCard repoId={repo.id} onPassComplete={() => void load()} />
 
       {report && !report.hasCoverageMap && !genJob ? (
         <div className="coverage-banner coverage-banner-info">
@@ -821,6 +904,8 @@ export function Coverage(): ReactElement {
           </div>
         </div>
       ) : null}
+
+      <CoverageTour steps={COVERAGE_TOUR_STEPS} open={tourOpen} onClose={closeTour} />
     </div>
   );
 }
