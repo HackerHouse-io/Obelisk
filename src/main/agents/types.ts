@@ -67,6 +67,17 @@ export interface AgentHandler {
   readonly producesPatch: boolean;
 
   /**
+   * Whether a run of this agent must be paired with a test plan (QA Hunter,
+   * Manual QA, iOS QA Pilot). When true, both the scheduler and the manual
+   * dispatch resolve a concrete plan before spawning: the agent's
+   * `defaultPlanId` if set, otherwise the plan whose feature has the lowest
+   * coverage (worst-first). Without this, a scheduled run with no hint and
+   * multiple plans throws TEST_PLAN_REQUIRED before a run row exists, leaving
+   * the schedule stuck at "Next now".
+   */
+  readonly requiresTestPlan?: boolean;
+
+  /**
    * Findings always go to the previews table for human approval, regardless
    * of repo safety mode. The user must click "Open on GitHub" in the
    * FileIssueModal to actually file. QA Hunter and Manual QA opt in — a

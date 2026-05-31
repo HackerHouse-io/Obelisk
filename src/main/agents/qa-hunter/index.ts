@@ -39,6 +39,7 @@ export const qaHunterHandler: AgentHandler = {
   // (which is about PR evidence) doesn't apply.
   skipsEvidenceGate: true,
   producesPatch: false,
+  requiresTestPlan: true,
   // QA findings always go to previews regardless of repo safety mode —
   // a false-positive run shouldn't be able to spam the user's GitHub.
   alwaysPreview: true,

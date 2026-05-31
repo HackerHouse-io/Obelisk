@@ -104,7 +104,9 @@ function ToastCard({
 
   const sub =
     job.stage === 'done'
-      ? `${repoLabel} · open and review`
+      ? job.planName
+        ? `“${job.planName}” · ${repoLabel} — open and review`
+        : `${repoLabel} · open and review`
       : job.stage === 'failed'
         ? (job.errorMessage ?? 'Something went wrong')
         : job.status;

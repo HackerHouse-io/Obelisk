@@ -85,6 +85,8 @@ import {
   handleCoverageCleanStaleLabels,
   handleCoverageStartLoop,
   handleCoverageCancelLoop,
+  handleCoveragePauseLoop,
+  handleCoverageResumeLoop,
   handleCoverageLoopStatus,
   handleCoverageLoopPreflight,
   handleCoverageGetSchedule,
@@ -222,6 +224,8 @@ export function registerIpcHandlers(): void {
   // Coverage Agent — the autonomous map → gaps → draft → hunt loop.
   register('coverage:startLoop', handleCoverageStartLoop);
   register('coverage:cancelLoop', handleCoverageCancelLoop);
+  register('coverage:pauseLoop', handleCoveragePauseLoop);
+  register('coverage:resumeLoop', handleCoverageResumeLoop);
   register('coverage:loopStatus', handleCoverageLoopStatus);
   register('coverage:loopPreflight', handleCoverageLoopPreflight);
   register('coverage:getSchedule', handleCoverageGetSchedule);

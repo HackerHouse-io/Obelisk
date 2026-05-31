@@ -37,17 +37,32 @@ describe('computeFeatureScore', () => {
     expect(r.caseScore).toBe(0);
   });
 
-  it('files alone get to ~40% (no freshness, no case passes yet)', () => {
+  it('a drafted plan with no passing runs earns 0% (proven-only)', () => {
+    const r = computeFeatureScore({
+      filesInGlob: 10,
+      filesWithCases: 10, // every file has a case authored…
+      filesRecentPass: 0, // …but nothing has run + passed yet
+      caseCount: 20,
+      casesPassed: 0,
+      openFindings: 0,
+    });
+    // Authoring a plan must not move the needle — proof, not existence.
+    expect(r.coveragePct).toBe(0);
+    expect(r.fileScore).toBe(0);
+    expect(r.caseScore).toBe(0);
+  });
+
+  it('proven file coverage alone (passing files, no case tally) earns credit', () => {
     const r = computeFeatureScore({
       filesInGlob: 10,
       filesWithCases: 10,
-      filesRecentPass: 0,
+      filesRecentPass: 10, // all files have a recent passing run
       caseCount: 0,
       casesPassed: 0,
       openFindings: 0,
     });
-    // fileScore = 1.0 * 0.40 = 40
-    expect(r.coveragePct).toBe(40);
+    // 0.5 * (10/10) + 0.5 * 0 = 0.50 → 50
+    expect(r.coveragePct).toBe(50);
   });
 
   it('all-pass / all-fresh / all-files lands at 100', () => {
@@ -87,17 +102,17 @@ describe('computeFeatureScore', () => {
     expect(r.coveragePct).toBe(0);
   });
 
-  it('halfway results: half files cased + half passed', () => {
+  it('halfway results: half files freshly passing + half cases passed', () => {
     const r = computeFeatureScore({
       filesInGlob: 10,
-      filesWithCases: 5,
-      filesRecentPass: 0,
+      filesWithCases: 10,
+      filesRecentPass: 5, // half the surface has a recent passing run
       caseCount: 10,
-      casesPassed: 5,
+      casesPassed: 5, // half the cases passed
       openFindings: 0,
     });
-    // 0.40 * 0.5 + 0.30 * 0 + 0.30 * 0.5 = 0.20 + 0.15 = 0.35 → 35
-    expect(r.coveragePct).toBe(35);
+    // 0.5 * (5/10) + 0.5 * (5/10) = 0.25 + 0.25 = 0.50 → 50
+    expect(r.coveragePct).toBe(50);
   });
 });
 

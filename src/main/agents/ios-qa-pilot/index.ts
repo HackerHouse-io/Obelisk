@@ -56,6 +56,7 @@ export const iosQaPilotHandler: AgentHandler = {
     'Each instance binds to a different simulator and verifies a different flow. Cap = available sim slots.',
   skipsEvidenceGate: true,
   producesPatch: false,
+  requiresTestPlan: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     // Self-healing path. The user's mental model is: I clicked Run now,

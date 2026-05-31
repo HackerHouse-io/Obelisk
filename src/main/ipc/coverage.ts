@@ -8,7 +8,13 @@ import { matchesAnyGlob, parseCoverageMap } from '../coverage/coverage-map';
 import { scanFromTrackedFiles } from '../coverage/feature-scan';
 import { startMapGenerationJob } from '../coverage/generate-map';
 import { dismissJob, listJobs } from '../coverage/jobs';
-import { cancelCoverageRun, coverageLoopPreflight, startCoverageRun } from '../coverage/agent-loop';
+import {
+  cancelCoverageRun,
+  coverageLoopPreflight,
+  pauseCoverageRun,
+  resumeCoverageRun,
+  startCoverageRun,
+} from '../coverage/agent-loop';
 import { getLatestCoverageRun } from '../db/coverage-runs';
 import { getCoverageSchedule, setCoverageSchedule } from '../scheduler/coverage-schedule';
 import { getRepo } from '../db/repos';
@@ -252,6 +258,20 @@ export async function handleCoverageCancelLoop(
   payload: IpcMap['coverage:cancelLoop']['req'],
 ): Promise<IpcMap['coverage:cancelLoop']['res']> {
   cancelCoverageRun(payload.coverageRunId);
+  return { ok: true };
+}
+
+export async function handleCoveragePauseLoop(
+  payload: IpcMap['coverage:pauseLoop']['req'],
+): Promise<IpcMap['coverage:pauseLoop']['res']> {
+  pauseCoverageRun(payload.coverageRunId);
+  return { ok: true };
+}
+
+export async function handleCoverageResumeLoop(
+  payload: IpcMap['coverage:resumeLoop']['req'],
+): Promise<IpcMap['coverage:resumeLoop']['res']> {
+  resumeCoverageRun(payload.coverageRunId);
   return { ok: true };
 }
 

@@ -207,7 +207,7 @@ function ThinkingCard({
       <div className="mc-act-tool tone-muted" role="listitem">
         <div className="mc-act-tool-head is-static">
           <span className="mc-act-tool-icon" aria-hidden="true">
-            <Icon.Brain size={12} color="var(--t-2)" />
+            <Icon.Brain size={12} color="var(--info)" />
             <span className="mc-act-pip tone-info" />
           </span>
           <span className="mc-act-tool-time">{shortTime(row.at)}</span>
@@ -230,7 +230,7 @@ function ThinkingCard({
         aria-expanded={expanded}
       >
         <span className="mc-act-tool-icon" aria-hidden="true">
-          <Icon.Brain size={12} color="var(--t-2)" />
+          <Icon.Brain size={12} color="var(--info)" />
           <span className="mc-act-pip tone-info" />
         </span>
         <span className="mc-act-tool-time">{shortTime(row.at)}</span>

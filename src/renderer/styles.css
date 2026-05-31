@@ -1772,6 +1772,9 @@ body {
 .mc-act-pip.tone-bad {
   background: var(--bad);
 }
+.mc-act-pip.tone-info {
+  background: var(--info);
+}
 .mc-act-pip.tone-pending {
   background: var(--warn);
   animation: mcActPipPulse 1.4s ease-in-out infinite;
@@ -3074,6 +3077,16 @@ body {
   background: var(--bg-1);
   overflow-y: auto;
   gap: 6px;
+}
+
+.test-plans-back {
+  align-self: flex-start;
+  gap: 5px;
+  margin-bottom: 4px;
+  color: var(--t-2);
+}
+.test-plans-back:hover {
+  color: var(--t-0);
 }
 
 .test-plans-sidebar-header {
@@ -6199,6 +6212,152 @@ body {
 }
 .coverage-agent-schedule-cron {
   max-width: 160px;
+}
+
+/* ---------- Coverage Agent: live timeline + controls ---------- */
+.coverage-agent-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.coverage-agent-dot.paused {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px oklch(80% 0.12 80 / 0.18);
+}
+.coverage-agent-phase-paused {
+  color: var(--warn);
+  border-color: oklch(80% 0.12 80 / 0.45);
+  background: oklch(80% 0.12 80 / 0.12);
+  font-weight: 600;
+}
+.coverage-agent-status-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.coverage-agent-status-findings {
+  color: var(--bad);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What's happening right now — the live line above the timeline. */
+.coverage-agent-now {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--brand-text);
+}
+
+/* Paused-for-review banner. */
+.coverage-agent-paused {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--t-1);
+  background: oklch(80% 0.12 80 / 0.1);
+  border: 1px solid oklch(80% 0.12 80 / 0.38);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.coverage-agent-paused svg {
+  color: var(--warn);
+  flex: 0 0 auto;
+}
+
+/* The step-by-step timeline. */
+.coverage-agent-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid oklch(72% 0.05 230 / 0.12);
+  padding-top: 8px;
+}
+.coverage-agent-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--t-1);
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+}
+.coverage-agent-step.is-clickable {
+  cursor: pointer;
+}
+.coverage-agent-step.is-clickable:hover {
+  background: var(--bg-2);
+}
+.coverage-agent-step-running {
+  color: var(--t-0);
+}
+.coverage-agent-step-skipped {
+  color: var(--t-3);
+}
+.coverage-agent-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 auto;
+  color: var(--t-3);
+}
+.coverage-agent-step-icon-running {
+  color: var(--brand);
+}
+.coverage-agent-step-icon-done {
+  color: var(--ok);
+}
+.coverage-agent-step-icon-failed {
+  color: var(--bad);
+}
+.coverage-agent-step-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coverage-agent-step-findings {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+}
+.coverage-agent-step-findings.has-findings {
+  color: var(--bad);
+}
+.coverage-agent-step-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--t-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Coverage findings / pause / complete toasts — top-right so they clear the
+   bottom-corner test-plan + run-started stacks (which can co-occur). */
+.coverage-findings-toast-stack {
+  position: fixed;
+  top: 64px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 250;
+  pointer-events: none;
+  width: min(380px, calc(100vw - 36px));
+}
+.coverage-findings-toast {
+  border-color: var(--brand-line);
 }
 
 /* ---------- Coverage guided tour ---------- */

@@ -15,6 +15,7 @@ import { claimSignalReaperSweep } from './claim-signal-reaper';
 import { defaultCronFor, isDue } from './cron';
 import { getCoverageSchedule } from './coverage-schedule';
 import { startCoverageRun } from '../coverage/agent-loop';
+import { pickWorstCoveragePlanId } from '../coverage/pick-plan';
 import { getActiveCoverageRun, getLatestCoverageRun } from '../db/coverage-runs';
 import { broadcast } from '../ipc/bus';
 import { appendAudit } from '../logger/audit';
@@ -183,22 +184,44 @@ function dispatchDueAgents(repo: Repo): void {
     }
 
     inFlightDispatch.add(dispatchKey);
-    void runAgent({
-      repoId: repo.id,
-      agentName: a.name,
-      agentId: a.id,
-      trigger: 'schedule',
-    })
-      .catch((e: unknown) => {
+    void (async () => {
+      try {
+        // QA agents must run against a concrete plan. The manual "Run now"
+        // path resolves the agent's defaultPlanId; the scheduler did not,
+        // so a scheduled run with multiple plans threw TEST_PLAN_REQUIRED
+        // before a run row existed — leaving the schedule stuck at "Next
+        // now" forever. Resolve the plan here: the bound default if set,
+        // else the plan whose feature has the lowest coverage (worst-first).
+        let taskId: string | undefined;
+        if (handler.requiresTestPlan) {
+          const planId = a.defaultPlanId ?? (await pickWorstCoveragePlanId(repo, a.name));
+          if (!planId) {
+            // No plan to run and none can be auto-picked. Auto-pause so the
+            // schedule stops claiming "Next now" and the user is told why,
+            // instead of silently retrying every tick (no run row is created,
+            // so the circuit breaker can't catch this case).
+            autoPauseAgent(a, repo, { reason: 'needs_test_plan' });
+            return;
+          }
+          taskId = `plan:${planId}`;
+        }
+        await runAgent({
+          repoId: repo.id,
+          agentName: a.name,
+          agentId: a.id,
+          trigger: 'schedule',
+          ...(taskId !== undefined ? { taskId } : {}),
+        });
+      } catch (e: unknown) {
         appendAudit({
           runId: 'system',
           kind: 'scheduler_error',
           payload: { repo: repo.githubFullName, agent: a.name, error: String(e) },
         });
-      })
-      .finally(() => {
+      } finally {
         inFlightDispatch.delete(dispatchKey);
-      });
+      }
+    })();
   }
 }
 
@@ -219,8 +242,16 @@ export function shouldOpenCircuitBreaker(agent: Agent, now: Date): boolean {
   return now.getTime() - oldestTime <= CIRCUIT_BREAKER_WINDOW_MS;
 }
 
-function autoPauseAgent(agent: Agent, repo: Repo): void {
-  const recent = getRecentScheduledRunsForAgent(agent.id, CIRCUIT_BREAKER_FAILURES);
+function autoPauseAgent(
+  agent: Agent,
+  repo: Repo,
+  opts: { reason?: 'consecutive_failures' | 'needs_test_plan' } = {},
+): void {
+  const reason = opts.reason ?? 'consecutive_failures';
+  const needsPlan = reason === 'needs_test_plan';
+  const recent = needsPlan
+    ? []
+    : getRecentScheduledRunsForAgent(agent.id, CIRCUIT_BREAKER_FAILURES);
   const last = recent[0];
   try {
     updateAgent(agent.id, { enabled: false });
@@ -243,9 +274,14 @@ function autoPauseAgent(agent: Agent, repo: Repo): void {
       agentId: agent.id,
       agentName: agent.name,
       repo: repo.githubFullName,
-      consecutiveFailures: CIRCUIT_BREAKER_FAILURES,
-      windowMs: CIRCUIT_BREAKER_WINDOW_MS,
-      recentErrorCodes: recent.map((r) => r.errorCode),
+      reason,
+      ...(needsPlan
+        ? {}
+        : {
+            consecutiveFailures: CIRCUIT_BREAKER_FAILURES,
+            windowMs: CIRCUIT_BREAKER_WINDOW_MS,
+            recentErrorCodes: recent.map((r) => r.errorCode),
+          }),
     },
   });
   broadcast({
@@ -254,9 +290,11 @@ function autoPauseAgent(agent: Agent, repo: Repo): void {
     agentId: agent.id,
     agentName: agent.name,
     displayName: agent.displayName,
-    reason: 'consecutive_failures',
-    consecutiveFailures: CIRCUIT_BREAKER_FAILURES,
-    lastErrorCode: last?.errorCode ?? null,
-    lastErrorSummary: last?.outputSummary ?? null,
+    reason,
+    consecutiveFailures: needsPlan ? 0 : CIRCUIT_BREAKER_FAILURES,
+    lastErrorCode: needsPlan ? 'TEST_PLAN_REQUIRED' : (last?.errorCode ?? null),
+    lastErrorSummary: needsPlan
+      ? 'No test plan to run. Create or attach a plan for this agent, then re-enable it.'
+      : (last?.outputSummary ?? null),
   });
 }

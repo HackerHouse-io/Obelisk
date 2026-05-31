@@ -6,6 +6,8 @@ import type {
   TestPlanScope,
 } from '../../shared/types';
 import { broadcast } from '../ipc/bus';
+import { getRepo } from '../db/repos';
+import { getPlan } from './store';
 
 /**
  * In-memory tracker of currently-running and recently-completed test plan
@@ -86,8 +88,24 @@ export function finishDone(jobId: string, planId: string): void {
   job.stage = 'done';
   job.status = STAGE_STATUS.done;
   job.planId = planId;
+  job.planName = resolvePlanName(job.repoId, planId);
   job.finishedAt = new Date().toISOString();
   broadcast({ type: 'testPlanGeneration.progress', job: { ...job } });
+}
+
+/**
+ * Best-effort lookup of the created plan's human-readable name so the toast
+ * can say *which* plan landed. Falls back to null (the toast then shows the
+ * repo label alone) if the repo or plan can't be read.
+ */
+function resolvePlanName(repoId: string, planId: string): string | null {
+  try {
+    const repo = getRepo(repoId);
+    if (!repo) return null;
+    return getPlan(repo.localPath, planId).frontmatter.name;
+  } catch {
+    return null;
+  }
 }
 
 export function finishFailed(jobId: string, errorMessage: string, errorHint?: string): void {

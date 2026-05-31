@@ -24,9 +24,25 @@ export interface JobOutcome {
   planId?: string | null;
   errorMessage?: string | null;
   errorHint?: string | null;
+  /** True when the caller's signal aborted the wait (the job itself keeps running). */
+  aborted?: boolean;
 }
 
-function awaitJob(jobId: string, match: (evt: BusEvent) => JobOutcome | null): Promise<JobOutcome> {
+export interface AwaitJobOptions {
+  /**
+   * When this aborts, stop WAITING on the job and resolve `{ ok:false, aborted:true }`.
+   * The underlying fire-and-forget job is not killed — it runs to its own
+   * terminal bus event / timeout. This lets a cancelled coverage pass exit
+   * promptly without throwing away in-flight LLM work.
+   */
+  signal?: AbortSignal;
+}
+
+function awaitJob(
+  jobId: string,
+  match: (evt: BusEvent) => JobOutcome | null,
+  opts: AwaitJobOptions = {},
+): Promise<JobOutcome> {
   return new Promise<JobOutcome>((resolve) => {
     let settled = false;
     const finish = (outcome: JobOutcome): void => {
@@ -34,8 +50,10 @@ function awaitJob(jobId: string, match: (evt: BusEvent) => JobOutcome | null): P
       settled = true;
       clearTimeout(timer);
       unsubscribe();
+      opts.signal?.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
+    const onAbort = (): void => finish({ ok: false, aborted: true });
     const unsubscribe = addInProcessListener((evt) => {
       const outcome = match(evt);
       if (outcome) finish(outcome);
@@ -47,27 +65,42 @@ function awaitJob(jobId: string, match: (evt: BusEvent) => JobOutcome | null): P
         errorHint: 'The underlying runner may be stuck. Try the pass again.',
       });
     }, AWAIT_TIMEOUT_MS);
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        finish({ ok: false, aborted: true });
+        return;
+      }
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
-export function awaitTestPlanJob(jobId: string): Promise<JobOutcome> {
-  return awaitJob(jobId, (evt) => {
-    if (evt.type !== 'testPlanGeneration.progress' || evt.job.jobId !== jobId) return null;
-    if (evt.job.stage === 'done') return { ok: true, planId: evt.job.planId };
-    if (evt.job.stage === 'failed') {
-      return { ok: false, errorMessage: evt.job.errorMessage, errorHint: evt.job.errorHint };
-    }
-    return null;
-  });
+export function awaitTestPlanJob(jobId: string, opts?: AwaitJobOptions): Promise<JobOutcome> {
+  return awaitJob(
+    jobId,
+    (evt) => {
+      if (evt.type !== 'testPlanGeneration.progress' || evt.job.jobId !== jobId) return null;
+      if (evt.job.stage === 'done') return { ok: true, planId: evt.job.planId };
+      if (evt.job.stage === 'failed') {
+        return { ok: false, errorMessage: evt.job.errorMessage, errorHint: evt.job.errorHint };
+      }
+      return null;
+    },
+    opts,
+  );
 }
 
-export function awaitCoverageMapJob(jobId: string): Promise<JobOutcome> {
-  return awaitJob(jobId, (evt) => {
-    if (evt.type !== 'coverageMapGeneration.progress' || evt.job.jobId !== jobId) return null;
-    if (evt.job.stage === 'done') return { ok: true };
-    if (evt.job.stage === 'failed') {
-      return { ok: false, errorMessage: evt.job.errorMessage, errorHint: evt.job.errorHint };
-    }
-    return null;
-  });
+export function awaitCoverageMapJob(jobId: string, opts?: AwaitJobOptions): Promise<JobOutcome> {
+  return awaitJob(
+    jobId,
+    (evt) => {
+      if (evt.type !== 'coverageMapGeneration.progress' || evt.job.jobId !== jobId) return null;
+      if (evt.job.stage === 'done') return { ok: true };
+      if (evt.job.stage === 'failed') {
+        return { ok: false, errorMessage: evt.job.errorMessage, errorHint: evt.job.errorHint };
+      }
+      return null;
+    },
+    opts,
+  );
 }

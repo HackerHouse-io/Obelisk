@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { Icon } from '../../icons';
+import { useStore } from '../../state/store';
 import { showApiAlert } from '../../state/alert-store';
-import { isCoverageRunTerminal } from '../../../shared/coverage-formula';
+import { isCoverageRunResumable, isCoverageRunTerminal } from '../../../shared/coverage-formula';
 import type {
   BusEvent,
   CoverageRunStage,
+  CoverageRunStep,
   CoverageRunSummary,
   CoverageSchedule,
 } from '../../../shared/types';
@@ -21,16 +23,30 @@ function isActive(run: CoverageRunSummary | null): boolean {
   return run !== null && !isCoverageRunTerminal(run.stage);
 }
 
+/**
+ * The working stage to highlight in the phase strip. While `paused` the run's
+ * stage is `'paused'` (no phase), so infer the phase the pass was working from
+ * its steps: a hunt step → Hunt, a generate step → Draft, a map step → Map.
+ */
+function effectiveStage(run: CoverageRunSummary): CoverageRunStage {
+  if (run.stage !== 'paused') return run.stage;
+  const kinds = new Set(run.steps.map((s) => s.kind));
+  if (kinds.has('hunt')) return 'hunting';
+  if (kinds.has('generate')) return 'drafting';
+  if (kinds.has('map')) return 'mapping';
+  return 'hunting';
+}
+
 /** Visual state of one phase chip given the run and the current phase index. */
 function phaseState(
   run: CoverageRunSummary | null,
   currentIdx: number,
   phaseIdx: number,
-): 'done' | 'active' | 'idle' {
+): 'done' | 'active' | 'paused' | 'idle' {
   if (run && isCoverageRunTerminal(run.stage)) return run.stage === 'done' ? 'done' : 'idle';
   if (currentIdx < 0) return 'idle';
   if (phaseIdx < currentIdx) return 'done';
-  if (phaseIdx === currentIdx) return 'active';
+  if (phaseIdx === currentIdx) return run && run.stage === 'paused' ? 'paused' : 'active';
   return 'idle';
 }
 
@@ -54,6 +70,7 @@ interface Props {
  * schedule and follows the `coverageRun.progress` bus event.
  */
 export function CoverageAgentCard({ repoId, onPassComplete }: Props): ReactElement {
+  const setRoute = useStore((s) => s.setRoute);
   const [run, setRun] = useState<CoverageRunSummary | null>(null);
   const [preflight, setPreflight] = useState<{ canRun: boolean; reason?: string } | null>(null);
   const [schedule, setSchedule] = useState<CoverageSchedule | null>(null);
@@ -108,6 +125,36 @@ export function CoverageAgentCard({ repoId, onPassComplete }: Props): ReactEleme
     }
   }
 
+  async function pausePass(): Promise<void> {
+    if (!run || !isActive(run) || run.stage === 'paused') return;
+    setBusy(true);
+    try {
+      const res = await window.obelisk.invoke('coverage:pauseLoop', { coverageRunId: run.id });
+      if (!res.ok) showApiAlert(res.error, 'pause coverage pass');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumePass(): Promise<void> {
+    if (!run || !isCoverageRunResumable(run.stage)) return;
+    setBusy(true);
+    try {
+      const res = await window.obelisk.invoke('coverage:resumeLoop', { coverageRunId: run.id });
+      if (!res.ok) showApiAlert(res.error, 'resume coverage pass');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Jump to Mission Control and focus a spawned hunt run. */
+  function openRun(runId: string): void {
+    setRoute('mission');
+    queueMicrotask(() => {
+      window.dispatchEvent(new CustomEvent('obelisk:focus-run', { detail: { runId } }));
+    });
+  }
+
   async function patchSchedule(patch: { enabled?: boolean; cron?: string }): Promise<void> {
     const res = await window.obelisk.invoke('coverage:setSchedule', { repoId, ...patch });
     if (!res.ok) showApiAlert(res.error, 'update coverage schedule');
@@ -115,27 +162,44 @@ export function CoverageAgentCard({ repoId, onPassComplete }: Props): ReactEleme
   }
 
   const active = isActive(run);
-  const currentIdx = run ? PHASES.findIndex((p) => p.stage === run.stage) : -1;
+  const paused = run ? isCoverageRunResumable(run.stage) : false;
+  const currentIdx = run ? PHASES.findIndex((p) => p.stage === effectiveStage(run)) : -1;
   const canRun = preflight ? preflight.canRun : true;
   const runDisabled = busy || active || !canRun;
+  const totalFindings = run ? run.steps.reduce((n, s) => n + (s.findings ?? 0), 0) : 0;
+  const runningStep = run ? (run.steps.find((s) => s.state === 'running') ?? null) : null;
 
   return (
     <div className="coverage-agent-card" data-testid="coverage-agent-card">
       <div className="coverage-agent-head">
         <div className="coverage-agent-title">
-          <span className={`coverage-agent-dot${active ? ' running' : ''}`} aria-hidden="true" />
+          <span
+            className={`coverage-agent-dot${active && !paused ? ' running' : ''}${paused ? ' paused' : ''}`}
+            aria-hidden="true"
+          />
           Coverage Agent
         </div>
         <div className="coverage-agent-head-actions">
-          {active ? (
+          {paused ? (
+            <button
+              type="button"
+              className="btn sm primary"
+              onClick={() => void resumePass()}
+              disabled={busy}
+              data-testid="coverage-agent-resume"
+            >
+              <Icon.Play size={11} /> Resume
+            </button>
+          ) : active ? (
             <button
               type="button"
               className="btn sm"
-              onClick={() => void cancelPass()}
+              onClick={() => void pausePass()}
               disabled={busy}
-              data-testid="coverage-agent-cancel"
+              title="Pause after the current step finishes"
+              data-testid="coverage-agent-pause"
             >
-              Stop
+              <Icon.Pause size={11} /> Pause
             </button>
           ) : (
             <button
@@ -154,6 +218,17 @@ export function CoverageAgentCard({ repoId, onPassComplete }: Props): ReactEleme
               Run coverage pass
             </button>
           )}
+          {active ? (
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => void cancelPass()}
+              disabled={busy}
+              data-testid="coverage-agent-cancel"
+            >
+              Stop
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -178,11 +253,43 @@ export function CoverageAgentCard({ repoId, onPassComplete }: Props): ReactEleme
           <span className="coverage-agent-status-text">
             {run.status ?? stageFallback(run.stage)}
           </span>
-          {run.spawnsUsed > 0 ? (
-            <span className="coverage-agent-status-budget">
-              {run.spawnsUsed}/{run.budgetSpawns} spawns
-            </span>
-          ) : null}
+          <span className="coverage-agent-status-meta">
+            {totalFindings > 0 ? (
+              <span className="coverage-agent-status-findings">
+                {totalFindings} issue{totalFindings === 1 ? '' : 's'} found
+              </span>
+            ) : null}
+            {run.spawnsUsed > 0 ? (
+              <span className="coverage-agent-status-budget">
+                {run.spawnsUsed}/{run.budgetSpawns} spawns
+              </span>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+
+      {/* Now-running hint: what's happening this very moment. */}
+      {runningStep ? (
+        <div className="coverage-agent-now" data-testid="coverage-agent-now">
+          <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
+          {stepNowLabel(runningStep)}
+        </div>
+      ) : null}
+
+      {/* Paused-for-review banner. */}
+      {paused ? (
+        <div className="coverage-agent-paused" data-testid="coverage-agent-paused">
+          <Icon.Pause size={11} />
+          <div>{run?.status ?? 'Paused for review.'}</div>
+        </div>
+      ) : null}
+
+      {/* The live timeline: what already happened, step by step. */}
+      {run && run.steps.length > 0 ? (
+        <div className="coverage-agent-timeline" data-testid="coverage-agent-timeline">
+          {run.steps.map((s) => (
+            <CoverageStepRow key={s.id} step={s} onOpenRun={openRun} />
+          ))}
         </div>
       ) : null}
 
@@ -240,6 +347,8 @@ function stageFallback(stage: CoverageRunStage): string {
       return 'Drafting plans…';
     case 'hunting':
       return 'Running the Bug Hunter…';
+    case 'paused':
+      return 'Paused for review.';
     case 'done':
       return 'Pass complete.';
     case 'failed':
@@ -247,4 +356,81 @@ function stageFallback(stage: CoverageRunStage): string {
     case 'cancelled':
       return 'Pass cancelled.';
   }
+}
+
+/** Headline for the "happening right now" hint above the timeline. */
+function stepNowLabel(step: CoverageRunStep): string {
+  switch (step.kind) {
+    case 'map':
+      return 'Mapping the repository…';
+    case 'generate':
+      return `Drafting a test plan for ${step.featureLabel ?? 'a feature'}…`;
+    case 'hunt':
+      return `Hunting bugs in ${step.featureLabel ?? 'a plan'}…`;
+  }
+}
+
+/** Past-tense label for a finished/queued timeline row. */
+function stepLabel(step: CoverageRunStep): string {
+  const running = step.state === 'running';
+  switch (step.kind) {
+    case 'map':
+      return running ? 'Mapping the repository' : 'Mapped the repository';
+    case 'generate':
+      return `${running ? 'Drafting' : 'Drafted'} plan · ${step.featureLabel ?? 'feature'}`;
+    case 'hunt':
+      return `${running ? 'Hunting' : 'Hunted'} · ${step.featureLabel ?? 'plan'}`;
+  }
+}
+
+function CoverageStepRow({
+  step,
+  onOpenRun,
+}: {
+  step: CoverageRunStep;
+  onOpenRun: (runId: string) => void;
+}): ReactElement {
+  const clickable = step.kind === 'hunt' && !!step.runId;
+  const body = (
+    <>
+      <span className={`coverage-agent-step-icon coverage-agent-step-icon-${step.state}`}>
+        {step.state === 'running' ? (
+          <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
+        ) : step.state === 'done' ? (
+          <Icon.Check size={11} />
+        ) : step.state === 'failed' ? (
+          <Icon.AlertTri size={11} />
+        ) : (
+          <Icon.Dot size={11} />
+        )}
+      </span>
+      <span className="coverage-agent-step-label">{stepLabel(step)}</span>
+      {step.kind === 'hunt' && step.findings != null ? (
+        <span className={`coverage-agent-step-findings${step.findings > 0 ? ' has-findings' : ''}`}>
+          {step.findings > 0 ? (
+            <>
+              <Icon.Bug size={10} /> {step.findings} issue{step.findings === 1 ? '' : 's'}
+            </>
+          ) : (
+            'no issues'
+          )}
+        </span>
+      ) : null}
+      {step.state === 'skipped' ? <span className="coverage-agent-step-tag">skipped</span> : null}
+    </>
+  );
+
+  if (clickable) {
+    return (
+      <button
+        type="button"
+        className={`coverage-agent-step coverage-agent-step-${step.state} is-clickable`}
+        onClick={() => onOpenRun(step.runId!)}
+        title="Open this run in Mission Control"
+      >
+        {body}
+      </button>
+    );
+  }
+  return <div className={`coverage-agent-step coverage-agent-step-${step.state}`}>{body}</div>;
 }

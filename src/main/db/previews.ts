@@ -185,6 +185,19 @@ function rowToFinding(row: PreviewRow, enrich: RowEnrichment): PreviewedFinding 
 }
 
 /**
+ * How many previews a single run produced. The Coverage Agent records this on
+ * each hunt step so the timeline can show "found N issues". Counts every
+ * preview the run surfaced (open, dismissed, or published) — the step reflects
+ * what the hunt found, independent of later triage.
+ */
+export function countPreviewsForRun(runId: string): number {
+  const row = getDb()
+    .prepare<[string], { n: number }>('SELECT COUNT(*) AS n FROM previews WHERE run_id = ?')
+    .get(runId);
+  return row?.n ?? 0;
+}
+
+/**
  * Titles of previews that are still "open" — neither published as a GitHub
  * issue nor dismissed by the user. Agents call this on each run to suppress
  * findings whose title fuzzy-matches an existing open preview, so a recurring

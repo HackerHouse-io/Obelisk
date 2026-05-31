@@ -1,5 +1,6 @@
 import type {
   CoverageReport,
+  CoverageRunStage,
   CoverageRunStepState,
   CoverageRunSummary,
   CoverageRunTrigger,
@@ -14,7 +15,14 @@ import { buildCoverageReport } from './aggregate';
 import { startMapGenerationJob, type GenerateMapInput } from './generate-map';
 import { startGenerationJob, type GenerateInput } from '../test-plans/generate';
 import { runAgent, type RunAgentInput, type RunAgentOutput } from '../orchestrator/run';
-import { awaitCoverageMapJob, awaitTestPlanJob, type JobOutcome } from './loop-await';
+import { cancelRun } from '../orchestrator/active-runs';
+import { countPreviewsForRun } from '../db/previews';
+import {
+  awaitCoverageMapJob,
+  awaitTestPlanJob,
+  type AwaitJobOptions,
+  type JobOutcome,
+} from './loop-await';
 import {
   advanceCoverageStage,
   appendCoverageStep,
@@ -55,10 +63,20 @@ import {
 export const DEFAULT_GAP_THRESHOLD = 70;
 export const DEFAULT_BUDGET_SPAWNS = 8;
 
+/**
+ * On a MANUAL pass, auto-pause for review after this many hunts so the user
+ * sees what was found before the agent grinds through the rest of the budget.
+ * Scheduled/autonomous passes ignore this and run straight to budget.
+ * Set to `Infinity` (via `CoverageLoopOptions.checkpointInterval`) to disable.
+ */
+export const HUNT_CHECKPOINT_INTERVAL = 3;
+
 export interface CoverageLoopOptions {
   trigger?: CoverageRunTrigger;
   gapThreshold?: number;
   budgetSpawns?: number;
+  /** Auto-pause cadence for manual passes (default HUNT_CHECKPOINT_INTERVAL). */
+  checkpointInterval?: number;
   /** Injected for tests so hunt dispatch uses a MockRunner instead of a real CLI. */
   runnerFactory?: (kind: 'claude' | 'codex') => CodingAgentRunner;
 }
@@ -70,9 +88,9 @@ export interface CoverageLoopOptions {
 export interface CoverageLoopDeps {
   buildReport: (repoId: string) => Promise<CoverageReport>;
   startMap: (input: GenerateMapInput) => string;
-  awaitMap: (jobId: string) => Promise<JobOutcome>;
+  awaitMap: (jobId: string, opts?: AwaitJobOptions) => Promise<JobOutcome>;
   startGenerate: (input: GenerateInput) => string;
-  awaitGenerate: (jobId: string) => Promise<JobOutcome>;
+  awaitGenerate: (jobId: string, opts?: AwaitJobOptions) => Promise<JobOutcome>;
   runHunt: (input: RunAgentInput) => Promise<RunAgentOutput>;
   runnerAvailable: () => Promise<boolean>;
 }
@@ -90,6 +108,40 @@ function defaultDeps(): CoverageLoopDeps {
       if ((await new CodexRunner().isInstalled()).ok) return true;
       return false;
     },
+  };
+}
+
+/**
+ * In-memory complement to the `coverage_runs` row: the live handles only the
+ * running process can use. The DB row is durable truth for the UI and restart
+ * reconciliation; this object lets `cancel`/`pause`/`resume` act on in-flight
+ * work IMMEDIATELY (abort the live hunt, unblock a bus-await, un-park a paused
+ * loop). Single-flight per repo guarantees at most one live pass, but we key by
+ * coverageRunId so the handle is unambiguous. Created in `startCoverageRun`,
+ * reaped in its `finally`.
+ */
+interface LoopControl {
+  /** Hard cancel requested — abort live work and exit to 'cancelled'. */
+  cancelled: boolean;
+  /** Pause requested — park at the next checkpoint; never kills in-flight work. */
+  pauseRequested: boolean;
+  /** runId of the qa-hunter currently in flight (set via onStarted, cleared after). */
+  activeHuntRunId: string | null;
+  /** Aborts the bus-await for a map/generate job (stops waiting; the job lives on). */
+  abort: AbortController;
+  /** Resolves to wake a parked (paused) loop. Null when not parked. */
+  wake: (() => void) | null;
+}
+
+const controls = new Map<string, LoopControl>();
+
+function makeControl(): LoopControl {
+  return {
+    cancelled: false,
+    pauseRequested: false,
+    activeHuntRunId: null,
+    abort: new AbortController(),
+    wake: null,
   };
 }
 
@@ -123,18 +175,55 @@ export function startCoverageRun(
   });
   emit(run.id);
 
+  const control = makeControl();
+  controls.set(run.id, control);
+
   const deps: CoverageLoopDeps = { ...defaultDeps(), ...depsOverride };
-  void runPass(run.id, repoId, opts, deps).catch((e: unknown) => {
-    const message = e instanceof Error ? e.message : String(e);
-    failCoverageRun(run.id, message);
-    emit(run.id);
-  });
+  void runPass(run.id, repoId, opts, deps, control)
+    .catch((e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
+      failCoverageRun(run.id, message);
+      emit(run.id);
+    })
+    .finally(() => controls.delete(run.id));
   return run.id;
 }
 
+/**
+ * Hard cancel: abort the live qa-hunter NOW (don't wait minutes for it to
+ * finish), stop waiting on any map/generate job, and un-park a paused loop.
+ * Also persist the DB flag so a cancel landing in the microscopic window
+ * before the control is registered still takes effect at the first checkpoint.
+ */
 export function cancelCoverageRun(coverageRunId: string): void {
+  const c = controls.get(coverageRunId);
+  if (c) {
+    c.cancelled = true;
+    c.abort.abort(); // unblock an in-flight awaitMap/awaitGenerate
+    if (c.activeHuntRunId) cancelRun(c.activeHuntRunId); // SIGTERM→SIGKILL the live CLI
+    c.wake?.(); // wake if parked in pause
+  }
   requestCancelCoverageRun(coverageRunId);
   emit(coverageRunId);
+}
+
+/**
+ * Request a pause. Takes effect at the next checkpoint — the current in-flight
+ * step is allowed to finish (we never throw away in-flight LLM work).
+ */
+export function pauseCoverageRun(coverageRunId: string): void {
+  const c = controls.get(coverageRunId);
+  if (!c || c.cancelled) return;
+  c.pauseRequested = true;
+  emit(coverageRunId);
+}
+
+/** Resume a paused pass: continue the same closure from the exact next plan. */
+export function resumeCoverageRun(coverageRunId: string): void {
+  const c = controls.get(coverageRunId);
+  if (!c) return; // no live closure (e.g. after restart) → cannot resume
+  c.pauseRequested = false;
+  c.wake?.();
 }
 
 /** Fail any pass left non-terminal by an app restart. Call once on startup. */
@@ -164,18 +253,47 @@ async function runPass(
   repoId: string,
   opts: CoverageLoopOptions,
   deps: CoverageLoopDeps,
+  control: LoopControl,
 ): Promise<void> {
   const run = getCoverageRun(coverageRunId);
   if (!run) return;
   const budget = run.budgetSpawns;
   const gapThreshold = run.gapThreshold;
   const trigger = run.trigger;
+  const checkpointInterval = opts.checkpointInterval ?? HUNT_CHECKPOINT_INTERVAL;
   let spawnsUsed = run.spawnsUsed;
 
-  const cancelled = (): boolean => isCancelRequested(coverageRunId);
+  const isCancelled = (): boolean => control.cancelled || isCancelRequested(coverageRunId);
   const finishCancelled = (): void => {
-    advanceCoverageStage(coverageRunId, 'cancelled', 'Cancelled by the user.');
+    advanceCoverageStage(coverageRunId, 'cancelled', 'Stopped by the user.');
     emit(coverageRunId);
+  };
+
+  /**
+   * The single pause/cancel gate. Called at each loop boundary:
+   *  - cancel → return 'cancelled' so the caller bails to finishCancelled().
+   *  - pause  → park on a wake promise (the live closure, with its queue and
+   *             spawnsUsed, stays intact), set stage 'paused' with a review
+   *             summary, and on resume re-advance to the working stage.
+   */
+  const checkpoint = async (
+    resumeStage: CoverageRunStage,
+    resumeStatus: string,
+    pauseStatus: string,
+  ): Promise<'continue' | 'cancelled'> => {
+    if (isCancelled()) return 'cancelled';
+    if (control.pauseRequested) {
+      advanceCoverageStage(coverageRunId, 'paused', pauseStatus);
+      emit(coverageRunId);
+      await new Promise<void>((resolve) => {
+        control.wake = resolve;
+      });
+      control.wake = null;
+      if (isCancelled()) return 'cancelled';
+      advanceCoverageStage(coverageRunId, resumeStage, resumeStatus);
+      emit(coverageRunId);
+    }
+    return 'continue';
   };
 
   const repo = getRepo(repoId);
@@ -207,8 +325,8 @@ async function runPass(
     const jobId = deps.startMap({ repo, replace: true });
     spawnsUsed = incrementSpawns(coverageRunId);
     updateCoverageStep(stepId, { ref: jobId });
-    const outcome = await deps.awaitMap(jobId);
-    if (cancelled()) {
+    const outcome = await deps.awaitMap(jobId, { signal: control.abort.signal });
+    if (outcome.aborted || isCancelled()) {
       updateCoverageStep(stepId, { state: 'skipped' });
       return finishCancelled();
     }
@@ -227,7 +345,7 @@ async function runPass(
     report = await deps.buildReport(repoId);
   }
 
-  if (cancelled()) return finishCancelled();
+  if (isCancelled()) return finishCancelled();
 
   /* ---------- Stage: detecting ---------- */
   advanceCoverageStage(coverageRunId, 'detecting', 'Detecting coverage gaps…');
@@ -250,7 +368,15 @@ async function runPass(
   const needsPlan = gaps.filter((g) => g.planCount === 0);
   for (const gap of needsPlan) {
     if (spawnsUsed >= budget) break;
-    if (cancelled()) return finishCancelled();
+    if (
+      (await checkpoint(
+        'drafting',
+        `Resuming — drafting a plan for ${gap.label}…`,
+        'Paused. Resume to keep drafting the missing test plans.',
+      )) === 'cancelled'
+    ) {
+      return finishCancelled();
+    }
 
     const stepId = appendCoverageStep({
       coverageRunId,
@@ -270,15 +396,17 @@ async function runPass(
     spawnsUsed = incrementSpawns(coverageRunId);
     updateCoverageStep(stepId, { ref: jobId });
 
-    const outcome = await deps.awaitGenerate(jobId);
+    const outcome = await deps.awaitGenerate(jobId, { signal: control.abort.signal });
+    if (outcome.aborted) {
+      updateCoverageStep(stepId, { state: 'skipped' });
+      return finishCancelled();
+    }
     // A junk/failed plan never sinks the pass — record it and move on.
     updateCoverageStep(stepId, {
       state: outcome.ok ? 'done' : 'failed',
       detail: outcome.ok ? null : (outcome.errorMessage ?? 'Generation failed.'),
     });
     emit(coverageRunId);
-
-    if (cancelled()) return finishCancelled();
   }
 
   /* ---------- Stage: hunting ---------- */
@@ -295,9 +423,21 @@ async function runPass(
   emit(coverageRunId);
 
   let authAborted = false;
-  for (const item of queue) {
+  let huntsRun = 0;
+  let huntsSinceCheckpoint = 0;
+  let totalFindings = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i]!;
     if (spawnsUsed >= budget) break;
-    if (cancelled()) return finishCancelled();
+    if (
+      (await checkpoint(
+        'hunting',
+        `Resuming the Bug Hunter on ${item.label}…`,
+        pausedSummary({ huntsRun, totalFindings, spawnsUsed, budget }),
+      )) === 'cancelled'
+    ) {
+      return finishCancelled();
+    }
 
     const stepId = appendCoverageStep({
       coverageRunId,
@@ -308,6 +448,7 @@ async function runPass(
     });
     emit(coverageRunId);
     spawnsUsed = incrementSpawns(coverageRunId);
+    control.activeHuntRunId = null;
 
     try {
       const result = await deps.runHunt({
@@ -315,6 +456,14 @@ async function runPass(
         agentName: 'qa-hunter',
         taskId: `plan:${item.planId}`,
         trigger,
+        // Capture the spawned run id the moment its row commits — before the
+        // multi-minute CLI spawn — so Stop can abort it immediately and the
+        // timeline row can deep-link to Mission Control.
+        onStarted: ({ runId }) => {
+          control.activeHuntRunId = runId;
+          updateCoverageStep(stepId, { runId });
+          emit(coverageRunId);
+        },
         ...(opts.runnerFactory ? { runnerFactory: opts.runnerFactory } : {}),
       });
       // Auth expired mid-pass: pointless (and costly) to keep spawning. Abort.
@@ -329,9 +478,13 @@ async function runPass(
         authAborted = true;
         break;
       }
+      const findings = result.runId ? countPreviewsForRun(result.runId) : 0;
+      totalFindings += findings;
       updateCoverageStep(stepId, {
         state: huntStepState(result),
         detail: result.reason ?? null,
+        runId: result.runId || null,
+        findings,
       });
     } catch (e) {
       // Single-flight collision (a run for this plan is already live) or a
@@ -340,23 +493,62 @@ async function runPass(
         state: 'skipped',
         detail: e instanceof Error ? e.message : String(e),
       });
+    } finally {
+      control.activeHuntRunId = null;
     }
     emit(coverageRunId);
+
+    huntsRun += 1;
+    huntsSinceCheckpoint += 1;
+
+    // Auto-checkpoint: on a MANUAL pass, pause for review after every N hunts
+    // so the user sees what was found instead of the agent grinding silently
+    // through the whole budget. Suppressed when we're about to stop anyway
+    // (budget exhausted or queue finished) so a pass never ends stranded at
+    // 'paused'. Scheduled passes run unattended (trigger !== 'manual').
+    const moreQueue = i < queue.length - 1;
+    if (
+      trigger === 'manual' &&
+      Number.isFinite(checkpointInterval) &&
+      huntsSinceCheckpoint >= checkpointInterval &&
+      spawnsUsed < budget &&
+      moreQueue
+    ) {
+      control.pauseRequested = true;
+      huntsSinceCheckpoint = 0;
+    }
   }
 
   if (authAborted) return;
-  if (cancelled()) return finishCancelled();
+  if (isCancelled()) return finishCancelled();
 
   /* ---------- Done ---------- */
   const summary = passSummary({
     gapsTotal: gaps.length,
     drafted: needsPlan.length,
-    hunted: queue.length,
+    hunted: huntsRun,
+    found: totalFindings,
     spawnsUsed,
     budget,
   });
   advanceCoverageStage(coverageRunId, 'done', summary);
   emit(coverageRunId);
+}
+
+/** Review summary shown while a hunting pass is paused at a checkpoint. */
+function pausedSummary(o: {
+  huntsRun: number;
+  totalFindings: number;
+  spawnsUsed: number;
+  budget: number;
+}): string {
+  const left = Math.max(0, o.budget - o.spawnsUsed);
+  const hunted = `hunted ${o.huntsRun} plan${o.huntsRun === 1 ? '' : 's'}`;
+  const found =
+    o.totalFindings > 0
+      ? `, found ${o.totalFindings} issue${o.totalFindings === 1 ? '' : 's'}`
+      : ', no issues yet';
+  return `Paused for review — ${hunted}${found}. Resume to continue (${left} of ${o.budget} budget left).`;
 }
 
 function huntStepState(result: RunAgentOutput): CoverageRunStepState {
@@ -401,12 +593,14 @@ function passSummary(o: {
   gapsTotal: number;
   drafted: number;
   hunted: number;
+  found: number;
   spawnsUsed: number;
   budget: number;
 }): string {
   const parts: string[] = [];
   if (o.drafted > 0) parts.push(`drafted ${o.drafted} plan${o.drafted === 1 ? '' : 's'}`);
   if (o.hunted > 0) parts.push(`hunted ${o.hunted} plan${o.hunted === 1 ? '' : 's'}`);
+  if (o.found > 0) parts.push(`found ${o.found} issue${o.found === 1 ? '' : 's'}`);
   const body = parts.length ? parts.join(', ') : 'no work needed';
   if (o.spawnsUsed >= o.budget) {
     return `Pass complete (${body}). Spawn budget reached — run again to continue.`;

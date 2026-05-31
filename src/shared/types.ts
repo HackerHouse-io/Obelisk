@@ -321,6 +321,8 @@ export interface TestPlanGenerationJob {
   finishedAt: ISO | null;
   /** Set on stage='done'. */
   planId: string | null;
+  /** Human-readable name of the created plan. Set on stage='done'. */
+  planName?: string | null;
   /** Set on stage='failed'. */
   errorMessage: string | null;
   errorHint: string | null;
@@ -965,6 +967,11 @@ export interface IpcMap {
     res: { coverageRunId: string };
   };
   'coverage:cancelLoop': { req: { coverageRunId: string }; res: { ok: true } };
+  // Pause after the current in-flight step finishes (never kills live LLM work);
+  // resume continues the same pass from the exact next plan, preserving the
+  // spawn budget already used.
+  'coverage:pauseLoop': { req: { coverageRunId: string }; res: { ok: true } };
+  'coverage:resumeLoop': { req: { coverageRunId: string }; res: { ok: true } };
   // The latest pass for this repo (active one if present, else most recent
   // terminal one). Null when the loop has never run.
   'coverage:loopStatus': { req: { repoId: string }; res: CoverageRunSummary | null };
@@ -1103,6 +1110,7 @@ export type CoverageRunStage =
   | 'detecting'
   | 'drafting'
   | 'hunting'
+  | 'paused'
   | 'done'
   | 'failed'
   | 'cancelled';
@@ -1116,6 +1124,10 @@ export interface CoverageRunStep {
   kind: CoverageRunStepKind;
   featureLabel: string | null;
   ref: string | null;
+  /** The spawned orchestrator run's id (hunt steps) — links the timeline to Mission Control. */
+  runId: string | null;
+  /** Count of previews the spawned run produced. Null until the hunt completes. */
+  findings: number | null;
   state: CoverageRunStepState;
   detail: string | null;
   at: ISO;
@@ -1184,7 +1196,7 @@ export type BusEvent =
       agentId: string;
       agentName: AgentName;
       displayName: string;
-      reason: 'consecutive_failures';
+      reason: 'consecutive_failures' | 'needs_test_plan';
       consecutiveFailures: number;
       lastErrorCode: string | null;
       lastErrorSummary: string | null;

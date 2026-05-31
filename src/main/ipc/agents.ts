@@ -13,6 +13,7 @@ import { runAgent } from '../orchestrator/run';
 import { defaultCronFor, nextFireAt } from '../scheduler/cron';
 import { ObeliskError } from '../../shared/errors';
 import { getAgentHandler } from '../agents/registry';
+import { pickWorstCoveragePlanId } from '../coverage/pick-plan';
 import { getPatchAgentCap, isPatchAgent } from '../scheduler/patch-agent-cap';
 import type { Agent, AgentName, IpcMap, RunnerKind } from '../../shared/types';
 import { readAgentMd } from '../agents/skill-loader';
@@ -58,8 +59,21 @@ export async function handleAgentsRun(
   // If the caller didn't specify a task, fall back to the agent's saved
   // default plan. The Agents screen exposes a "Default test plan" dropdown
   // that writes this — clicking Run now then dispatches that plan.
-  const effectiveTaskId =
+  let effectiveTaskId =
     payload.taskId ?? (agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined);
+  // For QA agents with no explicit task and no bound default, pick the plan
+  // whose feature has the lowest coverage (worst-first) — same rule as the
+  // scheduler — so Run now never errors with "Multiple test plans exist".
+  if (effectiveTaskId === undefined) {
+    const handler = getAgentHandler(agent.name);
+    if (handler.requiresTestPlan) {
+      const repo = getRepo(agent.repoId);
+      if (repo) {
+        const planId = await pickWorstCoveragePlanId(repo, agent.name);
+        if (planId) effectiveTaskId = `plan:${planId}`;
+      }
+    }
+  }
   return dispatchAgentRun(agent, {
     ...(effectiveTaskId !== undefined ? { taskId: effectiveTaskId } : {}),
     ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),

@@ -9,6 +9,7 @@ interface AutoPausedDetail {
   agentId: string;
   agentName: AgentName;
   displayName: string;
+  reason: 'consecutive_failures' | 'needs_test_plan';
   consecutiveFailures: number;
   lastErrorCode: string | null;
   lastErrorSummary: string | null;
@@ -52,12 +53,18 @@ export function AgentAutoPausedToast(): ReactElement | null {
   return (
     <div className="agent-autopause-toast-stack" role="alert" aria-live="assertive">
       {toasts.map((t) => {
-        const errorBit = t.lastErrorCode ? ` (${t.lastErrorCode})` : '';
-        const detail = t.lastErrorSummary
-          ? `Last error: ${t.lastErrorSummary.slice(0, 160)}${
-              t.lastErrorSummary.length > 160 ? '…' : ''
-            }`
-          : 'Click Inspect to see the failed runs.';
+        const needsPlan = t.reason === 'needs_test_plan';
+        const errorBit = !needsPlan && t.lastErrorCode ? ` (${t.lastErrorCode})` : '';
+        const sub = needsPlan
+          ? `${labelForAgent(t.agentName)} · no test plan to run. Create or attach one, then re-enable.`
+          : `${labelForAgent(t.agentName)} · ${t.consecutiveFailures} consecutive scheduled failures. Investigate before re-enabling.`;
+        const detail = needsPlan
+          ? 'Open Coverage to generate or attach a plan for this agent.'
+          : t.lastErrorSummary
+            ? `Last error: ${t.lastErrorSummary.slice(0, 160)}${
+                t.lastErrorSummary.length > 160 ? '…' : ''
+              }`
+            : 'Click Inspect to see the failed runs.';
         return (
           <div
             key={t.toastId}
@@ -72,10 +79,7 @@ export function AgentAutoPausedToast(): ReactElement | null {
               <div className="tpg-toast-headline">
                 {t.displayName} auto-paused{errorBit}
               </div>
-              <div className="tpg-toast-sub">
-                {labelForAgent(t.agentName)} · {t.consecutiveFailures} consecutive scheduled
-                failures. Investigate before re-enabling.
-              </div>
+              <div className="tpg-toast-sub">{sub}</div>
               <div className="tpg-toast-hint">{detail}</div>
             </div>
             <div className="tpg-toast-actions">

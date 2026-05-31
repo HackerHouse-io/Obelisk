@@ -395,6 +395,15 @@ export function TestPlans(): ReactElement {
   return (
     <div className="test-plans">
       <aside className="test-plans-sidebar">
+        <button
+          type="button"
+          className="btn ghost sm test-plans-back"
+          onClick={() => setRoute('coverage')}
+          title="Back to Coverage"
+          data-testid="test-plans-back"
+        >
+          <Icon.ArrowLeft size={12} /> Coverage
+        </button>
         <div className="test-plans-sidebar-header">
           <Icon.Playbook size={13} color="var(--brand)" />
           <span>Test plans</span>

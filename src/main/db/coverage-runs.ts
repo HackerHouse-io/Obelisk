@@ -39,6 +39,8 @@ interface CoverageStepRow {
   kind: CoverageRunStepKind;
   feature_label: string | null;
   ref: string | null;
+  run_id: string | null;
+  findings: number | null;
   state: CoverageRunStepState;
   detail: string | null;
   at: string;
@@ -50,6 +52,8 @@ function mapStep(r: CoverageStepRow): CoverageRunStep {
     kind: r.kind,
     featureLabel: r.feature_label,
     ref: r.ref,
+    runId: r.run_id,
+    findings: r.findings,
     state: r.state,
     detail: r.detail,
     at: r.at,
@@ -243,15 +247,34 @@ export function appendCoverageStep(input: AppendStepInput): number {
 
 export function updateCoverageStep(
   stepId: number,
-  patch: { state?: CoverageRunStepState; ref?: string | null; detail?: string | null },
+  patch: {
+    state?: CoverageRunStepState;
+    ref?: string | null;
+    detail?: string | null;
+    runId?: string | null;
+    findings?: number | null;
+  },
 ): void {
+  // COALESCE = set-or-keep: passing `undefined` (→ null) leaves the column
+  // untouched. `findings` therefore goes NULL → N once, monotonically.
   getDb()
     .prepare(
       `UPDATE coverage_run_steps
-         SET state = COALESCE(?, state), ref = COALESCE(?, ref), detail = COALESCE(?, detail)
+         SET state    = COALESCE(?, state),
+             ref      = COALESCE(?, ref),
+             detail   = COALESCE(?, detail),
+             run_id   = COALESCE(?, run_id),
+             findings = COALESCE(?, findings)
        WHERE id = ?`,
     )
-    .run(patch.state ?? null, patch.ref ?? null, patch.detail ?? null, stepId);
+    .run(
+      patch.state ?? null,
+      patch.ref ?? null,
+      patch.detail ?? null,
+      patch.runId ?? null,
+      patch.findings ?? null,
+      stepId,
+    );
 }
 
 /**

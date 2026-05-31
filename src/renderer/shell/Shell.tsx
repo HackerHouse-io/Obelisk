@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar';
 import { Titlebar } from './Titlebar';
 import { TestPlanGenerationToast } from '../components/TestPlanGenerationToast';
 import { RunStartedToast } from '../components/RunStartedToast';
+import { CoverageFindingsToast } from '../components/CoverageFindingsToast';
 import { AgentEnabledToast } from '../components/AgentEnabledToast';
 import { AgentAutoPausedToast } from '../components/AgentAutoPausedToast';
 import { RunnerAuthBanner } from '../components/RunnerAuthBanner';
@@ -25,6 +26,7 @@ export function Shell({ children }: Props): ReactElement {
       </main>
       <TestPlanGenerationToast />
       <RunStartedToast />
+      <CoverageFindingsToast />
       <AgentEnabledToast />
       <AgentAutoPausedToast />
       <GlobalAlert />
