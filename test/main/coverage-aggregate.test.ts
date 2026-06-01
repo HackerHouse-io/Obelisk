@@ -308,4 +308,37 @@ describe('buildCoverageReport', () => {
     const auth = report.files.find((f) => f.path === 'src/auth/session.ts')!;
     expect(auth.findingsCount).toBe(2);
   });
+
+  it('with a coverage map, scanner directory buckets are NOT seeded as features', async () => {
+    // A directory the scanner WOULD bucket (≥3 files), absent from the map.
+    mkdirSync(join(repoPath, 'src', 'widgets'), { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) {
+      writeFileSync(join(repoPath, 'src', 'widgets', f), '// widget\n');
+    }
+    const git = simpleGit(repoPath);
+    await git.add('.');
+    await git.commit('add widgets');
+
+    mkdirSync(join(repoPath, 'qa'), { recursive: true });
+    writeFileSync(join(repoPath, 'qa', 'coverage-map.md'), '- billing: src/billing/**\n');
+
+    const report = await buildCoverageReport(repoId);
+    const labels = report.features.map((f) => f.label);
+    expect(labels).toContain('billing'); // from the map
+    expect(labels).not.toContain('widgets'); // scanner bucket suppressed by the map
+  });
+
+  it('without a coverage map, scanner buckets DO appear (bootstrap path)', async () => {
+    mkdirSync(join(repoPath, 'src', 'widgets'), { recursive: true });
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) {
+      writeFileSync(join(repoPath, 'src', 'widgets', f), '// widget\n');
+    }
+    const git = simpleGit(repoPath);
+    await git.add('.');
+    await git.commit('add widgets');
+
+    // No qa/coverage-map.md written.
+    const report = await buildCoverageReport(repoId);
+    expect(report.features.map((f) => f.label)).toContain('widgets');
+  });
 });

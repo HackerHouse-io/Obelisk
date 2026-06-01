@@ -86,9 +86,18 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
   // into `resolveScopeToGlobs`.
   const scanned = scanFromTrackedFiles(repo.localPath, trackedFiles);
   const scannerGlobs = new Map<string, string[]>();
+  // The coverage map is the single source of truth for the feature taxonomy.
+  // The directory scanner is BOOTSTRAP-ONLY: its `src/<dir>` buckets seed
+  // feature cards solely when no map exists yet (so a fresh repo still shows
+  // something + the loop can draft a first pass). Once a map is present, the
+  // scanner's globs are still used to RESOLVE labels (the fallback below), but
+  // it must NOT seed directory-named feature cards onto the radar — that's what
+  // produced nonsensical `src`/`backend`/`screens` features alongside the map's
+  // real product features.
+  const hasMap = coverageMap.size > 0;
   for (const c of scanned) {
     scannerGlobs.set(c.label, c.globs);
-    scratchFor(c.label);
+    if (!hasMap) scratchFor(c.label);
   }
   for (const label of coverageMap.keys()) {
     scratchFor(label);

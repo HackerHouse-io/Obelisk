@@ -12,6 +12,7 @@ import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
 import type { CodingAgentRunner } from '../runners/types';
 import { buildCoverageReport } from './aggregate';
+import { loadCoverageMap } from './coverage-map';
 import { startMapGenerationJob, type GenerateMapInput } from './generate-map';
 import { startGenerationJob, type GenerateInput } from '../test-plans/generate';
 import { runAgent, type RunAgentInput, type RunAgentOutput } from '../orchestrator/run';
@@ -365,7 +366,16 @@ async function runPass(
   );
   emit(coverageRunId);
 
-  const needsPlan = gaps.filter((g) => g.planCount === 0);
+  // Only draft plans for gaps that ARE coverage-map features. The map is the
+  // canonical taxonomy; we never auto-generate a plan for a stray label (a
+  // scanner directory bucket or a legacy off-map plan feature) — that's what
+  // produced the nonsensical `src`/`backend`/`screens` plans. When no map
+  // exists yet (bootstrap/edge — the loop normally generates one first), fall
+  // back to drafting for all gaps so a fresh repo still makes progress.
+  const mapLabels = new Set(loadCoverageMap(repo.localPath).keys());
+  const needsPlan = gaps.filter(
+    (g) => g.planCount === 0 && (mapLabels.size === 0 || mapLabels.has(g.label.toLowerCase())),
+  );
   for (const gap of needsPlan) {
     if (spawnsUsed >= budget) break;
     if (

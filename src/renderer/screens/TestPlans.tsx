@@ -107,6 +107,16 @@ export function TestPlans(): ReactElement {
   // the active repo. Drives the per-section "Generate" button's in-flight
   // disable state so the user can't double-fire a job for the same feature.
   const [featuresInFlight, setFeaturesInFlight] = useState<Set<string>>(() => new Set());
+  // Coverage-map feature labels — offered as suggestions in the New plan
+  // dialog so plans align with the radar's taxonomy instead of inventing
+  // directory-bucket features. Fetched lazily when the dialog opens.
+  const [mapFeatures, setMapFeatures] = useState<string[]>([]);
+  useEffect(() => {
+    if (!newPlan.open || !repo) return;
+    void window.obelisk.invoke('coverage:list', { repoId: repo.id }).then((res) => {
+      if (res.ok) setMapFeatures(res.value.features.map((f) => f.label));
+    });
+  }, [newPlan.open, repo]);
 
   const refreshList = useCallback(async () => {
     if (!repo) return;
@@ -474,6 +484,7 @@ export function TestPlans(): ReactElement {
 
       <NewPlanDialog
         state={newPlan}
+        mapFeatures={mapFeatures}
         onClose={() => setNewPlan(INITIAL_NEW_PLAN_STATE)}
         onChange={(patch) => setNewPlan((s) => ({ ...s, ...patch }))}
         onSubmit={() =>
@@ -1433,11 +1444,13 @@ function EditableText({
 
 function NewPlanDialog({
   state,
+  mapFeatures,
   onClose,
   onChange,
   onSubmit,
 }: {
   state: NewPlanState;
+  mapFeatures: string[];
   onClose: () => void;
   onChange: (patch: Partial<NewPlanState>) => void;
   onSubmit: () => void;
@@ -1497,12 +1510,29 @@ function NewPlanDialog({
                 id="feature-name-input"
                 className="file-issue-input"
                 type="text"
+                list="new-plan-map-features"
                 value={state.featureName}
                 onChange={(e) => onChange({ featureName: e.target.value })}
-                placeholder="e.g. checkout, sign-in, settings"
+                placeholder={
+                  mapFeatures.length > 0
+                    ? `e.g. ${mapFeatures.slice(0, 3).join(', ')}`
+                    : 'e.g. checkout, sign-in, settings'
+                }
                 disabled={state.busy}
                 autoFocus
               />
+              {mapFeatures.length > 0 ? (
+                <datalist id="new-plan-map-features">
+                  {mapFeatures.map((f) => (
+                    <option key={f} value={f} />
+                  ))}
+                </datalist>
+              ) : null}
+              <div className="new-plan-hint">
+                {mapFeatures.length > 0
+                  ? 'Pick a coverage-map feature so the plan aligns with the radar.'
+                  : 'No coverage map yet — generate one from the Coverage screen first for best results.'}
+              </div>
             </div>
           ) : null}
 

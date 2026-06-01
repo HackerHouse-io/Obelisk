@@ -3823,6 +3823,11 @@ body {
   color: var(--t-2);
   font-weight: 500;
 }
+.new-plan-hint {
+  font-size: 11px;
+  color: var(--t-3);
+  margin-top: 4px;
+}
 .new-plan-segmented {
   display: flex;
   gap: 4px;

@@ -13,6 +13,7 @@ import { createPlan } from './store';
 import { advanceStage, finishDone, finishFailed, startJob } from './jobs';
 import type { TestPlan } from '../../shared/types';
 import { buildCoverageReport, pickFocusFiles, type FocusFile } from '../coverage/aggregate';
+import { loadCoverageMap } from '../coverage/coverage-map';
 
 /**
  * Plan generation flow:
@@ -108,7 +109,23 @@ async function runJob(jobId: string, input: GenerateInput): Promise<void> {
     const args =
       runnerKind === 'codex' ? codexArgs(input.modelOverride) : claudeArgs(input.modelOverride);
     const focusFiles = input.focusOnChangedOrUncovered ? await loadFocusFiles(input.repo.id) : [];
-    const stdin = generatorPrompt(input, seed, focusFiles);
+    // The coverage map is the canonical feature taxonomy. Feed the target
+    // feature's globs (so the model tests the right files, not a re-derived
+    // boundary) and the full label vocabulary (so case `scope` tags stay
+    // consistent with the radar instead of inventing ad-hoc labels).
+    const coverageMap = loadCoverageMap(input.repo.localPath);
+    const mapLabels = [...coverageMap.keys()];
+    const featureLabel =
+      input.scope === 'feature' && input.featureName
+        ? input.featureName.trim().toLowerCase()
+        : null;
+    const featureGlobs = featureLabel ? (coverageMap.get(featureLabel) ?? []) : [];
+    const allowedScopes = mapLabels.length > 0 ? ['smoke', ...mapLabels] : null;
+    const stdin = generatorPrompt(input, seed, focusFiles, {
+      featureGlobs,
+      allowedScopes,
+      featureLabel,
+    });
     const abort = new AbortController();
     // Throttle "Drafting: …" toast updates: chatty models emit hundreds of
     // stdout chunks during reasoning, and we don't want a re-render per chunk.
@@ -164,6 +181,10 @@ async function runJob(jobId: string, input: GenerateInput): Promise<void> {
       );
       return;
     }
+    // Defense-in-depth: when a coverage map exists, snap every case `scope` to
+    // the map vocabulary so a wandering model can't pollute the radar with
+    // ad-hoc labels (the root cause of the directory-bucket mess).
+    if (allowedScopes) normalizeCaseScopes(blocks, allowedScopes, featureLabel);
 
     advanceStage(jobId, 'writing');
     const plan = createPlan({
@@ -237,15 +258,50 @@ const GEN_SYSTEM_PROMPT = [
   'JSON; do not write prose outside the markers.',
 ].join(' ');
 
+interface MapContext {
+  /** Globs from the coverage map for the target feature (feature scope only). */
+  featureGlobs: string[];
+  /** Allowed case-scope vocabulary (`smoke` + map labels), or null if no map. */
+  allowedScopes: string[] | null;
+  /** Lowercased target feature label (feature scope only). */
+  featureLabel: string | null;
+}
+
 function generatorPrompt(
   input: GenerateInput,
   seed: TestPlanBlock[],
   focusFiles: FocusFile[],
+  map: MapContext,
 ): string {
+  const featureFilesHint =
+    map.featureGlobs.length > 0
+      ? ` It is implemented by these files (from the repo's coverage map): ${map.featureGlobs.join(', ')}. Read THOSE files`
+      : ' Read the codebase to find the files that implement it';
   const scopeDesc =
     input.scope === 'feature' && input.featureName
-      ? `Focus narrowly on the "${input.featureName}" feature. Read the codebase to find the files that implement it. Produce sections that cover its happy path, validation, edge cases, network/IO failures, and persistence.`
+      ? `Focus narrowly on the "${input.featureName}" feature.${featureFilesHint}, then produce sections that cover its happy path, validation, edge cases, network/IO failures, and persistence.`
       : `Produce a comprehensive test plan covering EVERY user-facing feature of this codebase. Read the repo (src/, app/, packages/, README.md, package.json) to identify the real features. Each top-level user-facing area gets its own section. Always include a "Smoke" section first.`;
+
+  // Scope-tag instruction: when a coverage map exists, constrain the vocabulary
+  // to its labels so cases stay aligned with the radar. Otherwise fall back to
+  // the legacy free-form instruction.
+  const scopeRule = map.allowedScopes
+    ? [
+        `- Each case carries \`scope\` — an array naming the coverage-map feature(s)`,
+        `  it exercises. Use ONLY these labels: ${map.allowedScopes.join(', ')}.`,
+        map.featureLabel
+          ? `  EVERY case MUST include "${map.featureLabel}"; you may add at most one`
+          : `  Each case MUST include at least one of these labels; add at most one more`,
+        `  other label from the list if the case genuinely also touches it.`,
+        `  Do NOT invent labels outside this list — they feed the Coverage radar.`,
+      ].join('\n')
+    : [
+        '- Each case carries `scope` — an array of 1–3 lowercase labels naming the',
+        '  code areas the case exercises (e.g. ["auth"], ["checkout","billing"],',
+        '  ["onboarding"]). Use the section name as a fallback if no narrower label',
+        '  fits. Labels feed the Coverage screen so the user can see which files',
+        '  are tested vs. dark, so be precise.',
+      ].join('\n');
 
   const seedSummary = seed
     .map((b) => (b.kind === 'section' ? `## ${b.title}` : `- [ ] ${b.title}`))
@@ -282,11 +338,7 @@ function generatorPrompt(
     '- Each case has a CONCRETE title (under 14 words), an Expected outcome, and a Repro hint.',
     '- "Login works" is not acceptable — name the route, the field IDs, the success state.',
     '- Severity is one of P0 (must work), P1 (should work), P2 (nice to have).',
-    '- Each case carries `scope` — an array of 1–3 lowercase labels naming the',
-    '  code areas the case exercises (e.g. ["auth"], ["checkout","billing"],',
-    '  ["onboarding"]). Use the section name as a fallback if no narrower label',
-    '  fits. Labels feed the Coverage screen so the user can see which files',
-    '  are tested vs. dark, so be precise.',
+    scopeRule,
     '',
     '## Heuristic seed (we walked the repo for you — replace with real cases)',
     '```',
@@ -321,6 +373,33 @@ function generatorPrompt(
  *   2. ```json ... ``` fenced block.
  *   3. Largest balanced { ... } object with a `blocks` array.
  */
+/**
+ * Snap every case's `scope` to the coverage-map vocabulary: drop any label not
+ * in `allowedScopes`, ensure the target `feature` label is present (feature
+ * scope), and fall back to the feature (or `smoke`) if nothing survives. Keeps
+ * the radar coherent even when the model ignores the prompt's constraint.
+ * Mutates the blocks in place.
+ */
+export function normalizeCaseScopes(
+  blocks: TestPlanBlock[],
+  allowedScopes: string[],
+  featureLabel: string | null,
+): void {
+  const allowed = new Set(allowedScopes.map((s) => s.toLowerCase()));
+  for (const b of blocks) {
+    if (b.kind !== 'case') continue;
+    const kept = (b.scope ?? [])
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0 && allowed.has(s));
+    const out: string[] = [];
+    if (featureLabel && allowed.has(featureLabel)) out.push(featureLabel);
+    for (const s of kept) if (!out.includes(s)) out.push(s);
+    if (out.length === 0)
+      out.push(featureLabel && allowed.has(featureLabel) ? featureLabel : 'smoke');
+    b.scope = out;
+  }
+}
+
 export function extractBlocks(stdout: string): TestPlanBlock[] | null {
   const candidates: string[] = [];
 
