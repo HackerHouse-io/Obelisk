@@ -10,6 +10,10 @@ import { createRun } from '../../src/main/db/runs';
 import { checkEvidence } from '../../src/main/evidence/check';
 import { inferChangeKind } from '../../src/main/evidence/infer-change-kind';
 import { renderPrBody } from '../../src/main/evidence/pr-body';
+import {
+  crossCheckEvidence,
+  isEvidenceComplete,
+} from '../../src/main/agents/pr-reviewer/evidence-cross-check';
 
 let tmpRoot: string;
 let runId: string;
@@ -203,5 +207,84 @@ describe('renderPrBody', () => {
     expect(body).toContain('Fixes #142.');
     expect(body).not.toContain('on behalf of the connected account');
     expect(body).not.toContain('Task: issue#142');
+  });
+});
+
+describe('renderPrBody — kind-aware Evidence (structured bug-fixer body)', () => {
+  const reportFor = () => ({ summary: 's', root_cause: 'rc', fix: ['change x'] });
+
+  it('marks Screenshots & Logs "not applicable" for a backend-only fix and round-trips as complete', () => {
+    recordArtifact({ runId, kind: 'failing_test_diff', path: 'a', bytes: 2048, sha256: 'deadbeefcafe01' });
+    recordArtifact({ runId, kind: 'test_output', path: 'b', bytes: 512, sha256: 'deadbeefcafe02' });
+    const evidence = checkEvidence({
+      runId,
+      changeKind: 'bug_fix',
+      inferred: { kind: 'bug_fix', uiTouched: false, backendTouched: true, hasNonTestSourceChanges: true },
+    });
+    const body = renderPrBody({
+      agentName: 'bug-fixer',
+      runId,
+      taskRef: 'issue#9',
+      summary: 's',
+      reasoning: 'r',
+      evidence,
+      bugFixReport: reportFor(),
+    });
+    expect(body).toContain('## Evidence');
+    expect(body).toContain('`failing_test_diff`');
+    expect(body).toContain('_(not applicable — no UI changes in this PR)_');
+    expect(body).toContain('_(not applicable — no backend changes in this PR)_');
+    // Clean — no raw obelisk:// URIs, and no false "none referenced" gap.
+    expect(body).not.toContain('obelisk://artifact');
+    expect(body).not.toContain('_(none referenced for this change)_');
+    // The reviewer's cross-check agrees the pack is complete.
+    expect(isEvidenceComplete(crossCheckEvidence(body))).toBe(true);
+  });
+
+  it('populates Screenshots when UI was touched and a screenshot was captured', () => {
+    recordArtifact({ runId, kind: 'failing_test_diff', path: 'a', bytes: 2048, sha256: 'deadbeefcafe03' });
+    recordArtifact({ runId, kind: 'test_output', path: 'b', bytes: 512, sha256: 'deadbeefcafe04' });
+    recordArtifact({ runId, kind: 'screenshot', path: 'c.png', bytes: 8192, sha256: 'deadbeefcafe05' });
+    const evidence = checkEvidence({
+      runId,
+      changeKind: 'bug_fix',
+      inferred: { kind: 'bug_fix', uiTouched: true, backendTouched: false, hasNonTestSourceChanges: true },
+    });
+    const body = renderPrBody({
+      agentName: 'bug-fixer',
+      runId,
+      taskRef: 'issue#9',
+      summary: 's',
+      reasoning: 'r',
+      evidence,
+      bugFixReport: reportFor(),
+    });
+    expect(body).toContain('`screenshot`');
+    expect(body).not.toContain('_(none referenced for this change)_');
+    expect(isEvidenceComplete(crossCheckEvidence(body))).toBe(true);
+  });
+
+  it('keeps the "none referenced" placeholder for a genuinely-missing required item', () => {
+    // UI was touched but no screenshot was captured → a real gap, not "n/a".
+    recordArtifact({ runId, kind: 'failing_test_diff', path: 'a', bytes: 2048, sha256: 'deadbeefcafe06' });
+    recordArtifact({ runId, kind: 'test_output', path: 'b', bytes: 512, sha256: 'deadbeefcafe07' });
+    const evidence = checkEvidence({
+      runId,
+      changeKind: 'bug_fix',
+      inferred: { kind: 'bug_fix', uiTouched: true, backendTouched: false, hasNonTestSourceChanges: true },
+    });
+    const body = renderPrBody({
+      agentName: 'bug-fixer',
+      runId,
+      taskRef: 'issue#9',
+      summary: 's',
+      reasoning: 'r',
+      evidence,
+      bugFixReport: reportFor(),
+    });
+    expect(body).toContain('_(none referenced for this change)_');
+    const check = crossCheckEvidence(body);
+    expect(check.emptySubheadings).toContain('Screenshots');
+    expect(isEvidenceComplete(check)).toBe(false);
   });
 });

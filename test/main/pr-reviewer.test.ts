@@ -126,6 +126,30 @@ See below.`;
     const result = crossCheckEvidence(body);
     expect(isEvidenceComplete(result)).toBe(true);
   });
+
+  it('treats "not applicable" subheadings as satisfied (kind-aware producer output)', () => {
+    const body = `## Evidence
+
+### Tests
+
+- \`failing_test_diff\` — 2048 bytes · sha256:abc123def456 · captured in the run audit log
+
+### Screenshots
+
+_(not applicable — no UI changes in this PR)_
+
+### Logs
+
+_(not applicable — no backend changes in this PR)_
+
+### Reasoning
+
+See the reasoning in this PR and the linked audit log.`;
+    const result = crossCheckEvidence(body);
+    expect(result.hasEvidenceSection).toBe(true);
+    expect(result.emptySubheadings).toEqual([]);
+    expect(isEvidenceComplete(result)).toBe(true);
+  });
 });
 
 describe('enforceEvidenceVerdict', () => {
@@ -160,15 +184,19 @@ ok.`);
     expect(out.body).not.toContain('Evidence Pack incomplete');
   });
 
-  it('overrides to REQUEST_CHANGES when Evidence section is missing', () => {
+  it('does NOT override the verdict when the Evidence section is missing — only notes it', () => {
     const evidence = crossCheckEvidence('## Summary\nAdded thing.');
     const out = enforceEvidenceVerdict({ ...baseReview, verdict: 'APPROVE' }, evidence);
-    expect(out.event).toBe('REQUEST_CHANGES');
-    expect(out.body).toContain('Evidence Pack incomplete');
+    // The reviewer verified the change itself (per the EVIDENCE GAP directive),
+    // so its verdict stands — no mechanical reject.
+    expect(out.event).toBe('APPROVE');
+    expect(out.body).not.toContain('Evidence Pack incomplete');
+    expect(out.body).toContain('no `## Evidence` section');
+    expect(out.body).toContain('verified the change directly');
     expect(out.body).toContain('LGTM.'); // original review still appears below
   });
 
-  it('overrides to REQUEST_CHANGES when a required subheading is empty', () => {
+  it('does NOT override the verdict when a required subheading is empty — only notes the gap', () => {
     const evidence = crossCheckEvidence(`## Evidence
 
 ### Tests
@@ -187,8 +215,9 @@ _(none referenced for this change)_
 
 ok.`);
     const out = enforceEvidenceVerdict(baseReview, evidence);
-    expect(out.event).toBe('REQUEST_CHANGES');
-    expect(out.body).toContain('Empty subheadings');
-    expect(out.body).toContain('Tests');
+    expect(out.event).toBe('APPROVE');
+    expect(out.body).toContain('incomplete `## Evidence` section');
+    expect(out.body).toContain('### Tests');
+    expect(out.body).toContain('LGTM.');
   });
 });

@@ -127,6 +127,8 @@ describe('renderPrBody (senior-engineer template for bug-fixer PRs)', () => {
     expect(idx('## Fix')).toBeGreaterThan(idx('## Root cause'));
     expect(idx('## Test plan')).toBeGreaterThan(idx('## Fix'));
     expect(idx('## Notes')).toBeGreaterThan(idx('## Test plan'));
+    // Evidence Pack sits at the end, after Notes (before the footer rule).
+    expect(idx('## Evidence')).toBeGreaterThan(idx('## Notes'));
 
     // 3. Fix bullets render as a markdown list.
     expect(body).toContain(
@@ -154,12 +156,16 @@ describe('renderPrBody (senior-engineer template for bug-fixer PRs)', () => {
     // The old "on behalf of the connected account" copy is gone.
     expect(body).not.toContain('on behalf of the connected account');
 
-    // 7. None of the noise from earlier iterations leaks through:
+    // 7. Earlier-iteration noise is gone, but the Evidence Pack IS present and clean:
     //    - no top-level "## Reasoning" dump
-    //    - no "## Evidence" with obelisk:// artifact URIs
+    //    - "## Evidence" present with all four subheadings, but NO `obelisk://`
+    //      artifact URIs (the noise that got it stripped before — keep it clean)
     //    - no top-level disclosure block at the head
     expect(body).not.toMatch(/^## Reasoning/m);
-    expect(body).not.toMatch(/^## Evidence$/m);
+    expect(body).toMatch(/^## Evidence$/m);
+    expect(body).toContain('### Tests');
+    expect(body).toContain('### Screenshots');
+    expect(body).toContain('### Logs');
     expect(body).not.toContain('obelisk://artifact');
     expect(body).not.toMatch(/^> (Authored|Co-authored) by Obelisk/m);
   });

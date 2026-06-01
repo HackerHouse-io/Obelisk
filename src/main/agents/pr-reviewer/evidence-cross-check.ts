@@ -19,6 +19,12 @@ export interface EvidenceCrossCheck {
 const EVIDENCE_HEADER_RE = /^##\s+Evidence\s*$/im;
 const SUB_RE = /^###\s+(Tests|Screenshots|Logs|Reasoning)\s*$/gim;
 const PLACEHOLDER_RE = /_\(none referenced for this change\)_/i;
+// A subheading the producer marked "not applicable to this change" (e.g.
+// `_(not applicable — no UI changes in this PR)_`). The producer is kind-aware
+// (src/main/evidence/pr-body.ts → check.ts skips screenshots when `!uiTouched`,
+// logs when `!backendTouched`), so this is an affirmative "no proof is needed
+// here", NOT a missing-evidence gap. It counts as a satisfied subheading.
+const NOT_APPLICABLE_RE = /_\(not applicable[^)]*\)_/i;
 
 const REQUIRED = ['Tests', 'Screenshots', 'Logs', 'Reasoning'] as const;
 
@@ -57,6 +63,8 @@ export function crossCheckEvidence(prBody: string): EvidenceCrossCheck {
   const found = new Set(matches.map((s) => s.name));
   const missing = REQUIRED.filter((r) => !found.has(r));
   const empty = matches
+    // A "not applicable" subheading is affirmatively satisfied — never empty.
+    .filter((s) => !NOT_APPLICABLE_RE.test(s.body))
     .filter((s) => PLACEHOLDER_RE.test(s.body) || s.body.length === 0)
     .map((s) => s.name);
 

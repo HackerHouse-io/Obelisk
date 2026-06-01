@@ -1,5 +1,6 @@
 import type { EvidenceArtifact } from '../db/evidence';
 import type { CheckResult } from './check';
+import type { EvidenceItem } from './rules';
 import type { BugFixReport } from '../agents/bug-fixer';
 
 const OBELISK_REPO_URL = 'https://github.com/HackerHouse-io/Obelisk';
@@ -98,6 +99,13 @@ function renderStructuredBody(
     if (bullets.length > 0) sections.push(`## Notes\n\n${bullets}`);
   }
 
+  // Evidence Pack — required on every PR (PRD §7.2) and cross-checked by PR
+  // Reviewer. Kind-aware: subheadings that don't apply to this change (no UI,
+  // no backend) render an explicit "not applicable" line rather than a
+  // missing-evidence placeholder, so a correct fix isn't flagged for proof it
+  // never needed to produce.
+  sections.push(renderEvidence(input.evidence));
+
   // Footer: small Obelisk attribution + the audit-trace command. Lives
   // BELOW a horizontal rule so it doesn't compete with the body's main
   // content. Reviewers who care can click; everyone else ignores it.
@@ -174,30 +182,53 @@ function renderDisclosure(input: PrBodyInput): string {
   return lines.join('\n');
 }
 
-function renderEvidence(check: CheckResult): string {
-  const tests = collectKinds(check, ['failing_test_diff', 'test_output', 'new_tests']);
-  const screenshots = collectKinds(check, [
-    'ui_screenshot',
-    'ui_screenshot_if_ui_touched',
-    'before_after_screenshot_if_ui_touched',
-  ]);
-  const logs = collectKinds(check, ['backend_log_or_curl_if_backend_touched']);
+const TEST_ITEMS: readonly EvidenceItem[] = ['failing_test_diff', 'test_output', 'new_tests'];
+const SCREENSHOT_ITEMS: readonly EvidenceItem[] = [
+  'ui_screenshot',
+  'ui_screenshot_if_ui_touched',
+  'before_after_screenshot_if_ui_touched',
+];
+const LOG_ITEMS: readonly EvidenceItem[] = ['backend_log_or_curl_if_backend_touched'];
 
+function renderEvidence(check: CheckResult): string {
   return [
     '## Evidence',
     '',
     '### Tests',
-    formatList(tests),
+    renderSubheading(check, TEST_ITEMS, 'not applicable to this change'),
     '',
     '### Screenshots',
-    formatList(screenshots),
+    renderSubheading(check, SCREENSHOT_ITEMS, 'not applicable — no UI changes in this PR'),
     '',
     '### Logs',
-    formatList(logs),
+    renderSubheading(check, LOG_ITEMS, 'not applicable — no backend changes in this PR'),
     '',
     '### Reasoning',
-    'See the `## Reasoning` section below and the linked audit log.',
+    'See the reasoning in this PR and the linked audit log.',
   ].join('\n');
+}
+
+/**
+ * Render one Evidence subheading. Three states, keyed off `check.missing`
+ * (the single source of truth — `check.ts` already encodes the kind-aware
+ * `uiTouched`/`backendTouched` logic):
+ *   - artifacts present  → bullet list.
+ *   - required but absent → `_(none referenced for this change)_` (a genuine
+ *     gap; PR Reviewer treats this as empty and verifies the change itself).
+ *   - not applicable      → the `notApplicable` line (PR Reviewer treats any
+ *     non-placeholder text as satisfied).
+ */
+function renderSubheading(
+  check: CheckResult,
+  items: readonly EvidenceItem[],
+  notApplicable: string,
+): string {
+  const artifacts = collectKinds(check, [...items]);
+  if (artifacts.length > 0) {
+    return artifacts.map((a) => `- \`${a.kind}\` — ${describeArtifact(a)}`).join('\n');
+  }
+  const requiredButMissing = items.some((i) => check.missing.includes(i));
+  return requiredButMissing ? '_(none referenced for this change)_' : `_(${notApplicable})_`;
 }
 
 function collectKinds(
@@ -216,16 +247,13 @@ function collectKinds(
   return out;
 }
 
-function formatList(artifacts: EvidenceArtifact[]): string {
-  if (artifacts.length === 0) return '_(none referenced for this change)_';
-  return artifacts.map((a) => `- \`${a.kind}\` — ${describeArtifact(a)}`).join('\n');
-}
-
 function describeArtifact(a: EvidenceArtifact): string {
-  // Prefer the in-repo mirror path if uploaded; otherwise fall back to a
-  // local obelisk:// URI so reviewers running Obelisk can open it.
-  const tag = a.uploadedToRepo
-    ? `[in repo](.obelisk/records/...)`
-    : `\`obelisk://artifact/${a.id}\``;
-  return `${tag} · ${a.bytes} bytes · sha256:${a.sha256.slice(0, 12)}`;
+  // Keep the line clean for human reviewers on GitHub: link the in-repo mirror
+  // when uploaded; otherwise just note it's in the run audit log. No raw
+  // `obelisk://artifact/<id>` URIs — they only resolve inside the Obelisk app
+  // and read as noise in a PR body.
+  const meta = `${a.bytes} bytes · sha256:${a.sha256.slice(0, 12)}`;
+  return a.uploadedToRepo
+    ? `[in repo](.obelisk/records/...) · ${meta}`
+    : `${meta} · captured in the run audit log`;
 }

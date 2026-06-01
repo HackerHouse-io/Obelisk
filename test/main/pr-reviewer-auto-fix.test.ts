@@ -533,7 +533,7 @@ describe('pr-reviewer interpretResult: verdict + plan emission', () => {
     expect(plans[0]!.event).toBe('REQUEST_CHANGES'); // original verdict, untouched
   });
 
-  it('Evidence-incomplete override wins even when fix-up commits were pushed', async () => {
+  it('incomplete Evidence no longer overrides the verdict — only annotates it', async () => {
     const repo = makeRepo('prs');
     // PR body has no `## Evidence` section.
     pullsGet.mockResolvedValue({ data: { body: '## Summary\nA fix.\n' } });
@@ -553,8 +553,11 @@ describe('pr-reviewer interpretResult: verdict + plan emission', () => {
     expect(plans).toHaveLength(2);
     expect(plans[0]!.kind).toBe('pr');
     if (plans[1]!.kind !== 'review') throw new Error('unreachable');
-    expect(plans[1]!.event).toBe('REQUEST_CHANGES');
-    expect(plans[1]!.body).toContain('Evidence Pack incomplete');
+    // The reviewer verified the change itself; its verdict (APPROVE after the
+    // fix-up) stands. The missing Evidence section becomes a note, not a reject.
+    expect(plans[1]!.event).toBe('APPROVE');
+    expect(plans[1]!.body).not.toContain('Evidence Pack incomplete');
+    expect(plans[1]!.body).toContain('no `## Evidence` section');
   });
 
   // GitHub refuses APPROVE / REQUEST_CHANGES from the PR's author. The agent

@@ -71,9 +71,11 @@ After your fix-mode work, the PR should:
 
 If all three hold, the orchestrator posts `APPROVE` (or the closest equivalent the API allows for self-authored PRs); the user can merge.
 
-# Evidence cross-check (non-negotiable)
+# Evidence cross-check
 
-If the PR body has an `## Evidence` section, verify each linked artifact resolves. If the section is missing or any required artifact is missing or broken, emit `REQUEST_CHANGES` and cite exactly which item is missing.
+If the PR body has an `## Evidence` section, verify each linked artifact resolves and actually supports the change.
+
+If the task context contains an `EVIDENCE GAP:` line, the PR's Evidence Pack is absent or thin. **Do not request changes solely for that** — a missing Evidence section is not, by itself, a defect. Instead, gather the proof yourself, the way a principal engineer would: read the diff end-to-end, run the project's test suite (its dependencies are installed in this worktree), and reproduce the fix/feature where you can. Cite exactly what you ran and what you observed in your `summary`/`verdict_block`, and base your verdict on that — only `REQUEST_CHANGES` if you find a real defect or genuinely cannot verify the change works.
 
 # Output format
 
@@ -95,7 +97,7 @@ END_PR_REVIEW
 
 `verdict` ∈ `APPROVE` | `REQUEST_CHANGES` | `COMMENT`.
 
-The orchestrator may **override** your verdict to `REQUEST_CHANGES` if the PR body is missing the required `## Evidence` section or has any required Evidence subheading empty. In that case your review body is appended below an Obelisk-authored "Evidence Pack incomplete" preamble.
+If the PR body's `## Evidence` section is missing or thin, the orchestrator does **not** override your verdict — it trusts the verdict you reached after verifying the change yourself (per the `EVIDENCE GAP:` directive) and only prepends a short transparency note to your review body.
 
 `findings` axis ∈ `correctness` | `design` | `tests` | `security` | `perf`. Severity ∈ `P0` | `P1` | `P2`. The orchestrator turns each finding into a top-level mention in the review body; it does NOT post inline comments in v0.1 (Phase 11+ wires PR-line anchors).
 

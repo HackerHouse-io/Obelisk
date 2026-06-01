@@ -11,7 +11,11 @@ import {
 } from '../lib/cross-install-guard';
 import { parseFencedJson } from '../lib/parse-fenced-json';
 import { parsePrTaskRef } from '../../../shared/task-refs';
-import { crossCheckEvidence, isEvidenceComplete } from './evidence-cross-check';
+import {
+  crossCheckEvidence,
+  isEvidenceComplete,
+  type EvidenceCrossCheck,
+} from './evidence-cross-check';
 import {
   claimPrReview,
   failedAttemptCount,
@@ -248,7 +252,8 @@ export const prReviewerHandler: AgentHandler = {
     // Verdict math: when the agent committed fixes, override based on
     // remaining P0/P1 findings. No remaining → APPROVE (PR is merge-ready).
     // Any remaining → COMMENT (we made progress; humans need to handle the
-    // rest). The Evidence override below still wins over both.
+    // rest). An incomplete Evidence Pack no longer overrides this — it only
+    // prepends a transparency note (see enforceEvidenceVerdict).
     let workingReview = review;
     if (hasFixUpDiff) {
       const remainingHighSeverity = review.findings.some(
@@ -376,6 +381,11 @@ async function prepareReviewTask(opts: {
   const headSha = pr.head.sha;
   const taskRef = `pr#${pr.number}@${headSha.slice(0, 12)}`;
 
+  // Cross-check the PR body's Evidence Pack up front. When it's incomplete we
+  // don't auto-reject — we tell the reviewer to gather the evidence itself
+  // (see the EVIDENCE GAP directive in prContextFor).
+  const evidence = crossCheckEvidence(pr.body ?? '');
+
   const author = pr.user?.login?.toLowerCase();
   if (!author) return { skip: 'no_author' };
 
@@ -417,6 +427,7 @@ async function prepareReviewTask(opts: {
           hasConflicts: false,
           baseBranch: repo.defaultBranch,
           failingChecks: await fetchFailingChecks(gh, owner, name, headSha),
+          evidence,
         }),
         githubNumber: pr.number,
       },
@@ -455,7 +466,7 @@ async function prepareReviewTask(opts: {
       ref: taskRef,
       kind: 'review',
       summary: `${fixMode ? 'Fixing' : 'Reviewing'} PR #${pr.number}: ${pr.title}`,
-      context: prContextFor(pr, { fixMode, hasConflicts, baseBranch, failingChecks }),
+      context: prContextFor(pr, { fixMode, hasConflicts, baseBranch, failingChecks, evidence }),
       githubNumber: pr.number,
     },
     prReviewClaimId: claim.id,
@@ -539,6 +550,16 @@ async function fetchPrInfoForReview(
   };
 }
 
+/**
+ * Reconcile the agent's verdict with the PR's Evidence Pack.
+ *
+ * We do NOT override the verdict when Evidence is incomplete. A missing or thin
+ * `## Evidence` section is not, by itself, a defect — and the reviewer was told
+ * (via the EVIDENCE GAP directive in `prContextFor`) to independently verify the
+ * change and fold that into its verdict. So we trust the agent's call and just
+ * prepend a short transparency note so a human can see the section was thin and
+ * that the verdict rests on the reviewer's own check.
+ */
 export function enforceEvidenceVerdict(
   review: ReviewOutput,
   evidence: ReturnType<typeof crossCheckEvidence>,
@@ -547,8 +568,8 @@ export function enforceEvidenceVerdict(
   if (isEvidenceComplete(evidence)) {
     return { event: review.verdict, body };
   }
-  const preamble = renderEvidencePreamble(evidence);
-  return { event: 'REQUEST_CHANGES', body: `${preamble}\n\n---\n\n${body}` };
+  const note = renderEvidenceNote(evidence);
+  return { event: review.verdict, body: `${note}\n\n---\n\n${body}` };
 }
 
 function renderReviewBody(review: ReviewOutput): string {
@@ -569,36 +590,33 @@ function renderReviewBody(review: ReviewOutput): string {
     .join('\n');
 }
 
-function renderEvidencePreamble(check: ReturnType<typeof crossCheckEvidence>): string {
-  if (!check.hasEvidenceSection) {
-    return [
-      '## Evidence Pack incomplete',
-      '',
-      'This PR has no `## Evidence` section. Per Obelisk policy (PRD §7.2), every PR must include an Evidence Pack with `Tests`, `Screenshots`, and `Logs` subheadings.',
-      '',
-      'Re-running the producing agent (Bug Fixer or Feature Builder) will regenerate the section.',
-    ].join('\n');
+/**
+ * A short, non-blocking note prepended to the review when the PR's Evidence
+ * Pack is thin. It's transparency, not a rejection: the verdict below was
+ * formed by the reviewer's own verification (see the EVIDENCE GAP directive),
+ * not by this check.
+ */
+function renderEvidenceNote(check: ReturnType<typeof crossCheckEvidence>): string {
+  const detail = check.hasEvidenceSection
+    ? `an incomplete \`## Evidence\` section (${describeEvidenceGap(check)})`
+    : 'no `## Evidence` section';
+  return (
+    `> **Note:** this PR has ${detail}. Per Obelisk policy (PRD §7.2) every PR should ship an ` +
+    `Evidence Pack, so the reviewer verified the change directly rather than relying on it — ` +
+    `the verdict below reflects that independent check.`
+  );
+}
+
+/** One-line summary of which Evidence subheadings are empty / missing. */
+function describeEvidenceGap(check: EvidenceCrossCheck): string {
+  const parts: string[] = [];
+  if (check.emptySubheadings.length > 0) {
+    parts.push(`empty: ${check.emptySubheadings.map((s) => `### ${s}`).join(', ')}`);
   }
-  const empty =
-    check.emptySubheadings.length > 0
-      ? `Empty subheadings: ${check.emptySubheadings.map((s) => `\`### ${s}\``).join(', ')}.`
-      : '';
-  const missing =
-    check.missingSubheadings.length > 0
-      ? `Missing subheadings: ${check.missingSubheadings.map((s) => `\`### ${s}\``).join(', ')}.`
-      : '';
-  return [
-    '## Evidence Pack incomplete',
-    '',
-    'This PR is missing required Evidence items:',
-    '',
-    empty,
-    missing,
-    '',
-    'Per Obelisk policy (PRD §7.2), every PR opened by an agent must populate `### Tests`, `### Screenshots`, and `### Logs` (when applicable to the change kind).',
-  ]
-    .filter((l) => l !== '')
-    .join('\n');
+  if (check.missingSubheadings.length > 0) {
+    parts.push(`missing: ${check.missingSubheadings.map((s) => `### ${s}`).join(', ')}`);
+  }
+  return parts.join('; ') || 'incomplete';
 }
 
 /* ---------- dedup + helpers ---------- */
@@ -643,6 +661,8 @@ interface PrContextOpts {
   baseBranch: string;
   /** Names of CI checks failing on the PR's head SHA, if any. */
   failingChecks: string[];
+  /** Cross-check of the PR body's `## Evidence` section; drives the self-verify directive. */
+  evidence: EvidenceCrossCheck;
 }
 
 function prContextFor(
@@ -674,7 +694,18 @@ function prContextFor(
         `${opts.fixMode ? 'fix the cause, and re-run until green before you finish' : 'and cite the exact failure in your review'}. ` +
         `Do NOT approve while these are red.`
       : '';
-  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}${conflictHint}${ciHint}\n\n${pr.body ?? '(no PR body)'}`;
+  // When the PR body's Evidence Pack is absent/thin, don't auto-reject — make the
+  // reviewer gather the proof itself, the way a principal engineer would.
+  const evidenceHint = !isEvidenceComplete(opts.evidence)
+    ? `\n\nEVIDENCE GAP: this PR's \`## Evidence\` section is ` +
+      `${opts.evidence.hasEvidenceSection ? `incomplete (${describeEvidenceGap(opts.evidence)})` : 'absent'}. ` +
+      `Do NOT request changes solely for this — a thin Evidence section is not, by itself, a defect. ` +
+      `Instead, independently confirm the change is correct and regression-free: read the diff end-to-end, ` +
+      `run the project's test suite (its dependencies are installed in this worktree), and reproduce the ` +
+      `fix/feature where you can. Cite exactly what you ran and what you observed, and base your verdict on ` +
+      `that — only REQUEST_CHANGES if you find a real defect or genuinely cannot verify the change works.`
+    : '';
+  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}${conflictHint}${ciHint}${evidenceHint}\n\n${pr.body ?? '(no PR body)'}`;
 }
 
 /**
