@@ -1,10 +1,59 @@
 import { app } from 'electron';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { ObeliskError } from '../../shared/errors';
 
 type Git = ReturnType<typeof simpleGit>;
+
+/**
+ * Gitignored dependency directories to symlink from the main checkout into a
+ * fresh worktree. Without these the agent CANNOT run the project's test/build
+ * commands — `vitest` dies with "Cannot find module 'vitest/config'", pytest
+ * has no venv — so Bug Fixer can't prove its fix and PR Reviewer can't verify
+ * the diff. Symlinks are instant and disk-cheap (vs `npm install` per run);
+ * they're gitignored so they never leak into a commit. Covers the common
+ * Node + Python layouts, at the repo root and the usual monorepo subdirs.
+ */
+const DEPENDENCY_DIRS = [
+  'node_modules',
+  '.venv',
+  'venv',
+  'backend/venv',
+  'backend/.venv',
+  'frontend/node_modules',
+  'web/node_modules',
+  'app/node_modules',
+];
+
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Symlink dependency dirs from the source checkout into a new worktree so the
+ * agent can run the real test/build suite. Best-effort: a failed link must
+ * never fail the run (the agent just won't be able to run that toolchain).
+ */
+export function linkWorktreeDependencies(repoPath: string, worktreeDir: string): void {
+  for (const rel of DEPENDENCY_DIRS) {
+    try {
+      const src = join(repoPath, rel);
+      if (!existsSync(src)) continue;
+      const dest = join(worktreeDir, rel);
+      // Don't clobber a real (tracked) dir or an existing link.
+      if (existsSync(dest) || isSymlink(dest)) continue;
+      mkdirSync(dirname(dest), { recursive: true });
+      symlinkSync(src, dest, 'junction');
+    } catch {
+      // Best-effort — a missing dependency link is not fatal.
+    }
+  }
+}
 
 /**
  * Serialize git worktree mutations per repo. PR Reviewer is multiInstance
@@ -180,6 +229,7 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
       input.canReclaimHolder,
     );
 
+    linkWorktreeDependencies(input.repoPath, dir);
     return { worktreePath: dir, branch, basedOn: usedOrigin ? 'origin' : 'local' };
   });
 }
@@ -242,6 +292,7 @@ export async function attachWorktree(input: AttachWorktreeInput): Promise<Worktr
       input.canReclaimHolder,
     );
 
+    linkWorktreeDependencies(input.repoPath, dir);
     return { worktreePath: dir, branch: input.branch };
   });
 }

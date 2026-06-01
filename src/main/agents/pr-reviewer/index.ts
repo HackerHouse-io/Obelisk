@@ -416,6 +416,7 @@ async function prepareReviewTask(opts: {
           fixMode: false,
           hasConflicts: false,
           baseBranch: repo.defaultBranch,
+          failingChecks: await fetchFailingChecks(gh, owner, name, headSha),
         }),
         githubNumber: pr.number,
       },
@@ -447,12 +448,14 @@ async function prepareReviewTask(opts: {
 
   await postClaimSignal({ repo, issueNumber: pr.number, source: taskRef });
 
+  const failingChecks = await fetchFailingChecks(gh, owner, name, headSha);
+
   return {
     task: {
       ref: taskRef,
       kind: 'review',
       summary: `${fixMode ? 'Fixing' : 'Reviewing'} PR #${pr.number}: ${pr.title}`,
-      context: prContextFor(pr, { fixMode, hasConflicts, baseBranch }),
+      context: prContextFor(pr, { fixMode, hasConflicts, baseBranch, failingChecks }),
       githubNumber: pr.number,
     },
     prReviewClaimId: claim.id,
@@ -638,6 +641,8 @@ interface PrContextOpts {
   fixMode: boolean;
   hasConflicts: boolean;
   baseBranch: string;
+  /** Names of CI checks failing on the PR's head SHA, if any. */
+  failingChecks: string[];
 }
 
 function prContextFor(
@@ -658,7 +663,18 @@ function prContextFor(
         '```\n\n' +
         "If a conflict can't be resolved safely, emit it as a P0 finding and stop — do not guess."
       : '';
-  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}${conflictHint}\n\n${pr.body ?? '(no PR body)'}`;
+  // The worktree has the project's dependencies symlinked in (node_modules,
+  // venv), so the agent CAN run the real suite. When GitHub already reports
+  // failing checks, name them so the agent reproduces + fixes them rather than
+  // approving over red CI.
+  const ciHint =
+    opts.failingChecks.length > 0
+      ? `\n\nFAILING CI CHECKS on this PR's head commit: ${opts.failingChecks.join(', ')}. ` +
+        `Reproduce them locally (the repo's dependencies are installed in this worktree — run the project's test/lint commands), ` +
+        `${opts.fixMode ? 'fix the cause, and re-run until green before you finish' : 'and cite the exact failure in your review'}. ` +
+        `Do NOT approve while these are red.`
+      : '';
+  return `Reviewing PR #${pr.number}: ${pr.title}\n\n${modeHint}${conflictHint}${ciHint}\n\n${pr.body ?? '(no PR body)'}`;
 }
 
 /**
@@ -667,6 +683,45 @@ function prContextFor(
  * we treat unknown as "no conflicts" (the agent will discover them via
  * `git merge` if they exist).
  */
+/**
+ * Names of CI checks that are FAILING on the PR's head commit — both the
+ * checks API (GitHub Actions et al.) and the legacy commit-status API. So the
+ * reviewer can be told exactly what to reproduce + fix. Best-effort: any API
+ * hiccup yields `[]` (the agent still runs the suite on its own).
+ */
+export async function fetchFailingChecks(
+  gh: Awaited<ReturnType<typeof getGithub>>,
+  owner: string,
+  repo: string,
+  ref: string,
+): Promise<string[]> {
+  if (!gh) return [];
+  const names = new Set<string>();
+  try {
+    const { data } = await gh.checks.listForRef({ owner, repo, ref, per_page: 100 });
+    for (const run of data.check_runs ?? []) {
+      if (
+        run.status === 'completed' &&
+        run.conclusion &&
+        ['failure', 'timed_out', 'cancelled', 'action_required'].includes(run.conclusion)
+      ) {
+        names.add(run.name);
+      }
+    }
+  } catch {
+    // ignore — checks API may be unavailable
+  }
+  try {
+    const { data } = await gh.repos.getCombinedStatusForRef({ owner, repo, ref });
+    for (const s of data.statuses ?? []) {
+      if (s.state === 'failure' || s.state === 'error') names.add(s.context);
+    }
+  } catch {
+    // ignore — statuses API may be unavailable
+  }
+  return [...names];
+}
+
 async function prHasConflicts(
   gh: Awaited<ReturnType<typeof getGithub>>,
   owner: string,
