@@ -16,6 +16,7 @@ import { defaultCronFor, isDue } from './cron';
 import { getCoverageSchedule } from './coverage-schedule';
 import { startCoverageRun } from '../coverage/agent-loop';
 import { pickWorstCoveragePlanId } from '../coverage/pick-plan';
+import { resolveLeastCoveredPlan } from '../coverage/auto-plan';
 import { getActiveCoverageRun, getLatestCoverageRun } from '../db/coverage-runs';
 import { broadcast } from '../ipc/bus';
 import { appendAudit } from '../logger/audit';
@@ -194,12 +195,24 @@ function dispatchDueAgents(repo: Repo): void {
         // else the plan whose feature has the lowest coverage (worst-first).
         let taskId: string | undefined;
         if (handler.requiresTestPlan) {
-          const planId = a.defaultPlanId ?? (await pickWorstCoveragePlanId(repo, a.name));
+          let planId: string | null;
+          if (a.planSelectionMode === 'least-covered') {
+            // Auto mode: target the lowest-coverage feature, generating the
+            // coverage map and/or a plan for it first when none exists. The
+            // await stays inside the inFlightDispatch-guarded closure, so the
+            // per-instance key is held for the whole map+plan+run window even
+            // though no run row exists during generation — single-flight safe.
+            const resolved = await resolveLeastCoveredPlan(repo, a.name, { generate: true });
+            planId = resolved.planId;
+          } else {
+            planId = a.defaultPlanId ?? (await pickWorstCoveragePlanId(repo, a.name));
+          }
           if (!planId) {
-            // No plan to run and none can be auto-picked. Auto-pause so the
-            // schedule stops claiming "Next now" and the user is told why,
-            // instead of silently retrying every tick (no run row is created,
-            // so the circuit breaker can't catch this case).
+            // No plan to run and none could be auto-picked/generated. Auto-pause
+            // so the schedule stops claiming "Next now" and the user is told
+            // why, instead of silently retrying every tick (no run row is
+            // created during this path, so the circuit breaker can't catch it —
+            // including a repeating generation failure in auto mode).
             autoPauseAgent(a, repo, { reason: 'needs_test_plan' });
             return;
           }

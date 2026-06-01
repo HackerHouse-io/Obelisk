@@ -112,6 +112,15 @@ export interface Agent {
    * single-plan resolution.
    */
   defaultPlanId?: string | null;
+  /**
+   * How a QA agent chooses which test plan to run when no explicit plan is
+   * given (the qa-hunter case):
+   * - `'fixed'` (default): use `defaultPlanId` (or single-plan resolution).
+   * - `'least-covered'`: ignore `defaultPlanId` and, on every run, target the
+   *   feature with the lowest coverage — generating the coverage map and/or a
+   *   test plan for it first when none exists. See `coverage/auto-plan.ts`.
+   */
+  planSelectionMode?: 'fixed' | 'least-covered';
 }
 
 export interface Run {
@@ -603,6 +612,31 @@ export interface IpcMap {
     };
   };
   'agents:cancel': { req: { runId: string }; res: { ok: true } };
+  /**
+   * Preview what a `least-covered` QA agent would do on its next run WITHOUT
+   * spawning anything (coverage report + map read only). Drives the Run-now
+   * confirm modal: if `willGenerateMap`/`willGeneratePlan`, the renderer warns
+   * the user before kicking off a multi-minute prepare-and-run.
+   */
+  'agents:autoPlanPreview': {
+    req: { agentId: string };
+    res: {
+      planId: string | null;
+      featureLabel: string | null;
+      willGenerateMap: boolean;
+      willGeneratePlan: boolean;
+    };
+  };
+  /**
+   * Execute the `least-covered` resolution in the background — generate the
+   * coverage map and/or a test plan as needed, then dispatch the QA run. Returns
+   * immediately; progress shows via the existing generation toasts and the run
+   * appears via `runs.changed`. A second call while one is preparing is a no-op.
+   */
+  'agents:autoPrepareAndRun': {
+    req: { agentId: string };
+    res: { status: 'preparing' | 'already-preparing' };
+  };
   'bugFixer:health': {
     req: { repoId: string };
     res: BugFixerHealth;

@@ -60,3 +60,34 @@ describe('Agent.defaultPlanId persistence', () => {
     expect(reread.defaultPlanId).toBe('plan-1');
   });
 });
+
+describe('Agent.planSelectionMode persistence', () => {
+  it('defaults to "fixed" for new agents (column starts NULL)', () => {
+    const a = createAgent({ repoId, name: 'qa-hunter' });
+    expect(a.planSelectionMode).toBe('fixed');
+    expect(getAgent(a.id)!.planSelectionMode).toBe('fixed');
+  });
+
+  it('round-trips "least-covered" across reads', () => {
+    const a = createAgent({ repoId, name: 'qa-hunter' });
+    const updated = updateAgent(a.id, { planSelectionMode: 'least-covered' });
+    expect(updated.planSelectionMode).toBe('least-covered');
+    expect(getAgent(a.id)!.planSelectionMode).toBe('least-covered');
+  });
+
+  it('omitting planSelectionMode from a patch leaves the existing value alone', () => {
+    const a = createAgent({ repoId, name: 'qa-hunter' });
+    updateAgent(a.id, { planSelectionMode: 'least-covered' });
+    updateAgent(a.id, { displayName: 'Renamed' });
+    const reread = getAgent(a.id)!;
+    expect(reread.displayName).toBe('Renamed');
+    expect(reread.planSelectionMode).toBe('least-covered');
+  });
+
+  it('can switch back to "fixed"', () => {
+    const a = createAgent({ repoId, name: 'qa-hunter' });
+    updateAgent(a.id, { planSelectionMode: 'least-covered' });
+    updateAgent(a.id, { planSelectionMode: 'fixed' });
+    expect(getAgent(a.id)!.planSelectionMode).toBe('fixed');
+  });
+});

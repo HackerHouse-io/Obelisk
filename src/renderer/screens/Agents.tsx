@@ -808,6 +808,55 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
     setRunError(null);
     setRunStarting(true);
     try {
+      // Auto mode: preview what the next run would do. If it needs to generate
+      // a coverage map and/or a test plan (a multi-minute operation), confirm
+      // with the user before kicking off the background prepare-and-run.
+      if (agent.planSelectionMode === 'least-covered') {
+        const preview = await window.obelisk.invoke('agents:autoPlanPreview', {
+          agentId: agent.id,
+        });
+        if (!preview.ok) {
+          setRunError({
+            message: preview.error.message,
+            ...(preview.error.hint ? { hint: preview.error.hint } : {}),
+          });
+          setRunStarting(false);
+          return;
+        }
+        const { willGenerateMap, willGeneratePlan, featureLabel } = preview.value;
+        if (willGenerateMap || willGeneratePlan) {
+          const body = willGenerateMap
+            ? 'This repo has no coverage map yet, so this will generate one, then a test plan, then run QA on the least-covered feature. It can take several minutes — progress shows as toasts and the run appears in Mission Control when it starts.'
+            : `The least-covered feature${featureLabel ? ` (“${featureLabel}”)` : ''} has no test plan yet, so this will generate one, then run QA on it. It can take several minutes — progress shows as toasts and the run appears in Mission Control when it starts.`;
+          const ok = await showConfirm({
+            title: 'Prepare and run QA?',
+            body,
+            confirmLabel: 'Prepare & run',
+            confirmIcon: 'Play',
+          });
+          if (!ok) {
+            setRunStarting(false);
+            return;
+          }
+          const prep = await window.obelisk.invoke('agents:autoPrepareAndRun', {
+            agentId: agent.id,
+          });
+          if (!prep.ok) {
+            setRunError({
+              message: prep.error.message,
+              ...(prep.error.hint ? { hint: prep.error.hint } : {}),
+            });
+            setRunStarting(false);
+            return;
+          }
+          // Generation runs in the background; the drafting toast shows progress
+          // and the run appears in Mission Control via runs.changed.
+          setRunStarting(false);
+          return;
+        }
+        // No generation needed — fall through to the normal dispatch below,
+        // which resolves the same least-covered plan and returns a runId.
+      }
       const res = await window.obelisk.invoke('agents:run', { agentId: agent.id });
       if (!res.ok) {
         setRunError({
@@ -986,7 +1035,11 @@ function AgentDetail({ agent, onChanged, onDelete }: DetailProps): ReactElement 
       {agent.name === 'bug-fixer' || agent.name === 'feature-builder' ? (
         <BugFixerHealthCard repoId={agent.repoId} />
       ) : null}
-      {QA_AGENT_NAMES.includes(agent.name) ? (
+      {agent.name === 'qa-hunter' ? (
+        <PlanSelectionModeCard agent={agent} onUpdate={update} />
+      ) : null}
+      {QA_AGENT_NAMES.includes(agent.name) &&
+      !(agent.name === 'qa-hunter' && agent.planSelectionMode === 'least-covered') ? (
         <DefaultPlanCard agent={agent} onUpdate={update} />
       ) : null}
       <SkillsCard agent={agent} />
@@ -1436,6 +1489,75 @@ function SkillsCard({ agent }: { agent: Agent }): ReactElement {
 /* ───────────────────────── Default test plan ───────────────────────── */
 
 const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+
+function PlanSelectionModeCard({
+  agent,
+  onUpdate,
+}: {
+  agent: Agent;
+  onUpdate: (patch: Partial<Agent>) => Promise<void>;
+}): ReactElement {
+  const mode = agent.planSelectionMode ?? 'fixed';
+  const options: { id: 'fixed' | 'least-covered'; label: string; sub: string; icon: IconName }[] = [
+    {
+      id: 'fixed',
+      label: 'Fixed plan',
+      sub: 'always run the chosen default test plan',
+      icon: 'Doc',
+    },
+    {
+      id: 'least-covered',
+      label: 'Least-covered (auto)',
+      sub: 'each run, target the weakest feature — generate its plan if missing',
+      icon: 'Spark',
+    },
+  ];
+  return (
+    <div className="settings-card">
+      <div className="settings-card-title">Plan selection</div>
+      <div className="settings-card-sub">
+        How this Bug Hunter chooses what to test on each run. <em>Least-covered</em> shifts
+        attention to whichever feature has the lowest coverage, generating a coverage map and/or
+        test plan for it first when none exists — so it keeps maintaining the whole repo instead of
+        one fixed plan.
+      </div>
+      <div className="col" style={{ gap: 8, marginTop: 10 }}>
+        {options.map((o) => {
+          const IconCmp = Icon[o.icon];
+          const active = mode === o.id;
+          return (
+            <button
+              key={o.id}
+              type="button"
+              data-testid={`agent-plan-mode-${o.id}`}
+              aria-pressed={active}
+              onClick={() => {
+                if (!active) void onUpdate({ planSelectionMode: o.id });
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                textAlign: 'left',
+                padding: '10px 12px',
+                borderRadius: 8,
+                cursor: active ? 'default' : 'pointer',
+                border: `1px solid ${active ? 'var(--brand)' : 'var(--border, var(--bg-3))'}`,
+                background: active ? 'var(--brand-soft, var(--bg-1))' : 'transparent',
+              }}
+            >
+              <IconCmp size={15} color={active ? 'var(--brand)' : 'var(--t-3)'} />
+              <span className="col" style={{ gap: 2, alignItems: 'flex-start' }}>
+                <span style={{ fontWeight: 600 }}>{o.label}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--t-3)' }}>{o.sub}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function DefaultPlanCard({
   agent,

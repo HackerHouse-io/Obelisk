@@ -23,6 +23,8 @@ import { handleAllowlistList, handleAllowlistAdd, handleAllowlistRemove } from '
 import {
   handleAgentsList,
   handleAgentsRun,
+  handleAgentsAutoPlanPreview,
+  handleAgentsAutoPrepareAndRun,
   handleAgentsCancel,
   handleAgentsUpdate,
   handleAgentsCreate,
@@ -156,6 +158,8 @@ export function registerIpcHandlers(): void {
   // Agents (Phase 4 — real)
   register('agents:list', handleAgentsList);
   register('agents:run', handleAgentsRun);
+  register('agents:autoPlanPreview', handleAgentsAutoPlanPreview);
+  register('agents:autoPrepareAndRun', handleAgentsAutoPrepareAndRun);
   register('agents:cancel', handleAgentsCancel);
   register('agents:update', handleAgentsUpdate);
   register('agents:create', handleAgentsCreate);

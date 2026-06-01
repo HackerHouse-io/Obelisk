@@ -25,6 +25,7 @@ interface AgentRow {
   perm_draft_prs: number;
   perm_merge: number;
   default_plan_id: string | null;
+  plan_selection_mode: string | null;
   created_at: string;
 }
 
@@ -50,6 +51,7 @@ function mapRow(r: AgentRow): Agent {
     createdAt: r.created_at,
     multiInstance: false, // filled at IPC boundary from the registry
     defaultPlanId: r.default_plan_id,
+    planSelectionMode: r.plan_selection_mode === 'least-covered' ? 'least-covered' : 'fixed',
   };
 }
 
@@ -250,6 +252,10 @@ export function updateAgent(id: string, patch: Partial<Agent>): Agent {
     permissions: patch.permissions ?? existing.permissions,
     defaultPlanId:
       patch.defaultPlanId === undefined ? (existing.defaultPlanId ?? null) : patch.defaultPlanId,
+    planSelectionMode:
+      patch.planSelectionMode === undefined
+        ? (existing.planSelectionMode ?? 'fixed')
+        : patch.planSelectionMode,
   };
 
   // When the user edits via the segmented schedule editor, derive cron so the
@@ -273,7 +279,8 @@ export function updateAgent(id: string, patch: Partial<Agent>): Agent {
          perm_create_issues = ?,
          perm_draft_prs = ?,
          perm_merge = ?,
-         default_plan_id = ?
+         default_plan_id = ?,
+         plan_selection_mode = ?
        WHERE id = ?`,
     )
     .run(
@@ -290,6 +297,7 @@ export function updateAgent(id: string, patch: Partial<Agent>): Agent {
       next.permissions.draftPrs ? 1 : 0,
       next.permissions.merge ? 1 : 0,
       next.defaultPlanId ?? null,
+      next.planSelectionMode,
       id,
     );
 

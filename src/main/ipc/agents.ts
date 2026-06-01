@@ -14,8 +14,9 @@ import { defaultCronFor, nextFireAt } from '../scheduler/cron';
 import { ObeliskError } from '../../shared/errors';
 import { getAgentHandler } from '../agents/registry';
 import { pickWorstCoveragePlanId } from '../coverage/pick-plan';
+import { resolveLeastCoveredPlan } from '../coverage/auto-plan';
 import { getPatchAgentCap, isPatchAgent } from '../scheduler/patch-agent-cap';
-import type { Agent, AgentName, IpcMap, RunnerKind } from '../../shared/types';
+import type { Agent, AgentName, IpcMap, Repo, RunnerKind } from '../../shared/types';
 import { readAgentMd } from '../agents/skill-loader';
 import { ClaudeCodeRunner } from '../runners/claude-code';
 import { CodexRunner } from '../runners/codex';
@@ -56,19 +57,37 @@ export async function handleAgentsRun(
   if (!agent) {
     throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
   }
-  // If the caller didn't specify a task, fall back to the agent's saved
-  // default plan. The Agents screen exposes a "Default test plan" dropdown
-  // that writes this — clicking Run now then dispatches that plan.
-  let effectiveTaskId =
-    payload.taskId ?? (agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined);
-  // For QA agents with no explicit task and no bound default, pick the plan
-  // whose feature has the lowest coverage (worst-first) — same rule as the
-  // scheduler — so Run now never errors with "Multiple test plans exist".
+  let effectiveTaskId = payload.taskId;
   if (effectiveTaskId === undefined) {
     const handler = getAgentHandler(agent.name);
-    if (handler.requiresTestPlan) {
-      const repo = getRepo(agent.repoId);
-      if (repo) {
+    const repo = getRepo(agent.repoId);
+    if (agent.planSelectionMode === 'least-covered' && handler.requiresTestPlan && repo) {
+      // Auto mode IGNORES defaultPlanId (M4). Resolve WITHOUT generating: if the
+      // worst feature already has a plan, dispatch it now (fast path, returns a
+      // runId). If it needs map/plan generation, kick off the background
+      // prepare-and-run and tell the caller it's preparing. The renderer
+      // normally routes auto mode through the confirm modal +
+      // agents:autoPrepareAndRun, so this branch only guards direct calls.
+      const preview = await resolveLeastCoveredPlan(repo, agent.name, { generate: false });
+      if (preview.planId) {
+        effectiveTaskId = `plan:${preview.planId}`;
+      } else {
+        await ensureRunnerAvailable(); // refuse a doomed prepare up-front (M2)
+        startAutoPrepareAndRun(agent, repo);
+        throw new ObeliskError(
+          'TEST_PLAN_PREPARING',
+          preview.willGenerateMap
+            ? 'Generating a coverage map and a test plan, then running — this can take a few minutes.'
+            : `Generating a test plan for ${preview.featureLabel ?? 'the least-covered feature'}, then running — this can take a few minutes.`,
+          'The QA run starts automatically once the plan is ready.',
+        );
+      }
+    } else {
+      // Fixed mode: the agent's saved default plan (the "Default test plan"
+      // dropdown), else the lowest-coverage feature's existing plan (worst-
+      // first) so Run now never errors with "Multiple test plans exist".
+      effectiveTaskId = agent.defaultPlanId ? `plan:${agent.defaultPlanId}` : undefined;
+      if (effectiveTaskId === undefined && handler.requiresTestPlan && repo) {
         const planId = await pickWorstCoveragePlanId(repo, agent.name);
         if (planId) effectiveTaskId = `plan:${planId}`;
       }
@@ -79,6 +98,93 @@ export async function handleAgentsRun(
     ...(payload.runnerOverride ? { runnerOverride: payload.runnerOverride } : {}),
     ...(payload.modelOverride !== undefined ? { modelOverride: payload.modelOverride } : {}),
   });
+}
+
+/**
+ * Preview what a `least-covered` QA agent would do next, WITHOUT spawning.
+ * Drives the Run-now confirm modal so the user can accept/cancel a multi-minute
+ * map/plan generation before it starts.
+ */
+export async function handleAgentsAutoPlanPreview(
+  payload: IpcMap['agents:autoPlanPreview']['req'],
+): Promise<IpcMap['agents:autoPlanPreview']['res']> {
+  const agent = getAgent(payload.agentId);
+  if (!agent) throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
+  const repo = getRepo(agent.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${agent.repoId} not found`);
+  const r = await resolveLeastCoveredPlan(repo, agent.name, { generate: false });
+  return {
+    planId: r.planId,
+    featureLabel: r.featureLabel,
+    willGenerateMap: r.willGenerateMap,
+    willGeneratePlan: r.willGeneratePlan,
+  };
+}
+
+/**
+ * Execute the `least-covered` resolution: generate the coverage map and/or a
+ * test plan as needed, then dispatch the QA run. Returns immediately — the work
+ * runs in the background (progress shows via the existing generation toasts; the
+ * run appears via `runs.changed`). The runner pre-flight is synchronous so a
+ * doomed prepare is refused NOW (M2) instead of failing silently later.
+ */
+export async function handleAgentsAutoPrepareAndRun(
+  payload: IpcMap['agents:autoPrepareAndRun']['req'],
+): Promise<IpcMap['agents:autoPrepareAndRun']['res']> {
+  const agent = getAgent(payload.agentId);
+  if (!agent) throw new ObeliskError('AGENT_NOT_FOUND', `agent ${payload.agentId} not found`);
+  const repo = getRepo(agent.repoId);
+  if (!repo) throw new ObeliskError('REPO_NOT_FOUND', `repo ${agent.repoId} not found`);
+  await ensureRunnerAvailable();
+  const status = startAutoPrepareAndRun(agent, repo);
+  return { status };
+}
+
+/**
+ * Per-instance guard so a second Run-now click (or a manual click racing the
+ * scheduler) doesn't start a second generation. The test-plan job tracker also
+ * dedups generation by repo+scope+agent+feature (M3), so the worst residual
+ * race is caught by the orchestrator's task_ref single-flight — a redundant
+ * error toast, not a double run.
+ */
+const autoPrepareInFlight = new Set<string>();
+
+function startAutoPrepareAndRun(agent: Agent, repo: Repo): 'preparing' | 'already-preparing' {
+  const key = `${repo.id}:${agent.id}`;
+  if (autoPrepareInFlight.has(key)) return 'already-preparing';
+  autoPrepareInFlight.add(key);
+  void (async () => {
+    try {
+      const resolved = await resolveLeastCoveredPlan(repo, agent.name, { generate: true });
+      if (!resolved.planId) {
+        // Generation that actually ran already toasted its own failure via the
+        // testPlanGeneration / coverageMapGeneration progress events; this
+        // audit covers the no-result-without-job cases (fallback returned null).
+        const { appendAudit } = await import('../logger/audit');
+        appendAudit({
+          runId: 'system',
+          kind: 'scheduler_error',
+          payload: {
+            repo: repo.githubFullName,
+            agent: agent.name,
+            error: `auto plan preparation produced no plan${resolved.error ? `: ${resolved.error.message}` : ''}`,
+          },
+        });
+        return;
+      }
+      await dispatchAgentRun(agent, { taskId: `plan:${resolved.planId}` });
+    } catch (e) {
+      const { appendAudit } = await import('../logger/audit');
+      appendAudit({
+        runId: 'system',
+        kind: 'scheduler_error',
+        payload: { repo: repo.githubFullName, agent: agent.name, error: String(e) },
+      });
+    } finally {
+      autoPrepareInFlight.delete(key);
+    }
+  })();
+  return 'preparing';
 }
 
 /**
