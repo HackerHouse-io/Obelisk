@@ -8,6 +8,7 @@ const DEFAULTS: Settings = {
   attributionMode: 'user',
   cloudExecutionEnabled: false, // v0.1: cloud execution lands in v0.2
   cardRemoveAction: 'ask',
+  lastSelectedRepoId: null,
 };
 
 export async function handleSettingsGet(): Promise<IpcMap['settings:get']['res']> {
@@ -22,6 +23,8 @@ export async function handleSettingsGet(): Promise<IpcMap['settings:get']['res']
     cardRemoveAction:
       getSetting<Settings['cardRemoveAction']>('app', 'cardRemoveAction') ??
       DEFAULTS.cardRemoveAction,
+    lastSelectedRepoId:
+      getSetting<string>('app', 'lastSelectedRepoId') ?? DEFAULTS.lastSelectedRepoId,
   };
 }
 
@@ -42,6 +45,9 @@ export async function handleSettingsUpdate(
   }
   if (payload.cardRemoveAction !== undefined) {
     setSetting('app', 'cardRemoveAction', payload.cardRemoveAction);
+  }
+  if (payload.lastSelectedRepoId !== undefined) {
+    setSetting('app', 'lastSelectedRepoId', payload.lastSelectedRepoId);
   }
   // cloudExecutionEnabled is a v0.1 noop — the toggle is disabled in the UI.
   return handleSettingsGet();

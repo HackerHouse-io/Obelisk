@@ -372,6 +372,12 @@ export interface Settings {
    * The dialog itself sets this when the user ticks "always do this".
    */
   cardRemoveAction: 'ask' | 'archive' | 'delete';
+  /**
+   * Repo id the user last had selected, restored on the next launch so the app
+   * reopens to the same project rather than always defaulting to the first one.
+   * null = no remembered selection yet.
+   */
+  lastSelectedRepoId: string | null;
 }
 
 export interface EvidenceItem {

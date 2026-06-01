@@ -75,11 +75,22 @@ export const useStore = create<ObeliskState>((set) => ({
   repos: [],
   selectedRepoId: null,
   setRepos: (repos) =>
-    set((s) => ({
-      repos,
-      selectedRepoId: s.selectedRepoId ?? repos[0]?.id ?? null,
-    })),
-  selectRepo: (id) => set({ selectedRepoId: id }),
+    set((s) => {
+      // Prefer the repo the user last had selected (persisted in settings), but
+      // only if it's still connected — otherwise fall back to the first repo.
+      const remembered = s.settings?.lastSelectedRepoId ?? null;
+      const valid = remembered && repos.some((r) => r.id === remembered) ? remembered : null;
+      return { repos, selectedRepoId: s.selectedRepoId ?? valid ?? repos[0]?.id ?? null };
+    }),
+  selectRepo: (id) =>
+    set((s) => {
+      // Persist the choice so the app reopens to this repo next launch.
+      void window.obelisk.invoke('settings:update', { lastSelectedRepoId: id });
+      return {
+        selectedRepoId: id,
+        settings: s.settings ? { ...s.settings, lastSelectedRepoId: id } : s.settings,
+      };
+    }),
 
   agents: {},
   setAgents: (repoId, agents) => set((s) => ({ agents: { ...s.agents, [repoId]: agents } })),
