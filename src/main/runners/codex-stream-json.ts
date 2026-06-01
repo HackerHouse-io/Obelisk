@@ -39,8 +39,19 @@ export interface CodexStreamParserOpts {
 
 export class CodexStreamParser {
   private finalText: string[] = [];
+  private resultEvent: { ok: boolean; turns: number } | null = null;
 
   constructor(private readonly opts: CodexStreamParserOpts) {}
+
+  /**
+   * The `turn.completed` envelope, if codex emitted one. Mirrors
+   * ClaudeStreamParser.finalResult() so the runner can salvage a completed
+   * run whose process exited non-zero instead of discarding its findings.
+   * `turns` is 1 (codex doesn't report a turn count; completion implies work).
+   */
+  finalResult(): { ok: boolean; turns: number } | null {
+    return this.resultEvent;
+  }
 
   /**
    * Feed one stdout line (already trimmed of its trailing newline by spawn.ts).
@@ -96,6 +107,7 @@ export class CodexStreamParser {
         const total = (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningTokens ?? 0);
         if (total > 0) ev.text = `${total.toLocaleString()} tokens`;
       }
+      this.resultEvent = { ok: true, turns: 1 };
       this.emit(ev);
       return;
     }

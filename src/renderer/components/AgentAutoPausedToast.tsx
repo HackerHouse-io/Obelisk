@@ -4,12 +4,19 @@ import { Icon } from '../icons';
 import { labelForAgent } from '../format';
 import type { AgentName } from '../../shared/types';
 
+type AutoPausedReason =
+  | 'consecutive_failures'
+  | 'needs_test_plan'
+  | 'login_required'
+  | 'runner_missing'
+  | 'mode_too_low';
+
 interface AutoPausedDetail {
   repoId: string;
   agentId: string;
   agentName: AgentName;
   displayName: string;
-  reason: 'consecutive_failures' | 'needs_test_plan';
+  reason: AutoPausedReason;
   consecutiveFailures: number;
   lastErrorCode: string | null;
   lastErrorSummary: string | null;
@@ -53,18 +60,10 @@ export function AgentAutoPausedToast(): ReactElement | null {
   return (
     <div className="agent-autopause-toast-stack" role="alert" aria-live="assertive">
       {toasts.map((t) => {
-        const needsPlan = t.reason === 'needs_test_plan';
-        const errorBit = !needsPlan && t.lastErrorCode ? ` (${t.lastErrorCode})` : '';
-        const sub = needsPlan
-          ? `${labelForAgent(t.agentName)} · no test plan to run. Create or attach one, then re-enable.`
-          : `${labelForAgent(t.agentName)} · ${t.consecutiveFailures} consecutive scheduled failures. Investigate before re-enabling.`;
-        const detail = needsPlan
-          ? 'Open Coverage to generate or attach a plan for this agent.'
-          : t.lastErrorSummary
-            ? `Last error: ${t.lastErrorSummary.slice(0, 160)}${
-                t.lastErrorSummary.length > 160 ? '…' : ''
-              }`
-            : 'Click Inspect to see the failed runs.';
+        const { sub, detail } = stoppedCopy(t);
+        // For the generic consecutive-failure case we still surface the code.
+        const errorBit =
+          t.reason === 'consecutive_failures' && t.lastErrorCode ? ` (${t.lastErrorCode})` : '';
         return (
           <div
             key={t.toastId}
@@ -77,7 +76,7 @@ export function AgentAutoPausedToast(): ReactElement | null {
             </div>
             <div className="tpg-toast-body">
               <div className="tpg-toast-headline">
-                {t.displayName} auto-paused{errorBit}
+                {t.displayName} stopped{errorBit}
               </div>
               <div className="tpg-toast-sub">{sub}</div>
               <div className="tpg-toast-hint">{detail}</div>
@@ -100,4 +99,44 @@ export function AgentAutoPausedToast(): ReactElement | null {
       })}
     </div>
   );
+}
+
+/**
+ * Per-reason copy for the "stopped" toast. Each permanent reason gets a
+ * specific, actionable sentence so the user knows exactly what to fix before
+ * re-enabling. Transient failures never reach here — they're retried, not
+ * stopped.
+ */
+function stoppedCopy(t: AutoPausedDetail): { sub: string; detail: string } {
+  const who = labelForAgent(t.agentName);
+  switch (t.reason) {
+    case 'needs_test_plan':
+      return {
+        sub: `${who} · no test plan to run.`,
+        detail: 'Open Coverage to generate or attach a plan, then re-enable.',
+      };
+    case 'login_required':
+      return {
+        sub: `${who} · the coding CLI is not signed in.`,
+        detail: "Sign in to Claude or Codex (run 'claude' / 'codex' once), then re-enable.",
+      };
+    case 'runner_missing':
+      return {
+        sub: `${who} · no coding CLI is installed.`,
+        detail: "Install Claude Code or Codex and make sure it's on PATH, then re-enable.",
+      };
+    case 'mode_too_low':
+      return {
+        sub: `${who} · this repo's safety mode is too low for it to publish.`,
+        detail: 'Raise the safety mode in Settings, then re-enable.',
+      };
+    case 'consecutive_failures':
+    default:
+      return {
+        sub: `${who} · ${t.consecutiveFailures} consecutive scheduled failures. Investigate before re-enabling.`,
+        detail: t.lastErrorSummary
+          ? `Last error: ${t.lastErrorSummary.slice(0, 160)}${t.lastErrorSummary.length > 160 ? '…' : ''}`
+          : 'Click Inspect to see the failed runs.',
+      };
+  }
 }

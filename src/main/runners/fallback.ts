@@ -71,7 +71,12 @@ class FallbackTracker {
     this.state.set(k, cur);
   }
 
-  /** Test-only: clear all tracking for a task. */
+  /**
+   * Clear all tracking for a task. Called by the orchestrator at the start of
+   * each run attempt so an auto-retry gets a fresh 4-spawn fallback budget
+   * (the tracker is meant to persist only across the in-attempt runner swaps,
+   * not across separate runAgent calls). Also used by tests.
+   */
   clear(taskRef: string): void {
     for (const k of [...this.state.keys()]) {
       if (k.endsWith(`::${taskRef}`) || k.endsWith(taskRef)) this.state.delete(k);

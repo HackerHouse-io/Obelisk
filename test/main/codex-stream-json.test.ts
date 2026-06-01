@@ -195,4 +195,13 @@ describe('CodexStreamParser', () => {
     const call = events.find((e) => e.type === 'tool_call');
     expect(call).toMatchObject({ type: 'tool_call', name: 'mystery_kind' });
   });
+
+  it('finalResult() captures turn.completed (for non-zero-exit salvage); null before', () => {
+    const parser = new CodexStreamParser({ onText: () => {}, onEvent: () => {} });
+    expect(parser.finalResult()).toBeNull();
+    parser.feedLine(
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 5 } }),
+    );
+    expect(parser.finalResult()).toEqual({ ok: true, turns: 1 });
+  });
 });

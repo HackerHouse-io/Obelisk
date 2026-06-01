@@ -231,10 +231,28 @@ function countLiveByName(liveRuns: Run[], name: AgentName): number {
   return n;
 }
 
+/**
+ * Failures the auto-retry layer can't fix — a retry just repeats the same
+ * verdict. ONLY these stop the agent via the breaker. Transient failures
+ * (INTERNAL/TIMEOUT/RUNNER_NO_OUTPUT/…) are handled by bounded retries and must
+ * never disable a scheduled agent — otherwise flaky CLIs make it unreliable.
+ */
+const PERMANENT_FAILURE_CODES = new Set<string>([
+  'RUNNER_LOGIN_REQUIRED',
+  'RUNNER_NOT_INSTALLED',
+  'MODE_TOO_LOW',
+  'TEST_PLAN_REQUIRED',
+  'ACTOR_NOT_ALLOWLISTED',
+]);
+
 export function shouldOpenCircuitBreaker(agent: Agent, now: Date): boolean {
   const recent = getRecentScheduledRunsForAgent(agent.id, CIRCUIT_BREAKER_FAILURES);
   if (recent.length < CIRCUIT_BREAKER_FAILURES) return false;
-  if (!recent.every((r) => r.state === 'failed')) return false;
+  // Every recent scheduled run must be a failure carrying a PERMANENT code.
+  // A transient-coded failure (or a success) breaks the streak — those don't
+  // stop the agent; the retry layer owns them.
+  if (!recent.every((r) => r.state === 'failed' && PERMANENT_FAILURE_CODES.has(r.errorCode ?? '')))
+    return false;
   const oldest = recent[recent.length - 1]?.finishedAt;
   if (!oldest) return false;
   const oldestTime = new Date(oldest).getTime();

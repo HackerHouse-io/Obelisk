@@ -237,4 +237,19 @@ describe('ClaudeStreamParser', () => {
     ]);
     expect(text).toEqual(['first line', 'second line']);
   });
+
+  it('finalResult() captures a successful result envelope (for non-zero-exit salvage)', () => {
+    const parser = new ClaudeStreamParser({ onText: () => {}, onEvent: () => {} });
+    expect(parser.finalResult()).toBeNull();
+    parser.feedLine(
+      JSON.stringify({ type: 'result', subtype: 'success', num_turns: 5, result: 'done' }),
+    );
+    expect(parser.finalResult()).toEqual({ ok: true, turns: 5 });
+  });
+
+  it('finalResult() reports ok=false for an error result subtype', () => {
+    const parser = new ClaudeStreamParser({ onText: () => {}, onEvent: () => {} });
+    parser.feedLine(JSON.stringify({ type: 'result', subtype: 'error_max_turns', num_turns: 12 }));
+    expect(parser.finalResult()).toEqual({ ok: false, turns: 12 });
+  });
 });

@@ -34,6 +34,7 @@ export class ClaudeStreamParser {
   private finalText: string[] = [];
   private pending = '';
   private sawDeltas = false;
+  private resultEvent: { ok: boolean; turns: number } | null = null;
 
   constructor(private readonly opts: ClaudeStreamParserOpts) {}
 
@@ -75,6 +76,16 @@ export class ClaudeStreamParser {
    */
   reasoning(): string {
     return this.sawDeltas ? this.deltaBuf : this.finalText.join('\n');
+  }
+
+  /**
+   * The final `result` envelope the CLI emitted, if any. `ok` mirrors the
+   * stream's success subtype; `turns` is the model-turn count. Used by the
+   * runner to salvage a completed run whose process nonetheless exited
+   * non-zero (post-run teardown noise) instead of discarding its findings.
+   */
+  finalResult(): { ok: boolean; turns: number } | null {
+    return this.resultEvent;
   }
 
   private consumeEvent(event: unknown): void {
@@ -178,6 +189,7 @@ export class ClaudeStreamParser {
       }
       const text = stringField(obj, 'result');
       if (text) event.text = text;
+      this.resultEvent = { ok, turns: event.turns ?? 0 };
       this.emit(event);
       return;
     }

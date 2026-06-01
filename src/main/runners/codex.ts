@@ -71,12 +71,25 @@ export class CodexRunner implements CodingAgentRunner {
           detail: stdoutTail || stderr.slice(-300) || 'codex reports it is not signed in',
         };
       }
+      // Salvage a completed turn that nonetheless exited non-zero (see the
+      // claude-code runner for the rationale). Codex's early-exit failure
+      // ("Reading prompt from stdin…") emits no turn.completed, so finalResult
+      // stays null and this run correctly falls through to non_zero_exit.
+      const fin = parser.finalResult();
+      if (fin && fin.ok && (fin.turns > 0 || parser.reasoning().trim().length > 0)) {
+        opts.onAudit({
+          at: new Date().toISOString(),
+          kind: 'state',
+          payload: { salvagedNonzeroExit: true, exitCode: result.exitCode ?? null },
+        });
+        return collectPatch(opts, parser.reasoning());
+      }
       const detail = stderr
         ? `codex exited ${result.exitCode ?? '?'}; stderr: ${stderr.slice(-500)}`
         : stdoutTail
           ? `codex exited ${result.exitCode ?? '?'} with no stderr; last stdout: ${stdoutTail}`
           : `codex exited ${result.exitCode ?? '?'} with no output. Verify 'codex' is installed and authenticated (run 'codex --version' in a terminal).`;
-      return { ok: false, reason: 'non_zero_exit', detail };
+      return { ok: false, reason: 'non_zero_exit', detail, reasoning: parser.reasoning() };
     }
 
     // Success path: hand the parsed assistant text to collectPatch as

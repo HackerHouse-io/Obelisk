@@ -6,6 +6,7 @@ import { RunStartedToast } from '../components/RunStartedToast';
 import { CoverageFindingsToast } from '../components/CoverageFindingsToast';
 import { AgentEnabledToast } from '../components/AgentEnabledToast';
 import { AgentAutoPausedToast } from '../components/AgentAutoPausedToast';
+import { RunRetryExhaustedToast } from '../components/RunRetryExhaustedToast';
 import { RunnerAuthBanner } from '../components/RunnerAuthBanner';
 import { GlobalAlert } from '../components/GlobalAlert';
 import { GlobalConfirm } from '../components/GlobalConfirm';
@@ -29,6 +30,7 @@ export function Shell({ children }: Props): ReactElement {
       <CoverageFindingsToast />
       <AgentEnabledToast />
       <AgentAutoPausedToast />
+      <RunRetryExhaustedToast />
       <GlobalAlert />
       <GlobalConfirm />
       <GlobalFolderPicker />

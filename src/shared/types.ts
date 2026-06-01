@@ -1196,10 +1196,27 @@ export type BusEvent =
       agentId: string;
       agentName: AgentName;
       displayName: string;
-      reason: 'consecutive_failures' | 'needs_test_plan';
+      reason:
+        | 'consecutive_failures'
+        | 'needs_test_plan'
+        | 'login_required'
+        | 'runner_missing'
+        | 'mode_too_low';
       consecutiveFailures: number;
       lastErrorCode: string | null;
       lastErrorSummary: string | null;
+    }
+  | {
+      // A run failed but its transient-failure auto-retries were all spent.
+      // The agent keeps its schedule — this is purely informational so the
+      // user isn't surprised by a red row in Mission Control.
+      type: 'run.retriesExhausted';
+      repoId: string;
+      agentName: AgentName;
+      displayName: string;
+      runId: string;
+      label: string | null;
+      attempts: number;
     }
   | { type: 'system.heartbeat'; at: ISO };
 

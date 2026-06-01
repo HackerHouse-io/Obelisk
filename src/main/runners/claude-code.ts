@@ -92,12 +92,25 @@ export class ClaudeCodeRunner implements CodingAgentRunner {
           detail: stdoutTail || stderr.slice(-300) || 'claude reports it is not signed in',
         };
       }
+      // Salvage: the CLI sometimes exits non-zero AFTER emitting a successful
+      // `result` envelope (post-run teardown / MCP shutdown noise). If the run
+      // actually completed and did real work, honour it as success rather than
+      // discarding a full sweep's findings over a stray exit code.
+      const fin = parser.finalResult();
+      if (fin && fin.ok && (fin.turns > 0 || parser.reasoning().trim().length > 0)) {
+        opts.onAudit({
+          at: new Date().toISOString(),
+          kind: 'state',
+          payload: { salvagedNonzeroExit: true, exitCode: result.exitCode ?? null },
+        });
+        return collectPatch(opts, parser.reasoning());
+      }
       const detail = stderr
         ? `claude exited ${result.exitCode ?? '?'}; stderr: ${stderr.slice(-500)}`
         : stdoutTail
           ? `claude exited ${result.exitCode ?? '?'} with no stderr; last stdout: ${stdoutTail}`
           : `claude exited ${result.exitCode ?? '?'} with no output. Verify 'claude' is installed and authenticated (run 'claude --version' in a terminal).`;
-      return { ok: false, reason: 'non_zero_exit', detail };
+      return { ok: false, reason: 'non_zero_exit', detail, reasoning: parser.reasoning() };
     }
 
     // Success path: hand the parsed assistant text to collectPatch as

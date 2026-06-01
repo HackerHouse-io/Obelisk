@@ -39,7 +39,13 @@ function setFinishedAt(runId: string, when: Date): void {
   getDb().prepare('UPDATE runs SET finished_at = ? WHERE id = ?').run(when.toISOString(), runId);
 }
 
-function makeFailedScheduledRun(agentId: string, finishedAt: Date): void {
+function makeFailedScheduledRun(
+  agentId: string,
+  finishedAt: Date,
+  // Default to a PERMANENT code so the breaker can trip — transient codes
+  // (INTERNAL/TIMEOUT) are handled by retries and must never stop the agent.
+  errorCode = 'RUNNER_LOGIN_REQUIRED',
+): void {
   const run = createRun({
     repoId,
     agentName: 'qa-hunter',
@@ -49,7 +55,7 @@ function makeFailedScheduledRun(agentId: string, finishedAt: Date): void {
     runnerUsed: 'claude',
   });
   transitionRun(run.id, 'failed', {
-    errorCode: 'INTERNAL',
+    errorCode,
     outputSummary: 'claude exited 1',
   });
   setFinishedAt(run.id, finishedAt);
@@ -102,13 +108,31 @@ describe('scheduler circuit breaker', () => {
     expect(shouldOpenCircuitBreaker(getAgent(agent.id) as Agent, now)).toBe(false);
   });
 
-  it('trips when the last 3 scheduled runs are all failed within the hour', () => {
+  it('trips when the last 3 scheduled runs are all PERMANENT failures within the hour', () => {
     const agent = createAgent({ repoId, name: 'qa-hunter' });
     const now = new Date();
     makeFailedScheduledRun(agent.id, new Date(now.getTime() - 600_000));
     makeFailedScheduledRun(agent.id, new Date(now.getTime() - 120_000));
     makeFailedScheduledRun(agent.id, new Date(now.getTime() - 60_000));
     expect(shouldOpenCircuitBreaker(getAgent(agent.id) as Agent, now)).toBe(true);
+  });
+
+  it('does NOT trip when the failures are TRANSIENT (INTERNAL) — retries own those', () => {
+    const agent = createAgent({ repoId, name: 'qa-hunter' });
+    const now = new Date();
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 600_000), 'INTERNAL');
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 120_000), 'TIMEOUT');
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 60_000), 'INTERNAL');
+    expect(shouldOpenCircuitBreaker(getAgent(agent.id) as Agent, now)).toBe(false);
+  });
+
+  it('does NOT trip when a transient failure interleaves with permanent ones', () => {
+    const agent = createAgent({ repoId, name: 'qa-hunter' });
+    const now = new Date();
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 600_000));
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 120_000), 'INTERNAL');
+    makeFailedScheduledRun(agent.id, new Date(now.getTime() - 60_000));
+    expect(shouldOpenCircuitBreaker(getAgent(agent.id) as Agent, now)).toBe(false);
   });
 
   it('does NOT trip when a success interleaves with failures', () => {

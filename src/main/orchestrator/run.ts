@@ -3,7 +3,7 @@ import { resolve, join, basename } from 'node:path';
 import { walkMarkdownFiles } from '../util/walk-markdown';
 import { app } from 'electron';
 import { ObeliskError } from '../../shared/errors';
-import type { Agent, AgentName, Repo } from '../../shared/types';
+import type { Agent, AgentName, Repo, RunnerKind } from '../../shared/types';
 import { getRepo } from '../db/repos';
 import { listAgentsForRepo, getAgent, updateAgent } from '../db/agents';
 import { lockBacklogItem, unlockBacklogItem, deleteBacklogGhIssue } from '../db/backlog';
@@ -102,6 +102,13 @@ export interface RunAgentInput {
    * `resumeContext` uses to inject CI logs.
    */
   userClarification?: string;
+  /**
+   * Auto-retry attempt index for this run (0 = the original). Incremented by
+   * the transient-failure auto-retry so backoff escalates and the chain stops
+   * after MAX_AUTO_RETRIES. Distinct from `retryOfRunId` (which is also set by
+   * the manual Retry button) so manual retries still get the full retry budget.
+   */
+  autoRetryAttempt?: number;
 }
 
 export interface RunAgentOutput {
@@ -407,6 +414,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
         });
       }
     });
+    // Fresh fallback budget per run attempt: the tracker accumulates across the
+    // in-attempt claude↔codex swaps, but each auto-retry (a separate runAgent
+    // call on the same taskRef) must start with a clean 4-spawn budget or the
+    // 2nd+ retry would refuse to try any runner.
+    runnerFallback.clear(selected.task.ref);
     const runResult = await runWithFallback({
       runId: run.id,
       taskRef: selected.task.ref,
@@ -527,7 +539,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
             agentId: agentRow.id,
             agentName: agentRow.name,
             displayName: agentRow.displayName,
-            reason: 'consecutive_failures',
+            reason: 'login_required',
             consecutiveFailures: 1,
             lastErrorCode: errorCode,
             lastErrorSummary: result.detail.slice(0, 200),
@@ -537,13 +549,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
           // 3-strike breaker will catch us within a few minutes anyway.
         }
       }
-      scheduledAutoRetry = planInfraAutoRetry({
+      const retry = planAutoRetry({
         runId: run.id,
         errorCode,
         taskRef: selected.task.ref ?? null,
         input,
         agentRow,
+        lastRunner: runResult.runnerUsed,
       });
+      if (retry?.exhausted) {
+        announceRetriesExhausted({ repo, agentRow, input, run, task: selected.task });
+      } else if (retry) {
+        scheduledAutoRetry = retry.fire;
+      }
       return { runId: run.id, finalState: 'failed', reason: result.reason };
     }
 
@@ -837,13 +855,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       errorCode,
       outputSummary: message.slice(0, 500),
     });
-    scheduledAutoRetry = planInfraAutoRetry({
+    const retry = planAutoRetry({
       runId: run.id,
       errorCode,
       taskRef: selected.task.ref ?? null,
       input,
       agentRow,
+      lastRunner: undefined,
     });
+    if (retry?.exhausted) {
+      announceRetriesExhausted({ repo, agentRow, input, run, task: selected.task });
+    } else if (retry) {
+      scheduledAutoRetry = retry.fire;
+    }
     return { runId: run.id, finalState: 'failed', reason: message };
   } finally {
     // Always release the active-runs entry — this run is no longer cancelable.
@@ -882,9 +906,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
     if (selected.task.githubNumber && !input.resumeContext) {
       await clearClaimSignals(repo, selected.task.githubNumber).catch(() => undefined);
     }
-    // Fire the one-shot infra auto-retry LAST — after claims, backlog lock,
-    // and (on a clean run) the worktree are released — so the retry's
-    // selectTask sees a clean slate. Fire-and-forget: a new run drives itself.
+    // Fire the auto-retry LAST — after claims, backlog lock, and (on a clean
+    // run) the worktree are released — so the retry's selectTask sees a clean
+    // slate. The retry itself is scheduled behind a backoff timer; this just
+    // arms it. Fire-and-forget: a new run drives itself.
     if (scheduledAutoRetry) scheduledAutoRetry();
   }
 }
@@ -1134,54 +1159,122 @@ function holderIsReclaimable(holderPath: string): boolean {
 }
 
 /**
- * Error codes that represent transient INFRASTRUCTURE failures — the agent
- * never got a fair shot, so an automatic one-shot retry is worthwhile. Genuine
- * agent/code failures (rejected review, unparseable findings, etc.) are NOT
- * here; those wait for a deliberate manual Retry click.
+ * Error codes that represent TRANSIENT failures — the agent never got a fair
+ * shot (infra hiccup, flaky CLI exit, a timeout, garbled output). These earn
+ * an automatic retry. Genuine *permanent* failures (auth, missing CLI, mode
+ * too low, no test plan) are NOT here — retrying can't fix them, so the agent
+ * is stopped with a clear message instead (see scheduler/tick.ts).
  */
-const INFRA_AUTO_RETRY_CODES = new Set<string>(['WORKTREE_BUSY', 'RUNNER_NO_OUTPUT', 'TIMEOUT']);
+const TRANSIENT_RETRY_CODES = new Set<string>([
+  'WORKTREE_BUSY',
+  'RUNNER_NO_OUTPUT',
+  'TIMEOUT',
+  'INTERNAL', // covers non_zero_exit + crash — the bulk of QA-run flakiness
+  'FINDINGS_NOT_PARSEABLE',
+]);
+
+/** Up to this many automatic retries per run before we give up and surface it. */
+const MAX_AUTO_RETRIES = 3;
+/** Backoff before retry attempt N (index = attempt being scheduled, 0-based). */
+const RETRY_BACKOFF_MS = [8_000, 30_000, 90_000];
+
+/** ±20% jitter so a fleet of agents doesn't retry in lockstep. Deterministic-ish
+ *  (no Math.random dependency in hot paths is unnecessary here, but we keep it
+ *  bounded). */
+function jitter(ms: number): number {
+  const spread = ms * 0.2;
+  return Math.round(ms - spread + Math.random() * spread * 2);
+}
 
 /**
- * Decide whether a failed run earns one automatic retry, and if so return a
- * thunk that fires it (the caller invokes it after cleanup). Returns null when
- * the failure doesn't qualify.
+ * Decide whether a failed run earns an automatic retry, and if so return a
+ * thunk that schedules it after a backoff delay (the caller invokes the thunk
+ * after cleanup). Returns null when the failure is permanent or the retry
+ * budget is spent.
  *
- * The one-shot cap is enforced by `retryOfRunId`: an auto-retry sets it on the
- * follow-up run, and a run that already carries it never schedules another —
- * so a chain can auto-retry at most once. An `auto_retry` audit row is written
- * for observability + run linkage.
+ * The budget is tracked by `autoRetryAttempt` (NOT `retryOfRunId`, so a manual
+ * Retry click still gets the full budget). Each retry leads with the OTHER CLI
+ * so a runner-specific hiccup is routed around. An `auto_retry` audit row is
+ * written for observability + run linkage.
  */
-function planInfraAutoRetry(opts: {
+function planAutoRetry(opts: {
   runId: string;
   errorCode: string;
   taskRef: string | null;
   input: RunAgentInput;
   agentRow: Agent | null;
-}): (() => void) | null {
-  const { runId, errorCode, taskRef, input, agentRow } = opts;
-  if (!INFRA_AUTO_RETRY_CODES.has(errorCode)) return null;
-  // Already a retry (manual or auto), a CI-resume run, or missing the bits we
-  // need to re-target the exact task → don't auto-retry.
-  if (input.retryOfRunId || input.resumeContext) return null;
+  lastRunner: RunnerKind | undefined;
+}): { fire: () => void; exhausted: boolean } | null {
+  const { runId, errorCode, taskRef, input, agentRow, lastRunner } = opts;
+  if (!TRANSIENT_RETRY_CODES.has(errorCode)) return null;
+  // A CI-resume run or one missing the bits we need to re-target → can't retry.
+  if (input.resumeContext) return null;
   if (!agentRow || !taskRef) return null;
+
+  const attempt = input.autoRetryAttempt ?? 0;
+  if (attempt >= MAX_AUTO_RETRIES) {
+    // Budget spent — signal the caller to surface a "failed after N retries"
+    // toast. The agent keeps its schedule; it'll try fresh next cycle.
+    return { fire: () => {}, exhausted: true };
+  }
+
+  const delay = jitter(RETRY_BACKOFF_MS[attempt] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]!);
+  // Lead the retry with the other CLI when we know which one just failed.
+  const nextRunner: RunnerKind | undefined =
+    lastRunner === 'claude' ? 'codex' : lastRunner === 'codex' ? 'claude' : undefined;
 
   appendAudit({
     runId,
     kind: 'auto_retry',
-    payload: { taskRef, errorCode, agentId: agentRow.id },
+    payload: { taskRef, errorCode, agentId: agentRow.id, attempt: attempt + 1, delayMs: delay },
   });
 
-  return () => {
-    void runAgent({
-      repoId: input.repoId,
-      agentName: input.agentName,
-      agentId: agentRow.id,
-      trigger: input.trigger,
-      taskId: taskRef,
-      forceTask: true,
-      retryOfRunId: runId,
-    }).catch(() => undefined);
+  return {
+    exhausted: false,
+    fire: () => {
+      setTimeout(() => {
+        void runAgent({
+          repoId: input.repoId,
+          agentName: input.agentName,
+          agentId: agentRow.id,
+          trigger: input.trigger,
+          taskId: taskRef,
+          forceTask: true,
+          retryOfRunId: runId,
+          autoRetryAttempt: attempt + 1,
+          ...(nextRunner ? { runnerOverride: nextRunner } : {}),
+        }).catch(() => undefined);
+      }, delay).unref?.();
+    },
   };
+}
+
+/**
+ * Surface a non-sticky toast when a run's transient-failure retries are all
+ * spent. The agent is NOT stopped — it keeps its schedule and tries fresh next
+ * cycle. Purely informational so a red Mission Control row isn't a surprise.
+ */
+function announceRetriesExhausted(opts: {
+  repo: Repo;
+  agentRow: Agent | null;
+  input: RunAgentInput;
+  run: { id: string };
+  task: { summary?: string };
+}): void {
+  appendAudit({
+    runId: opts.run.id,
+    kind: 'auto_retry',
+    payload: { exhausted: true, attempts: MAX_AUTO_RETRIES, agentName: opts.input.agentName },
+  });
+  broadcast({
+    type: 'run.retriesExhausted',
+    repoId: opts.repo.id,
+    agentName: opts.input.agentName,
+    displayName: opts.agentRow?.displayName ?? opts.input.agentName,
+    runId: opts.run.id,
+    label: opts.task.summary ?? null,
+    attempts: MAX_AUTO_RETRIES,
+  });
 }
 
 function errorCodeForFailure(
