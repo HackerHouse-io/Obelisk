@@ -8,6 +8,7 @@ import { resolveAttribution, applyGitConfig, renderCommitMessage } from './attri
 import { OBELISK_LABELS } from './labels';
 import { mirrorEvidenceToRepo } from './artifact-mirror';
 import { buildBranchName } from '../git/branch-name';
+import { pushRunBranch } from './push-run-branch';
 
 export interface PublishInput {
   repo: Repo;
@@ -210,27 +211,10 @@ export async function publish(input: PublishInput): Promise<PublishOutput> {
 
       // Push the per-run branch to origin. For resume publishes the branch
       // already has an upstream tracking ref, so set-upstream is a no-op
-      // (and harmless if re-set). A remote that rejects the push (protected
-      // branch, pre-receive hook, LFS quota) surfaces as a distinct
-      // PUSH_REJECTED with the remote's message verbatim — actionable, instead
-      // of a generic INTERNAL crash.
-      try {
-        await git.push(['--set-upstream', 'origin', branch]);
-      } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e);
-        if (
-          /\[remote rejected\]|pre-receive hook declined|! \[rejected\]|protected branch|GH006|exceeded.*quota|gh\.io\/lfs/i.test(
-            detail,
-          )
-        ) {
-          throw new ObeliskError(
-            'PUSH_REJECTED',
-            `GitHub rejected the push to ${branch}: ${detail.slice(0, 400)}`,
-            'A protected-branch rule, pre-receive hook, or LFS limit blocked the push. Check the repo’s branch protections / hooks, then retry.',
-          );
-        }
-        throw e;
-      }
+      // (and harmless if re-set). Local pre-push hooks are bypassed (the
+      // worktree has no node_modules); server-side rejections still surface as
+      // a distinct PUSH_REJECTED. See pushRunBranch for the full rationale.
+      await pushRunBranch(git, branch);
 
       // Resume publishes (CI-retry fix-up) skip `pulls.create` because the PR
       // already exists; the push above is enough — GitHub auto-attaches the
