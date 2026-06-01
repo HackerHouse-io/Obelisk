@@ -58,9 +58,6 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
 
   interface FeatureScratch {
     planRefs: Map<string, { id: string; name: string; agentNames: AgentName[]; updatedAt: string }>;
-    caseIds: Set<string>;
-    /** caseIds tagged with this feature, grouped by their owning plan. */
-    caseIdsByPlan: Map<string, Set<string>>;
   }
   const featureScratch = new Map<string, FeatureScratch>();
   // Plans with frontmatter.scope === 'whole-app' surface in their own
@@ -71,7 +68,7 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
   function scratchFor(label: string): FeatureScratch {
     let s = featureScratch.get(label);
     if (!s) {
-      s = { planRefs: new Map(), caseIds: new Set(), caseIdsByPlan: new Map() };
+      s = { planRefs: new Map() };
       featureScratch.set(label, s);
     }
     return s;
@@ -128,21 +125,14 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     for (const block of plan.blocks) {
       if (block.kind !== 'case') continue;
       const scope = block.scope ?? [];
-      // Even if a case has no explicit scope, count it toward the plan's
-      // owning feature so the planRefs / caseCount aren't empty.
+      // A case's scope globs drive the per-FILE heatmap + this plan's file set.
+      // They do NOT seed or credit feature cards: a Chat-plan case tagged
+      // `integrations` must not light up the Integrations feature. Feature
+      // metrics are computed only from a feature's OWN scoped plans (planRefs)
+      // in step 6 below — see the leak this fixes (one tagged case showing a
+      // never-swept feature at 100%).
       const effectiveLabels = scope.length > 0 ? scope : planFeatureLabel ? [planFeatureLabel] : [];
       if (effectiveLabels.length === 0) continue;
-      for (const label of effectiveLabels) {
-        const lower = label.toLowerCase();
-        const s = scratchFor(lower);
-        s.caseIds.add(block.id);
-        let byPlan = s.caseIdsByPlan.get(plan.frontmatter.id);
-        if (!byPlan) {
-          byPlan = new Set();
-          s.caseIdsByPlan.set(plan.frontmatter.id, byPlan);
-        }
-        byPlan.add(block.id);
-      }
       const globs = resolveScopeToGlobs(effectiveLabels, coverageMap);
       for (const file of trackedFiles) {
         if (matchesAnyGlob(file, globs)) {
@@ -286,14 +276,27 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
       continue;
     }
 
-    let filesWithCases = 0;
+    // Coverage is credited ONLY by plans explicitly scoped to this feature
+    // (its planRefs). A feature with no plan of its own scores 0 — even if a
+    // broad/whole-app plan's case globs happen to touch its files. This is the
+    // fix for "never-swept features showing 100%": previously a single case in
+    // another plan, tagged with this feature's label, lit up the whole surface.
+    const featurePlanIds = [...scratch.planRefs.keys()];
+    const featureFiles = new Set<string>();
+    for (const pid of featurePlanIds) {
+      const pf = planFiles.get(pid);
+      if (!pf) continue;
+      for (const f of pf) {
+        if (matchesAnyGlob(f, globs)) featureFiles.add(f);
+      }
+    }
+
+    const filesWithCases = featureFiles.size;
     let filesRecentPass = 0;
-    for (const file of filesInGlob) {
+    for (const file of featureFiles) {
       const entry = fileByPath.get(file);
-      if (!entry) continue;
-      if (entry.caseCount > 0) filesWithCases += 1;
       if (
-        entry.lastPassedAt &&
+        entry?.lastPassedAt &&
         entry.lastPassedAt >= freshnessCutoffIso &&
         entry.churnSinceLastPass === 0
       ) {
@@ -306,16 +309,16 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
       if (suspected.some((p) => matchesAnyGlob(p, globs))) openFindings += 1;
     }
 
+    // caseCount = this feature's own plans' cases; casesPassed = those that
+    // passed in each plan's latest done run. No done run → 0 passed → 0%.
+    let caseCountForLabel = 0;
     let casesPassed = 0;
-    for (const [planId, caseIdsForLabel] of scratch.caseIdsByPlan) {
-      const passed = passedCaseIdsByPlan.get(planId);
-      if (!passed) continue;
-      for (const caseId of caseIdsForLabel) {
-        if (passed.has(caseId)) casesPassed += 1;
-      }
+    for (const pid of featurePlanIds) {
+      const plan = plansById.get(pid);
+      if (plan) caseCountForLabel += plan.blocks.filter((b) => b.kind === 'case').length;
+      casesPassed += passedCaseIdsByPlan.get(pid)?.size ?? 0;
     }
 
-    const caseCountForLabel = scratch.caseIds.size;
     const score = computeFeatureScore({
       filesInGlob: filesInGlob.length,
       filesWithCases,

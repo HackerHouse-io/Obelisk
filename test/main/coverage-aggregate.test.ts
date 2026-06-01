@@ -62,7 +62,7 @@ function plan(
   // savePlan requires the file to exist already — fake it by writing the markdown
   // directly via the parse module. Easier: use the store's helpers indirectly.
   // The `savePlan` API requires an existing file, so we write it raw.
-  const md = `---\nid: ${id}\nname: ${frontmatter.name ?? 'Plan'}\nscope: ${frontmatter.scope ?? 'whole-app'}\nfeature: null\nagentName: ${frontmatter.agentName ?? 'qa-hunter'}\ngeneratedAt: 2026-05-07T12:00:00Z\ngeneratedBy: heuristic\nversion: 1\n---\n\n`;
+  const md = `---\nid: ${id}\nname: ${frontmatter.name ?? 'Plan'}\nscope: ${frontmatter.scope ?? 'whole-app'}\nfeature: ${frontmatter.feature ?? 'null'}\nagentName: ${frontmatter.agentName ?? 'qa-hunter'}\ngeneratedAt: 2026-05-07T12:00:00Z\ngeneratedBy: heuristic\nversion: 1\n---\n\n`;
   const dir = join(repoPath, 'qa', 'test-plans');
   mkdirSync(dir, { recursive: true });
   let body = '## Smoke\n\n';
@@ -139,7 +139,8 @@ describe('buildCoverageReport', () => {
       '- auth: src/auth/**\n- billing: src/billing/**\n',
     );
 
-    plan({ id: 'p1', name: 'Auth' }, [
+    // Feature-scoped plans: only a feature's OWN plan credits its card.
+    plan({ id: 'p1', name: 'Auth', scope: 'feature', feature: 'auth' }, [
       { kind: 'section', id: 's1', title: 'Auth' },
       {
         kind: 'case',
@@ -160,7 +161,7 @@ describe('buildCoverageReport', () => {
         scope: ['auth'],
       },
     ]);
-    plan({ id: 'p2', name: 'Billing' }, [
+    plan({ id: 'p2', name: 'Billing', scope: 'feature', feature: 'billing' }, [
       { kind: 'section', id: 's2', title: 'Billing' },
       {
         kind: 'case',
@@ -184,8 +185,62 @@ describe('buildCoverageReport', () => {
     expect(report.totalFiles).toBeGreaterThanOrEqual(3);
     expect(report.coveredFiles).toBe(2);
     expect(report.uncoveredFiles).toBeGreaterThanOrEqual(1);
+    // Feature-level caseCount = the feature's own plan's cases.
     expect(report.features.find((f) => f.label === 'auth')?.caseCount).toBe(2);
     expect(report.features.find((f) => f.label === 'billing')?.caseCount).toBe(1);
+  });
+
+  it('does NOT credit a feature that has no plan of its own (no cross-plan scope leak)', async () => {
+    // Reproduces the production bug: the Integrations feature showed 100%
+    // because a single case inside the *Chat* plan was tagged `integrations`.
+    // A feature with no plan of its own must stay at 0%.
+    mkdirSync(join(repoPath, 'src', 'integrations'), { recursive: true });
+    writeFileSync(join(repoPath, 'src', 'integrations', 'ghl.ts'), '// ghl integration\n');
+    const git = simpleGit(repoPath);
+    await git.add('.');
+    await git.commit('add integrations');
+
+    mkdirSync(join(repoPath, 'qa'), { recursive: true });
+    writeFileSync(
+      join(repoPath, 'qa', 'coverage-map.md'),
+      '- auth: src/auth/**\n- integrations: src/integrations/**\n',
+    );
+
+    // A Chat-feature plan (here scoped to `auth`) carries one case tagged
+    // `integrations` — exactly the GHL-config case in production.
+    const chatPlan = plan({ id: 'pchat', name: 'Auth sweep', scope: 'feature', feature: 'auth' }, [
+      {
+        kind: 'case',
+        id: 'c1',
+        title: 'Sign in works',
+        expected: null,
+        repro: null,
+        severity: 'P0',
+        scope: ['auth'],
+      },
+      {
+        kind: 'case',
+        id: 'c2',
+        title: 'GHL config hides API key',
+        expected: null,
+        repro: null,
+        severity: 'P1',
+        scope: ['integrations'],
+      },
+    ]);
+    makeRun(chatPlan, new Date(), 'done');
+
+    const report = await buildCoverageReport(repoId);
+    const integrations = report.features.find((f) => f.label === 'integrations');
+    expect(integrations).toBeDefined();
+    // The leak would have made these non-zero (filesWithCases=1, 100%).
+    expect(integrations?.planCount).toBe(0);
+    expect(integrations?.filesWithCases).toBe(0);
+    expect(integrations?.caseCount).toBe(0);
+    expect(integrations?.coveragePct).toBe(0);
+    // The file-level heatmap still records the case touched the file…
+    const ghl = report.files.find((f) => f.path === 'src/integrations/ghl.ts')!;
+    expect(ghl.caseCount).toBe(1);
   });
 
   it('falls back to substring globs when no coverage-map.md exists', async () => {
