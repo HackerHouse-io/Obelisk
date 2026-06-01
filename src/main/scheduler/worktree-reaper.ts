@@ -1,7 +1,8 @@
 import { simpleGit } from 'simple-git';
 import { existsSync } from 'node:fs';
+import { basename } from 'node:path';
 import { listRepos } from '../db/repos';
-import { getRun } from '../db/runs';
+import { getRun, listLiveRuns, getWorktreePath } from '../db/runs';
 import { destroyWorktree, parseWorktreeList } from '../git/worktree';
 import { appendAudit } from '../logger/audit';
 import type { Repo } from '../../shared/types';
@@ -39,9 +40,25 @@ async function reapRepo(repo: Repo): Promise<void> {
   }
 
   const worktrees = parseWorktreeList(raw);
+  // BULLETPROOF GUARD: never reap a worktree that a LIVE run currently owns.
+  // This is matched by directory, independent of the git branch — a PR Reviewer
+  // fix-mode (or CI-resume) run attaches its worktree to ANOTHER run's branch
+  // (the PR's existing `obelisk/<originalRunId>` head), so branch-based owner
+  // detection would mis-attribute the live worktree to the long-gone original
+  // run and force-remove it mid-execution. (That was the bug.)
+  const liveOwnedDirs = new Set(
+    listLiveRuns(repo.id)
+      .map((r) => getWorktreePath(r.id))
+      .filter((p): p is string => !!p)
+      .map((p) => basename(p)),
+  );
   const now = Date.now();
   for (const wt of worktrees) {
-    const runId = parseRunIdFromBranch(wt.branch);
+    if (liveOwnedDirs.has(basename(wt.path))) continue;
+    // The OWNING run is encoded in the worktree DIRECTORY name (the slot), not
+    // the branch. Fall back to the branch only for legacy `obelisk/<runId>`
+    // worktrees whose dir doesn't carry a run id.
+    const runId = parseOwningRunId(wt.path, wt.branch);
     if (!runId) continue;
     const run = getRun(runId);
     if (!run) {
@@ -58,6 +75,18 @@ async function reapRepo(repo: Repo): Promise<void> {
     if (now - finished < STALE_AFTER_MS) continue;
     await destroyAndAudit(repo, wt.path, runId, run.state);
   }
+}
+
+/**
+ * The run that OWNS a worktree, from its directory name (the slot). Slots are
+ * `<runId>`, `<runId>-pr<n>`, or `<originalRunId>-resume-<runId>` — in every
+ * case the leading ULID is a run we created the worktree for. Falls back to the
+ * `obelisk/<runId>` branch only when the dir carries no ULID.
+ */
+function parseOwningRunId(worktreePath: string, branch: string): string | null {
+  const fromDir = /^([0-9A-HJKMNP-TV-Z]{26})/i.exec(basename(worktreePath))?.[1];
+  if (fromDir) return fromDir;
+  return parseRunIdFromBranch(branch);
 }
 
 async function destroyAndAudit(
