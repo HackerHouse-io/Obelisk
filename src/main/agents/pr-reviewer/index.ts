@@ -1,11 +1,12 @@
 import { getDb } from '../../db';
+import { hasRunForPr } from '../../db/runs';
 import { getGithub } from '../../github/client';
 import { loadGitHubToken, getAuthedLogin } from '../../auth/token-store';
 import { ObeliskError } from '../../../shared/errors';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { postClaimSignal } from '../lib/claim-on-github';
 import {
-  isClaimedByAnotherInstall,
+  classifyClaimOwnership,
   normalizeGithubAssignees,
   normalizeGithubLabels,
 } from '../lib/cross-install-guard';
@@ -398,16 +399,20 @@ async function prepareReviewTask(opts: {
   }
 
   // Cross-installation guard: skip PRs another Obelisk install already claimed
-  // (label + self-assignee signature). Run before the DB claim so we don't
-  // churn the claim table on PRs we don't own.
-  if (
-    isClaimedByAnotherInstall({
-      labels: normalizeGithubLabels(pr.labels),
-      assignees: normalizeGithubAssignees(pr.assignees),
-      connectedLogin: connectedLogin ?? null,
-      source: taskRef,
-    })
-  ) {
+  // (label + self-assignee signature). The signature is identical to our own
+  // claim, so disambiguate with the per-install runs table: a prior run for
+  // this PR (any SHA) means it's our own leftover claim — proceed and let
+  // `claimPrReview` be the real single-reviewer dedup. Only a signature with no
+  // local run is genuinely foreign. Run before the DB claim so we don't churn
+  // the claim table on PRs we don't own.
+  const ownership = classifyClaimOwnership({
+    labels: normalizeGithubLabels(pr.labels),
+    assignees: normalizeGithubAssignees(pr.assignees),
+    connectedLogin: connectedLogin ?? null,
+    source: taskRef,
+    hasLocalRun: hasRunForPr(repo.id, pr.number),
+  });
+  if (ownership === 'foreign') {
     return { skip: 'claimed_elsewhere' };
   }
 

@@ -7,12 +7,13 @@ import {
   listBacklog,
   releaseStaleBacklogLocks,
 } from '../../db/backlog';
+import { getLatestRunForTaskRef } from '../../db/runs';
 import { parseBacklogTaskRef } from '../../../shared/task-refs';
 import { forcedBacklogItem } from '../lib/forced-backlog';
 import { checkActorAllowlist } from '../lib/actor-allowlist';
 import { fetchIssueContext } from '../lib/fetch-issue-author';
 import { postClaimSignal } from '../lib/claim-on-github';
-import { isClaimedByAnotherInstall } from '../lib/cross-install-guard';
+import { classifyClaimOwnership } from '../lib/cross-install-guard';
 import { getAuthedLogin } from '../../auth/token-store';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
@@ -258,19 +259,22 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
       continue;
     }
 
-    // Cross-installation guard: skip issues another Obelisk install
-    // already claimed (label + self-assignee signature). The reaper will
-    // clear a genuinely orphaned signal after 24h, at which point the
-    // issue becomes claimable again.
+    // Cross-installation guard. The claim signature (`obelisk:in-progress` +
+    // self-assignee) is the same whether WE wrote it or a sibling install did,
+    // so we disambiguate with the per-install runs table: a local run row for
+    // this issue means it's our own leftover claim from a crashed/failed run —
+    // proceed and let `postClaimSignal` re-assert it. Only a signature with no
+    // local run is genuinely foreign; skip those (the 24h reaper is the
+    // backstop). This stops a single install from locking itself out.
     const authedLogin = await getAuthedLogin().catch(() => null);
-    if (
-      isClaimedByAnotherInstall({
-        labels: ctx.labels,
-        assignees: ctx.assignees,
-        connectedLogin: authedLogin,
-        source: `issue#${item.githubIssue}`,
-      })
-    ) {
+    const ownership = classifyClaimOwnership({
+      labels: ctx.labels,
+      assignees: ctx.assignees,
+      connectedLogin: authedLogin,
+      source: `issue#${item.githubIssue}`,
+      hasLocalRun: getLatestRunForTaskRef(input.repo.id, `issue#${item.githubIssue}`) !== null,
+    });
+    if (ownership === 'foreign') {
       unlockBacklogItem(item.id);
       crossInstall += 1;
       continue;
@@ -367,11 +371,13 @@ async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTa
   const hint =
     allowlistDenied > 0
       ? 'Add the issue authors via the Allowlist settings.'
-      : inFlight > 0 && inFlight === totalBugs
-        ? 'Wait for a run to finish, or label more GitHub issues with `obelisk:fix`.'
-        : staleLocksReleased > 0
-          ? `Cleared ${staleLocksReleased} stale lock${staleLocksReleased === 1 ? '' : 's'} from a previous run — try Run now again.`
-          : 'Open the Backlog screen to inspect the rows, or label more GitHub issues with `obelisk:fix`.';
+      : crossInstall > 0
+        ? 'Another Obelisk install signed in as the same GitHub user is working on it. It frees up when that run finishes (or within 24h if that install crashed).'
+        : inFlight > 0 && inFlight === totalBugs
+          ? 'Wait for a run to finish, or label more GitHub issues with `obelisk:fix`.'
+          : staleLocksReleased > 0
+            ? `Cleared ${staleLocksReleased} stale lock${staleLocksReleased === 1 ? '' : 's'} from a previous run — try Run now again.`
+            : 'Open the Backlog screen to inspect the rows, or label more GitHub issues with `obelisk:fix`.';
   throw new ObeliskError('BACKLOG_ALL_FILTERED', message, hint);
 }
 

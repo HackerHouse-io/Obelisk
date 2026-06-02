@@ -392,6 +392,43 @@ describe('pr-reviewer selectTask: cross-install signaling', () => {
       }),
     );
   });
+
+  it('does NOT skip our OWN leftover claim — proceeds when a local run row exists for the PR', async () => {
+    // Same signature as the "another install" case, but this install has a
+    // prior run for PR #7 (at an earlier SHA) — proof the in-progress label is
+    // our own orphan from a crashed review, not a sibling's claim. Reviewing
+    // the new SHA must not be blocked behind the 24h reaper.
+    const repo = makeRepo('prs');
+    const agentId = makeAgent(repo.id);
+    seedPriorReviewerRun(repo.id, 7, 'oldsha0000000'); // pr#7@<old> exists locally
+    pullsList.mockResolvedValue({
+      data: [
+        mockPr({
+          number: 7,
+          headRef: 'obelisk/run-MINE',
+          headSha: 'newsha1111111', // a fresh commit, not yet reviewed
+          labels: ['obelisk:in-progress'],
+          assignees: [CONNECTED_USER],
+        }),
+      ],
+    });
+
+    const selected = await prReviewerHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+      trigger: 'schedule',
+      agentId,
+    });
+
+    expect(selected).not.toBeNull();
+    expect(selected!.task.githubNumber).toBe(7);
+
+    // Recovered, not skipped: no cross_install_skipped audit row.
+    const skipped = getDb()
+      .prepare<[string], { kind: string }>(`SELECT kind FROM audit_log WHERE kind = ?`)
+      .all('cross_install_skipped');
+    expect(skipped).toHaveLength(0);
+  });
 });
 
 /* ====================================================================== */

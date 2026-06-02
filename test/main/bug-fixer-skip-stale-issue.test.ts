@@ -9,6 +9,7 @@ import { createRepo } from '../../src/main/db/repos';
 import { createAgent } from '../../src/main/db/agents';
 import { addToAllowlist } from '../../src/main/db/allowlist';
 import { createBacklogItem, listBacklog } from '../../src/main/db/backlog';
+import { createRun, transitionRun } from '../../src/main/db/runs';
 import { bugFixerHandler } from '../../src/main/agents/bug-fixer';
 import type { Repo } from '../../src/shared/types';
 
@@ -58,6 +59,10 @@ beforeEach(async () => {
   await git.raw(['branch', '-M', 'main']);
 
   issuesGet.mockReset();
+  fakeGh.issues.addLabels.mockClear();
+  fakeGh.issues.addAssignees.mockClear();
+  fakeGh.issues.removeLabel.mockClear();
+  fakeGh.issues.removeAssignees.mockClear();
 });
 
 afterEach(() => {
@@ -183,5 +188,89 @@ describe('bug-fixer selectTask: stale-issue guard', () => {
       trigger: 'manual',
     });
     expect(selected?.task.ref).toBe('issue#7');
+  });
+});
+
+describe('bug-fixer selectTask: cross-install ownership', () => {
+  // The claim signature `postClaimSignal` writes (`obelisk:in-progress` +
+  // self-assignee) is identical whether WE wrote it or a sibling install did.
+  // Disambiguation hangs entirely on the per-install runs table.
+  const claimedIssue = {
+    number: 55,
+    state: 'open',
+    locked: false,
+    user: { login: 'fixture-author' },
+    assignees: [{ login: 'obelisk-test-user' }], // == mocked getAuthedLogin
+    labels: [{ name: 'obelisk:fix' }, { name: 'obelisk:in-progress' }],
+  };
+
+  function seedClaimedRow(repo: Repo) {
+    createAgent({ repoId: repo.id, name: 'bug-fixer' });
+    addToAllowlist(repo.id, 'fixture-author', 'auto');
+    createBacklogItem({
+      repoId: repo.id,
+      source: 'gh_issue',
+      githubIssue: 55,
+      title: 'Issue carrying our own in-progress signature',
+      kind: 'bug',
+      priorityLabel: 'P1',
+    });
+    issuesGet.mockResolvedValue({ data: claimedIssue });
+  }
+
+  it('self-heals our OWN leftover claim when a local run row exists for the issue', async () => {
+    const repo = makeRepo();
+    seedClaimedRow(repo);
+
+    // A prior Bug Fixer run on issue#55 that finished (failed) but never got
+    // its claim signal cleared — the exact orphan that used to lock the user
+    // out for 24h behind "claimed by another Obelisk install".
+    const prior = createRun({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      agentId: null,
+      trigger: 'manual',
+      taskRef: 'issue#55',
+      runnerUsed: 'claude',
+    });
+    transitionRun(prior.id, 'failed');
+
+    const selected = await bugFixerHandler.selectTask({
+      repo,
+      defaultRunner: 'claude',
+      trigger: 'manual',
+    });
+
+    // Recovered: the issue is picked up instead of erroring, and the claim
+    // signal is re-asserted (idempotent label + assignee).
+    expect(selected?.task.ref).toBe('issue#55');
+    expect(fakeGh.issues.addLabels).toHaveBeenCalledWith(
+      expect.objectContaining({ issue_number: 55, labels: ['obelisk:in-progress'] }),
+    );
+    expect(fakeGh.issues.addAssignees).toHaveBeenCalledWith(
+      expect.objectContaining({ issue_number: 55, assignees: ['obelisk-test-user'] }),
+    );
+  });
+
+  it('skips a genuinely foreign claim (same signature, NO local run row)', async () => {
+    const repo = makeRepo();
+    seedClaimedRow(repo);
+    // No createRun → this install has never touched issue#55, so the signature
+    // belongs to another install signed in as the same GitHub user.
+
+    await expect(
+      bugFixerHandler.selectTask({
+        repo,
+        defaultRunner: 'claude',
+        trigger: 'manual',
+      }),
+    ).rejects.toMatchObject({
+      code: 'BACKLOG_ALL_FILTERED',
+      message: expect.stringContaining('already claimed by another Obelisk install'),
+    });
+
+    // No claim signal was written for a PR we don't own.
+    expect(fakeGh.issues.addLabels).not.toHaveBeenCalled();
+    expect(fakeGh.issues.addAssignees).not.toHaveBeenCalled();
   });
 });

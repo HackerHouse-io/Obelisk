@@ -149,6 +149,25 @@ export function getLatestRunForTaskRef(repoId: string, taskRef: string): Run | n
   return row ? mapRow(row) : null;
 }
 
+/**
+ * Has THIS install ever recorded a run for PR #n (any head SHA, any state)?
+ * PR Reviewer task_refs embed the head SHA (`pr#<n>@<sha>`), so an exact
+ * `getLatestRunForTaskRef` lookup would miss a leftover `obelisk:in-progress`
+ * claim left at an earlier SHA. The per-install runs table is the
+ * install-identity signal the cross-install guard uses to tell our own
+ * orphaned claim from a sibling install's (see `classifyClaimOwnership`).
+ */
+export function hasRunForPr(repoId: string, prNumber: number): boolean {
+  const row = getDb()
+    .prepare<[string, string], { one: number }>(
+      `SELECT 1 AS one FROM runs
+        WHERE repo_id = ? AND task_ref LIKE ?
+        LIMIT 1`,
+    )
+    .get(repoId, `pr#${prNumber}@%`);
+  return row !== undefined;
+}
+
 export function getActiveRunForTaskRef(repoId: string, taskRef: string): Run | null {
   const row = getDb()
     .prepare<[string, string], RunRow>(
