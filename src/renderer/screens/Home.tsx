@@ -33,7 +33,11 @@ const PREFLIGHT_AGENTS: ReadonlySet<AgentName> = new Set(['ios-qa-pilot', 'manua
  * Read-only summary built from real DB queries via IPC.
  */
 
-const LIVE_STATES: RunState[] = ['queued', 'running', 'publishing', 'paused'];
+// "Live" = actively working. `paused` is deliberately excluded: a paused run
+// (EVIDENCE_INCOMPLETE / REPRO_FAILED / login) is parked awaiting the user, not
+// running — surfacing it as live made stuck agents read as busy. It's counted
+// separately as "Needs attention" below.
+const LIVE_STATES: RunState[] = ['queued', 'running', 'publishing'];
 
 export function Home(): ReactElement {
   const repos = useStore((s) => s.repos);
@@ -54,9 +58,10 @@ export function Home(): ReactElement {
       .filter((r) => r.repoId === repo.id)
       .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
   }, [allRuns, repo]);
-  // Map agentId → live run so the Run/Stop toggle on each agent row knows
-  // whether there's an in-flight run to stop, instead of letting the user
-  // press a Run button that would silently fail with RUN_ACTIVE.
+  // Map agentId → actively-working run so the Run/Stop toggle on each agent row
+  // knows whether there's an in-flight run to stop. Uses LIVE_STATES, which
+  // excludes `paused`: a paused run isn't running, so its agent shows Run (the
+  // paused work is resumed via Retry in Mission Control), not Stop.
   const liveRunByAgentId = useMemo(() => {
     const m = new Map<string, Run>();
     for (const r of runs) {
@@ -319,9 +324,10 @@ export function Home(): ReactElement {
 
   const kpis = useMemo(() => {
     const liveRuns = runs.filter((r) => LIVE_STATES.includes(r.state)).length;
+    const needsAttention = runs.filter((r) => r.state === 'paused').length;
     const doneToday = runs.filter((r) => r.state === 'done' && isToday(r.finishedAt)).length;
     const failedRecent = runs.filter((r) => r.state === 'failed').length;
-    return { liveRuns, doneToday, failedRecent, backlogTotal: backlog.length };
+    return { liveRuns, needsAttention, doneToday, failedRecent, backlogTotal: backlog.length };
   }, [runs, backlog]);
 
   if (!repo) {
@@ -355,6 +361,11 @@ export function Home(): ReactElement {
           label="Live runs"
           value={kpis.liveRuns}
           sub={kpis.liveRuns === 0 ? 'idle' : 'see Mission Control'}
+        />
+        <KpiCard
+          label="Needs attention"
+          value={kpis.needsAttention}
+          sub={kpis.needsAttention === 0 ? 'none paused' : 'paused — retry to continue'}
         />
         <KpiCard label="Done today" value={kpis.doneToday} sub="last 24h" />
         <KpiCard label="Failed (recent)" value={kpis.failedRecent} sub="last 50 runs" />

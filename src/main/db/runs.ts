@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 import { ulid } from 'ulid';
 import { getDb } from './index';
 import { broadcast } from '../ipc/bus';
+import { releaseClaimsForRun } from './pr-review-claims';
+import { appendAudit } from '../logger/audit';
 import { ObeliskError } from '../../shared/errors';
 import type { AgentName, Run, RunState, RunnerKind } from '../../shared/types';
 
@@ -317,6 +319,52 @@ export function heartbeat(id: string): void {
   getDb()
     .prepare('UPDATE runs SET last_heartbeat_at = ? WHERE id = ?')
     .run(new Date().toISOString(), id);
+}
+
+/**
+ * Startup recovery for general agent runs. An orchestrator run lives entirely
+ * in this process (the active-runs map + the spawned CLI); when Obelisk quits
+ * or crashes mid-run, the child process dies but the DB row stays in a
+ * non-terminal *active* state — so it reads as "live" forever and the
+ * per-task-ref single-flight guard blocks any retry.
+ *
+ * At startup, by definition, no run from a previous process is still alive, so
+ * every `queued`/`running`/`publishing` row is orphaned. Fail them as
+ * INTERRUPTED (the same terminal shape as a normal failure) and release the
+ * locks they were holding — PR-review claims and backlog `in_progress_run` —
+ * so the underlying task is free to be picked up again.
+ *
+ * `paused` is intentionally NOT reconciled: a pause means the run is parked
+ * awaiting user input (EVIDENCE_INCOMPLETE / REPRO_FAILED / login), which is a
+ * legitimate state to persist across restarts. Mirrors `reconcileCoverageRuns`.
+ */
+export function reconcileOrphanedRuns(): number {
+  const orphaned = getDb()
+    .prepare<
+      [],
+      { id: string; state: RunState }
+    >(`SELECT id, state FROM runs WHERE state IN ('queued','running','publishing')`)
+    .all();
+
+  for (const row of orphaned) {
+    appendAudit({
+      runId: row.id,
+      kind: 'state',
+      payload: { from: row.state, to: 'failed', reason: 'app_restart' },
+    });
+    transitionRun(row.id, 'failed', {
+      errorCode: 'INTERRUPTED',
+      outputSummary: 'Interrupted by an app restart.',
+    });
+    // Free the locks this run held so the task isn't stuck "in progress".
+    releaseClaimsForRun(row.id);
+    getDb()
+      .prepare(
+        'UPDATE backlog SET in_progress_run = NULL, last_seen_at = ? WHERE in_progress_run = ?',
+      )
+      .run(new Date().toISOString(), row.id);
+  }
+  return orphaned.length;
 }
 
 const ACTIVE_STATES: RunState[] = ['queued', 'running', 'publishing'];

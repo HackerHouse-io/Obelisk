@@ -11,6 +11,7 @@ import {
 } from './protocol/obelisk-protocol';
 import { startScheduler, stopScheduler } from './scheduler/tick';
 import { reconcileCoverageRuns } from './coverage/agent-loop';
+import { reconcileOrphanedRuns } from './db/runs';
 
 // Two run-timeouts (60min) is a safe ceiling for "this claim is dead, free it".
 const STALE_CLAIM_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -72,6 +73,19 @@ app.whenReady().then(() => {
     }
   } catch (e) {
     console.error('[obelisk] coverage run reconcile failed:', e);
+  }
+
+  // General agent runs (Bug Fixer, Feature Builder, etc.) live in this
+  // process; a run interrupted by an app restart leaves a non-terminal row
+  // that reads as "live" and blocks retry. Fail any orphaned active run
+  // cleanly BEFORE the scheduler/IPC can start a new one.
+  try {
+    const orphaned = reconcileOrphanedRuns();
+    if (orphaned > 0) {
+      console.log(`[obelisk] runs: ${orphaned} interrupted run(s) reconciled`);
+    }
+  } catch (e) {
+    console.error('[obelisk] run reconcile failed:', e);
   }
 
   // iOS QA Pilot stale-claim sweep on boot — releases any flow / slot whose

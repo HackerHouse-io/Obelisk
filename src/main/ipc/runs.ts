@@ -2,6 +2,7 @@ import {
   listRuns,
   listLiveRuns,
   getRun,
+  transitionRun,
   deleteRun,
   deleteRunsForRepo,
   archiveRun,
@@ -11,6 +12,7 @@ import {
   countArchivedRuns,
   deleteArchivedRunsForRepo,
 } from '../db/runs';
+import { appendAudit } from '../logger/audit';
 import { listArtifacts } from '../db/evidence';
 import { getAgent } from '../db/agents';
 import { getRepo } from '../db/repos';
@@ -97,6 +99,22 @@ export async function handleRunsRetry(
   }
   const agent = getAgent(run.agentId);
   if (!agent) throw new ObeliskError('AGENT_NOT_FOUND', `agent ${run.agentId} not found`);
+
+  // A paused run still holds the per-task-ref single-flight lock (createRun
+  // counts 'paused' as active). Retrying re-dispatches the same task, so the
+  // fresh createRun would otherwise collide with THIS run and throw
+  // RUN_ACTIVE ("Another run is already working on …"). Supersede the paused
+  // run — mark it cancelled — before dispatch so the task ref is free. Other
+  // retryable states (failed/cancelled/done) are already terminal and don't
+  // block createRun, so they need no clearing.
+  if (run.state === 'paused') {
+    appendAudit({
+      runId: run.id,
+      kind: 'state',
+      payload: { from: 'paused', to: 'cancelled', reason: 'superseded_by_retry' },
+    });
+    transitionRun(run.id, 'cancelled', { outputSummary: 'Superseded by retry.' });
+  }
 
   // When the user supplied clarification (retrying a REPRO_FAILED pause), post
   // it as a comment on the linked GitHub issue first — durable, visible to
