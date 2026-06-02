@@ -149,7 +149,7 @@ END_FEATURE_OUTPUT`;
     expect(arr).toEqual([]);
   });
 
-  it('registers screenshot + server log artifacts when paths are provided + files exist', async () => {
+  it('collectEvidence registers screenshot + server log artifacts when paths exist', async () => {
     mkdirSync(join(tmp, 'playwright-report'), { recursive: true });
     mkdirSync(join(tmp, 'logs'), { recursive: true });
     writeFileSync(join(tmp, 'playwright-report/feat.png'), 'fake-png');
@@ -165,11 +165,11 @@ END_FEATURE_OUTPUT`;
   "server_log_path": "logs/run.txt"
 }
 END_FEATURE_OUTPUT`;
-    await featureBuilderHandler.interpretResult({
+    const collected = await featureBuilderHandler.collectEvidence!({
       repo,
-      task: { ref: 'issue#1', kind: 'feature', context: 'x', githubNumber: 1 },
-      runResult: fakeRunResult(stdout, ['src/reports/export.ts']),
       runId,
+      worktreePath: tmp,
+      runResult: fakeRunResult(stdout, ['src/reports/export.ts']),
     });
 
     const artifacts = listArtifacts(runId);
@@ -179,9 +179,35 @@ END_FEATURE_OUTPUT`;
       expect(a.bytes).toBeGreaterThan(0);
       expect(a.sha256).toMatch(/^[a-f0-9]{64}$/);
     }
+    // A captured screenshot is reported as the Tier-1 rung of the proof ladder.
+    expect(collected.uiVerification).toBe('screenshot');
   });
 
-  it('skips artifact registration when paths point to missing files', async () => {
+  it('collectEvidence climbs to ui_test and persists pasted test output', async () => {
+    const stdout = `BEGIN_FEATURE_OUTPUT
+{
+  "spec": "x",
+  "plan": "y",
+  "pr_title": "feat: x",
+  "pr_summary": "z",
+  "ui_verification": "ui_test",
+  "ui_test_file": "src/x.e2e.test.tsx",
+  "ui_test_output": "PASS  src/x.e2e.test.tsx (1 test)"
+}
+END_FEATURE_OUTPUT`;
+    const collected = await featureBuilderHandler.collectEvidence!({
+      repo,
+      runId,
+      worktreePath: tmp,
+      runResult: fakeRunResult(stdout, ['src/x.tsx']),
+    });
+    expect(collected.uiVerification).toBe('ui_test');
+    expect(collected.uiTestFile).toBe('src/x.e2e.test.tsx');
+    const kinds = listArtifacts(runId).map((a) => a.kind);
+    expect(kinds).toContain('test_output');
+  });
+
+  it('collectEvidence skips artifact registration when paths point to missing files', async () => {
     const stdout = `BEGIN_FEATURE_OUTPUT
 {
   "spec": "x",
@@ -191,11 +217,11 @@ END_FEATURE_OUTPUT`;
   "screenshot_path": "no/such.png"
 }
 END_FEATURE_OUTPUT`;
-    await featureBuilderHandler.interpretResult({
+    await featureBuilderHandler.collectEvidence!({
       repo,
-      task: { ref: 'issue#1', kind: 'feature', context: 'x', githubNumber: 1 },
-      runResult: fakeRunResult(stdout, ['src/x.ts']),
       runId,
+      worktreePath: tmp,
+      runResult: fakeRunResult(stdout, ['src/x.ts']),
     });
     expect(listArtifacts(runId)).toHaveLength(0);
   });

@@ -26,6 +26,18 @@ export interface PrBodyInput {
    * raw reasoning dump.
    */
   bugFixReport?: BugFixReport | null;
+  /**
+   * Which rung of the proof ladder the agent reached for UI changes. Drives the
+   * Screenshots subheading when no screenshot artifact exists (a `'ui_test'`
+   * change is verified, not "not applicable").
+   */
+  uiProof?: 'screenshot' | 'ui_test' | 'manual';
+  /**
+   * Set when the Evidence Pack gate failed but the run shipped anyway (soft
+   * gate / proof-ladder floor). Drives the transparency preamble at the top of
+   * the PR body so reviewers and humans see the gap honestly.
+   */
+  softEvidenceGap?: { missing: EvidenceItem[]; manualVerification?: string };
   /** Confidence score from the runner output, 0-1, or null if unknown. */
   confidence?: number | null;
   /** Local-app URI to open the run in Obelisk (Mission Control deep link). */
@@ -59,11 +71,32 @@ export function renderPrBody(input: PrBodyInput): string {
   }
 
   // Legacy / fallback path for agents without a structured report.
+  const gapNote = input.softEvidenceGap ? renderEvidenceGapNote(input.softEvidenceGap) : '';
   const disclosure = renderDisclosure(input);
   const summary = `## Summary\n\n${input.summary.trim() || '(no summary provided)'}`;
   const reasoning = `## Reasoning\n\n${input.reasoning.trim() || '(no reasoning provided)'}`;
-  const evidence = renderEvidence(input.evidence);
-  return [lead, disclosure, summary, evidence, reasoning].filter((s) => s.length > 0).join('\n\n');
+  const evidence = renderEvidence(input.evidence, input.uiProof);
+  return [lead, gapNote, disclosure, summary, evidence, reasoning]
+    .filter((s) => s.length > 0)
+    .join('\n\n');
+}
+
+/**
+ * Transparency preamble for a PR that shipped despite a failed Evidence Pack
+ * check (soft gate / proof-ladder floor). Mirrors the PR Reviewer's evidence
+ * note: it states the gap plainly and points at the author's manual
+ * verification, so the PR is honest rather than a silent bypass.
+ */
+function renderEvidenceGapNote(gap: NonNullable<PrBodyInput['softEvidenceGap']>): string {
+  const missing = gap.missing.length > 0 ? gap.missing.join(', ') : 'some Evidence Pack items';
+  const verified = gap.manualVerification
+    ? ` The author verified the change manually: ${gap.manualVerification.trim()}`
+    : '';
+  return (
+    `> **Note:** this headless run could not capture every Evidence Pack item ` +
+    `(missing: ${missing}).${verified} The PR ships with the gap labeled below; ` +
+    `the PR Reviewer independently verifies the change rather than relying on it.`
+  );
 }
 
 function renderStructuredBody(
@@ -74,6 +107,8 @@ function renderStructuredBody(
   const sections: string[] = [];
 
   if (lead) sections.push(lead);
+
+  if (input.softEvidenceGap) sections.push(renderEvidenceGapNote(input.softEvidenceGap));
 
   if (r.summary.trim()) sections.push(`## Summary\n\n${r.summary.trim()}`);
   if (r.root_cause.trim()) sections.push(`## Root cause\n\n${r.root_cause.trim()}`);
@@ -104,7 +139,7 @@ function renderStructuredBody(
   // no backend) render an explicit "not applicable" line rather than a
   // missing-evidence placeholder, so a correct fix isn't flagged for proof it
   // never needed to produce.
-  sections.push(renderEvidence(input.evidence));
+  sections.push(renderEvidence(input.evidence, input.uiProof));
 
   // Footer: small Obelisk attribution + the audit-trace command. Lives
   // BELOW a horizontal rule so it doesn't compete with the body's main
@@ -190,7 +225,7 @@ const SCREENSHOT_ITEMS: readonly EvidenceItem[] = [
 ];
 const LOG_ITEMS: readonly EvidenceItem[] = ['backend_log_or_curl_if_backend_touched'];
 
-function renderEvidence(check: CheckResult): string {
+function renderEvidence(check: CheckResult, uiProof?: PrBodyInput['uiProof']): string {
   return [
     '## Evidence',
     '',
@@ -198,7 +233,7 @@ function renderEvidence(check: CheckResult): string {
     renderSubheading(check, TEST_ITEMS, 'not applicable to this change'),
     '',
     '### Screenshots',
-    renderSubheading(check, SCREENSHOT_ITEMS, 'not applicable — no UI changes in this PR'),
+    renderScreenshotSubheading(check, uiProof),
     '',
     '### Logs',
     renderSubheading(check, LOG_ITEMS, 'not applicable — no backend changes in this PR'),
@@ -206,6 +241,29 @@ function renderEvidence(check: CheckResult): string {
     '### Reasoning',
     'See the reasoning in this PR and the linked audit log.',
   ].join('\n');
+}
+
+/**
+ * Screenshots subheading with proof-ladder awareness. A real screenshot wins;
+ * otherwise a `'ui_test'` change is "verified by a test" (not "not applicable")
+ * and a `'manual'` change points at the verification note — so a UI fix that
+ * climbed the ladder never reads as if it touched no UI.
+ */
+function renderScreenshotSubheading(check: CheckResult, uiProof?: PrBodyInput['uiProof']): string {
+  const artifacts = collectKinds(check, [...SCREENSHOT_ITEMS]);
+  if (artifacts.length > 0) {
+    return artifacts.map((a) => `- \`${a.kind}\` — ${describeArtifact(a)}`).join('\n');
+  }
+  if (uiProof === 'ui_test') {
+    return '_Verified by an automated UI test — see the Test plan below._';
+  }
+  if (uiProof === 'manual') {
+    return '_Verified manually by the author — see the note above._';
+  }
+  const requiredButMissing = SCREENSHOT_ITEMS.some((i) => check.missing.includes(i));
+  return requiredButMissing
+    ? '_(none referenced for this change)_'
+    : '_(not applicable — no UI changes in this PR)_';
 }
 
 /**

@@ -59,6 +59,33 @@ export interface AgentHandler {
   readonly skipsEvidenceGate: boolean;
 
   /**
+   * When true, a *failed* Evidence Pack check does NOT pause the run. Instead
+   * the gap is labeled in the PR body (with a transparency note), the agent's
+   * manual verification is surfaced, and the PR ships anyway — the
+   * self-verifying PR Reviewer is the real downstream check.
+   *
+   * Patch-producing agents (Bug Fixer, Feature Builder) set this. A headless
+   * coding-agent CLI running in a worktree often cannot capture a UI
+   * screenshot, and a permanently-paused run (EVIDENCE_INCOMPLETE) is strictly
+   * worse than a shipped-and-labeled one. The agents instead climb a proof
+   * ladder — Playwright screenshot → UI test → manual verification note (see
+   * `agents/bug-fixer.md`); this flag is the floor that guarantees the run
+   * never gets stuck on evidence it could not produce.
+   */
+  readonly softEvidenceGate?: boolean;
+
+  /**
+   * Register run-local evidence artifacts (screenshots, UI-test output, backend
+   * logs) BEFORE the Evidence Pack gate runs, and report which tier of proof
+   * the agent achieved. The orchestrator calls this right before
+   * `checkEvidence`, so Tier-1/2 evidence actually counts toward the gate
+   * (registering it later — e.g. in `interpretResult` — is too late, the gate
+   * has already run). Side-effects via saveArtifact / registerArtifactFromPath;
+   * the returned hints thread into both the gate and the PR-body renderer.
+   */
+  collectEvidence?(input: CollectEvidenceInput): CollectedEvidence | Promise<CollectedEvidence>;
+
+  /**
    * Whether the runner is expected to produce a patch in the worktree.
    * Read-only agents (QA Hunter, Manual QA) set this to false:
    * the orchestrator then treats `RunResult.reason === 'no_changes'` as a
@@ -242,6 +269,36 @@ export interface InterpretResultInput {
    * `recordArtifact` and have the run's `evidence_artifacts` rows wired up.
    */
   runId: string;
+}
+
+export interface CollectEvidenceInput {
+  repo: Repo;
+  runId: string;
+  /**
+   * Absolute path of the worktree the agent ran in — where it wrote any
+   * screenshots / logs / test output. Artifact paths in the agent's structured
+   * report are resolved relative to this, NOT `repo.localPath`.
+   */
+  worktreePath: string;
+  runResult: Extract<RunResult, { ok: true }>;
+}
+
+/**
+ * Hints returned by `collectEvidence`, threaded into the Evidence Pack gate and
+ * the PR-body renderer. Models the proof ladder: which tier of UI verification
+ * the agent achieved this run, plus the artifacts that back it.
+ */
+export interface CollectedEvidence {
+  /**
+   * The agent's self-declared UI proof tier. `'ui_test'` satisfies the
+   * `ui_screenshot_if_ui_touched` requirement in lieu of an actual screenshot
+   * (the headless runner couldn't capture one); `'manual'` is the soft floor.
+   */
+  uiVerification?: 'screenshot' | 'ui_test' | 'manual';
+  /** Relative path (within the patch) of the UI/e2e test that proves the fix. */
+  uiTestFile?: string;
+  /** The agent's manual-verification note — surfaced in the PR body. */
+  manualVerification?: string;
 }
 
 export type PublishPlan =

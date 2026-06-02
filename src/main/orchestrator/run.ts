@@ -21,6 +21,7 @@ import { isCancelled as runIsCancelled, registerRun, unregisterRun } from './act
 import { CaseProgressTracker, resolveCaseId } from './case-progress';
 import { broadcast } from '../ipc/bus';
 import type { CodingAgentRunner, RunResult } from '../runners/types';
+import type { CollectedEvidence } from '../agents/types';
 import { createWorktree, attachWorktree, destroyWorktree } from '../git/worktree';
 import { inferChangeKind } from '../evidence/infer-change-kind';
 import { learnFromPatch } from '../agents/playbook-learner';
@@ -639,6 +640,31 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       });
     }
 
+    // Register run-local proof (Tier-1 screenshot, Tier-2 UI-test output) and
+    // learn which rung of the proof ladder the agent reached — BEFORE the gate,
+    // so that proof actually counts. Best-effort: a handler that throws here
+    // must not sink an otherwise-successful run.
+    let collected: CollectedEvidence = {};
+    if (handler.collectEvidence) {
+      try {
+        collected = await handler.collectEvidence({
+          repo,
+          runId: run.id,
+          worktreePath: worktreeHandle.worktreePath,
+          runResult: ok,
+        });
+      } catch (e) {
+        appendAudit({
+          runId: run.id,
+          kind: 'reasoning',
+          payload: {
+            summary: 'collectEvidence failed',
+            error: e instanceof Error ? e.message : String(e),
+          },
+        });
+      }
+    }
+
     const inferred = inferChangeKind({
       agentName: input.agentName,
       filesChanged: ok.patch.filesChanged,
@@ -647,18 +673,26 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
       runId: run.id,
       changeKind: inferred.kind,
       inferred,
+      ...(collected.uiVerification ? { uiVerification: collected.uiVerification } : {}),
     });
+
+    // Soft gate (proof-ladder floor): patch-producing agents never pause on
+    // missing evidence. The gap is labeled in the PR and the PR Reviewer
+    // independently verifies. Only the hard gate (other agents) pauses.
+    const shipWithEvidenceGap =
+      !handler.skipsEvidenceGate && !evidence.ok && !!handler.softEvidenceGate;
     appendAudit({
       runId: run.id,
       kind: 'evidence_check',
       payload: {
-        result: evidence.ok ? 'pass' : 'fail',
+        result: evidence.ok ? 'pass' : shipWithEvidenceGap ? 'soft_pass' : 'fail',
         missing: evidence.missing,
         skipped: handler.skipsEvidenceGate,
+        ...(collected.uiVerification ? { uiVerification: collected.uiVerification } : {}),
       },
     });
 
-    if (!handler.skipsEvidenceGate && !evidence.ok) {
+    if (!handler.skipsEvidenceGate && !handler.softEvidenceGate && !evidence.ok) {
       transitionRun(run.id, 'paused', {
         errorCode: 'EVIDENCE_INCOMPLETE',
         outputSummary: `Missing: ${evidence.missing.join(', ')}`,
@@ -770,6 +804,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentOutput> {
               reasoning: ok.reasoning,
               evidence,
               bugFixReport,
+              ...(collected.uiVerification ? { uiProof: collected.uiVerification } : {}),
+              ...(shipWithEvidenceGap
+                ? {
+                    softEvidenceGap: {
+                      missing: evidence.missing,
+                      ...(collected.manualVerification
+                        ? { manualVerification: collected.manualVerification }
+                        : {}),
+                    },
+                  }
+                : {}),
             });
           }
         }

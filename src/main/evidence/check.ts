@@ -7,6 +7,13 @@ export interface CheckInput {
   runId: string;
   changeKind: ChangeKind;
   inferred: InferOutput;
+  /**
+   * The agent's self-declared UI proof tier (the proof ladder). When
+   * `'ui_test'`, an automated UI/e2e test stands in for the screenshot the
+   * headless runner couldn't capture, so the `ui_screenshot_if_ui_touched`
+   * requirement is satisfied without a `screenshot` artifact.
+   */
+  uiVerification?: 'screenshot' | 'ui_test' | 'manual';
 }
 
 export interface CheckResult {
@@ -40,6 +47,18 @@ export function checkEvidence(input: CheckInput): CheckResult {
     }
     if (item === 'backend_log_or_curl_if_backend_touched' && !input.inferred.backendTouched) {
       presentByItem[item] = [];
+      continue;
+    }
+    // Proof-ladder Tier 2: a UI/e2e test that proves the change stands in for
+    // the screenshot a headless runner couldn't capture. The test file lives in
+    // the patch and the PR Reviewer re-runs the suite, so this isn't a bypass —
+    // it's a different, equally-valid proof. Satisfies either screenshot item.
+    if (
+      (item === 'ui_screenshot_if_ui_touched' ||
+        item === 'before_after_screenshot_if_ui_touched') &&
+      input.uiVerification === 'ui_test'
+    ) {
+      presentByItem[item] = matches;
       continue;
     }
     if (item === 'before_after_screenshot_if_ui_touched' && matches.length < 2) {

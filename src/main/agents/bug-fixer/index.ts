@@ -18,11 +18,15 @@ import { OBELISK_LABELS } from '../../publisher/labels';
 import { appendAudit } from '../../logger/audit';
 import { syncBacklogForRepo } from '../../scheduler/backlog-sync';
 import { ObeliskError } from '../../../shared/errors';
+import { saveArtifact } from '../../evidence/artifact-store';
+import { registerArtifactFromPath } from '../lib/register-artifact';
 import type {
   AgentHandler,
   SelectTaskInput,
   SelectedTask,
   InterpretResultInput,
+  CollectEvidenceInput,
+  CollectedEvidence,
   PublishPlan,
 } from '../types';
 
@@ -40,10 +44,19 @@ export const bugFixerHandler: AgentHandler = {
   addAnotherExplainer:
     'Each instance picks a different bug per tick. Adding more drains the backlog faster.',
   skipsEvidenceGate: false,
+  // The proof ladder (Playwright screenshot → UI test → manual verification)
+  // means a UI-touching fix always carries *some* proof — but a headless CLI
+  // can't guarantee a screenshot. Ship-and-label beats permanently-paused; the
+  // PR Reviewer independently verifies. See agents/bug-fixer.md.
+  softEvidenceGate: true,
   producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
     return selectTaskForBugFixer(input);
+  },
+
+  collectEvidence(input: CollectEvidenceInput): CollectedEvidence {
+    return collectBugFixEvidence(input);
   },
 
   interpretResult(input: InterpretResultInput): PublishPlan {
@@ -67,6 +80,53 @@ export const bugFixerHandler: AgentHandler = {
 };
 
 /* ---------- internals ---------- */
+
+/**
+ * Register the proof the agent produced (Tier 1 screenshot, Tier 2 UI-test
+ * output) and report which rung of the ladder it reached. Runs BEFORE the
+ * Evidence Pack gate so Tier-1/2 proof actually counts; Tier-3 (manual) is
+ * surfaced so the soft gate can ship-and-label rather than pause.
+ */
+function collectBugFixEvidence(input: CollectEvidenceInput): CollectedEvidence {
+  const report = parseBugFixReport(input.runResult.reasoning);
+  const manual = report?.test_plan?.manual_verification;
+  const ev = report?.evidence;
+  if (!ev) {
+    // No structured evidence block — still surface a manual note if the agent
+    // wrote one, so the soft gate can label it.
+    return manual ? { uiVerification: 'manual', manualVerification: manual } : {};
+  }
+
+  // Tier 1 — a Playwright screenshot the agent captured in the worktree.
+  if (ev.screenshot_path) {
+    registerArtifactFromPath({
+      rel: ev.screenshot_path,
+      repoPath: input.worktreePath,
+      runId: input.runId,
+      kind: 'screenshot',
+    });
+  }
+
+  // Tier 2 — persist the UI-test output the agent pasted as a real
+  // `test_output` artifact (the orchestrator's synthesized one is empty), so
+  // the Evidence section can quote actual proof.
+  if (ev.test_output && ev.test_output.trim().length > 0) {
+    saveArtifact({
+      runId: input.runId,
+      repoId: input.repo.id,
+      kind: 'test_output',
+      filename: 'ui-test-output.txt',
+      contents: ev.test_output,
+    });
+  }
+
+  const collected: CollectedEvidence = {};
+  if (ev.ui_verification) collected.uiVerification = ev.ui_verification;
+  else if (ev.screenshot_path) collected.uiVerification = 'screenshot';
+  if (ev.ui_test_file) collected.uiTestFile = ev.ui_test_file;
+  if (manual) collected.manualVerification = manual;
+  return collected;
+}
 
 async function selectTaskForBugFixer(input: SelectTaskInput): Promise<SelectedTask | null> {
   // Forced retry (manual Retry button / infra auto-retry): re-target the exact
@@ -377,6 +437,22 @@ export interface BugFixTestPlan {
   manual_verification?: string;
 }
 
+/**
+ * The proof ladder for a UI-touching fix (see agents/bug-fixer.md). The agent
+ * climbs as far as it can and reports which rung it reached:
+ *   - `screenshot` — captured a Playwright screenshot at `screenshot_path`.
+ *   - `ui_test`    — wrote & ran a UI/e2e test (`ui_test_file`), pasted its
+ *                    output in `test_output`.
+ *   - `manual`     — neither was possible; the proof is the prose
+ *                    `test_plan.manual_verification` note.
+ */
+export interface BugFixEvidence {
+  ui_verification?: 'screenshot' | 'ui_test' | 'manual';
+  screenshot_path?: string;
+  ui_test_file?: string;
+  test_output?: string;
+}
+
 export interface BugFixReport {
   summary: string;
   root_cause: string;
@@ -384,6 +460,8 @@ export interface BugFixReport {
   fix: string[];
   /** Optional structured test plan — present for any code-touching fix. */
   test_plan?: BugFixTestPlan;
+  /** Proof-ladder evidence for UI-touching fixes (screenshot / UI test / manual). */
+  evidence?: BugFixEvidence;
   /** Optional reviewer-actionable notes (merge resolution, incidental cleanup). */
   notes?: string[];
 }
@@ -443,6 +521,26 @@ function normalizeBugFixReport(v: unknown): BugFixReport | null {
       plan.manual_verification = tp['manual_verification'].trim();
     }
     if (Object.keys(plan).length > 0) out.test_plan = plan;
+  }
+
+  // Optional proof-ladder evidence block.
+  if (o['evidence'] && typeof o['evidence'] === 'object') {
+    const ev = o['evidence'] as Record<string, unknown>;
+    const evidence: BugFixEvidence = {};
+    const tier = ev['ui_verification'];
+    if (tier === 'screenshot' || tier === 'ui_test' || tier === 'manual') {
+      evidence.ui_verification = tier;
+    }
+    if (typeof ev['screenshot_path'] === 'string' && ev['screenshot_path'].trim().length > 0) {
+      evidence.screenshot_path = ev['screenshot_path'].trim();
+    }
+    if (typeof ev['ui_test_file'] === 'string' && ev['ui_test_file'].trim().length > 0) {
+      evidence.ui_test_file = ev['ui_test_file'].trim();
+    }
+    if (typeof ev['test_output'] === 'string' && ev['test_output'].trim().length > 0) {
+      evidence.test_output = ev['test_output'];
+    }
+    if (Object.keys(evidence).length > 0) out.evidence = evidence;
   }
 
   if (Array.isArray(o['notes'])) {

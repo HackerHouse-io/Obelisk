@@ -15,6 +15,7 @@ import { appendAudit } from '../../logger/audit';
 import { syncBacklogForRepo } from '../../scheduler/backlog-sync';
 import { ObeliskError } from '../../../shared/errors';
 import { registerArtifactFromPath } from '../lib/register-artifact';
+import { saveArtifact } from '../../evidence/artifact-store';
 import { parseBacklogTaskRef } from '../../../shared/task-refs';
 import { forcedBacklogItem } from '../lib/forced-backlog';
 import type {
@@ -22,6 +23,8 @@ import type {
   SelectTaskInput,
   SelectedTask,
   InterpretResultInput,
+  CollectEvidenceInput,
+  CollectedEvidence,
   PublishPlan,
 } from '../types';
 
@@ -30,8 +33,11 @@ export const featureBuilderHandler: AgentHandler = {
   multiInstance: true,
   addAnotherExplainer:
     'Each instance ships a different feature in parallel — distinct backlog rows, no overlap.',
-  // Feature Builder ships PRs and MUST go through the Evidence Pack gate.
+  // Feature Builder ships PRs and goes through the Evidence Pack gate, but on
+  // the same soft floor as Bug Fixer: a headless run that can't capture a
+  // screenshot ships labeled (proof ladder) rather than pausing forever.
   skipsEvidenceGate: false,
+  softEvidenceGate: true,
   producesPatch: true,
 
   async selectTask(input: SelectTaskInput): Promise<SelectedTask | null> {
@@ -221,22 +227,50 @@ export const featureBuilderHandler: AgentHandler = {
     );
   },
 
+  collectEvidence(input: CollectEvidenceInput): CollectedEvidence {
+    const out = parseFeatureOutput(input.runResult.reasoning);
+    if (!out) return {};
+
+    // Register BEFORE the gate (was previously done in interpretResult, which
+    // runs after the gate had already paused the run on a missing screenshot).
+    // Paths are resolved against the worktree the agent actually wrote into.
+    if (out.screenshot_path) {
+      registerArtifactFromPath({
+        rel: out.screenshot_path,
+        repoPath: input.worktreePath,
+        runId: input.runId,
+        kind: 'screenshot',
+      });
+    }
+    if (out.server_log_path) {
+      registerArtifactFromPath({
+        rel: out.server_log_path,
+        repoPath: input.worktreePath,
+        runId: input.runId,
+        kind: 'log',
+      });
+    }
+    if (out.ui_test_output && out.ui_test_output.trim().length > 0) {
+      saveArtifact({
+        runId: input.runId,
+        repoId: input.repo.id,
+        kind: 'test_output',
+        filename: 'ui-test-output.txt',
+        contents: out.ui_test_output,
+      });
+    }
+
+    const collected: CollectedEvidence = {};
+    if (out.ui_verification) collected.uiVerification = out.ui_verification;
+    else if (out.screenshot_path) collected.uiVerification = 'screenshot';
+    if (out.ui_test_file) collected.uiTestFile = out.ui_test_file;
+    if (out.manual_verification) collected.manualVerification = out.manual_verification;
+    return collected;
+  },
+
   async interpretResult(input: InterpretResultInput): Promise<PublishPlan[]> {
     const out = parseFeatureOutput(input.runResult.reasoning);
     if (!out) return [];
-
-    registerArtifactFromPath({
-      rel: out.screenshot_path,
-      repoPath: input.repo.localPath,
-      runId: input.runId,
-      kind: 'screenshot',
-    });
-    registerArtifactFromPath({
-      rel: out.server_log_path,
-      repoPath: input.repo.localPath,
-      runId: input.runId,
-      kind: 'log',
-    });
 
     const plans: PublishPlan[] = [];
     const issueNumber = input.task.githubNumber;
@@ -288,6 +322,12 @@ interface FeatureOutput {
   pr_summary: string;
   screenshot_path?: string;
   server_log_path?: string;
+  // Proof ladder (see agents/feature-builder.md) — fallbacks for when a
+  // screenshot couldn't be captured headlessly.
+  ui_verification?: 'screenshot' | 'ui_test' | 'manual';
+  ui_test_file?: string;
+  ui_test_output?: string;
+  manual_verification?: string;
 }
 
 const FEATURE_OUTPUT_RE = /BEGIN_FEATURE_OUTPUT\s*([\s\S]*?)\s*END_FEATURE_OUTPUT/;

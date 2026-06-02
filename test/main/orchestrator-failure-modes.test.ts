@@ -88,6 +88,14 @@ async function makeFixtureRepo(): Promise<string> {
   await git.add('.');
   await git.commit('initial');
   await git.raw(['branch', '-M', 'main']);
+  // Bare origin so publish runs that reach `git push` (the proof-ladder ship
+  // path) succeed instead of erroring on "Pushing to origin". Worktrees created
+  // off this repo inherit the remote.
+  const originDir = join(tmpRoot, 'origin.git');
+  mkdirSync(originDir, { recursive: true });
+  await simpleGit(originDir).raw(['init', '--bare', '--initial-branch=main']);
+  await git.raw(['remote', 'add', 'origin', originDir]);
+  await git.raw(['push', 'origin', 'main']);
   return path;
 }
 
@@ -144,8 +152,35 @@ function capturingFactory(recipe: MockRecipe): {
   return { factory, prompts };
 }
 
+/** Read the single evidence_check audit payload for a run. */
+function evidenceAudit(runId: string): { result: string; missing: string[] } {
+  const rows = getDb()
+    .prepare<
+      [string, string],
+      { payload: string }
+    >('SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?')
+    .all(runId, 'evidence_check');
+  expect(rows.length).toBe(1);
+  return JSON.parse(rows[0]!.payload) as { result: string; missing: string[] };
+}
+
+/** Wrap a bug-fixer structured report (with proof-ladder evidence) as reasoning. */
+function bugFixReasoning(report: Record<string, unknown>): string {
+  return [
+    'fix(ui): repair the counter',
+    'BEGIN_BUG_FIX_REPORT',
+    JSON.stringify({
+      summary: 'The counter button did not increment.',
+      root_cause: 'Counter.tsx used a stale closure in its click handler.',
+      fix: ['Use the functional form of setState in Counter.tsx'],
+      ...report,
+    }),
+    'END_BUG_FIX_REPORT',
+  ].join('\n');
+}
+
 describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
-  it('EVIDENCE_INCOMPLETE — UI touched but no screenshot pauses the run', async () => {
+  function makeUiBugRepo() {
     const repo = createRepo({
       githubFullName: 'test/react-buggy',
       localPath: repoPath,
@@ -162,11 +197,25 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
       kind: 'bug',
       priorityLabel: 'P1',
     });
+    return repo;
+  }
 
-    const recipe = bugFixerRecipe([
-      { path: 'src/Counter.tsx', contents: NEW_REACT_COMPONENT },
-      { path: 'src/Counter.test.tsx', contents: FAILING_TEST_TS },
-    ]);
+  it('proof-ladder Tier 3 — UI touched, manual verification only: ships labeled, never pauses', async () => {
+    const repo = makeUiBugRepo();
+
+    const recipe: MockRecipe = {
+      filesToWrite: [
+        { path: 'src/Counter.tsx', contents: NEW_REACT_COMPONENT },
+        { path: 'src/Counter.test.tsx', contents: FAILING_TEST_TS },
+      ],
+      reasoning: bugFixReasoning({
+        test_plan: {
+          manual_verification:
+            'Loaded /settings with Claude uninstalled; the Codex composer is now enabled and accepts input.',
+        },
+        evidence: { ui_verification: 'manual' },
+      }),
+    };
 
     const result = await runAgent({
       repoId: repo.id,
@@ -175,22 +224,128 @@ describe('orchestrator: failure modes (TEST_PLAN.md §5)', () => {
       runnerFactory: factoryFor(recipe),
     });
 
-    expect(result.finalState).toBe('paused');
-    expect(result.reason).toBe('EVIDENCE_INCOMPLETE');
+    // The whole point: a headless UI fix with only a manual note must SHIP,
+    // not pause on EVIDENCE_INCOMPLETE.
+    expect(result.finalState).toBe('done');
+    expect(result.prNumber).toBeDefined();
 
-    const auditRows = getDb()
-      .prepare<
-        [string, string],
-        { payload: string }
-      >('SELECT payload FROM audit_log WHERE run_id = ? AND kind = ?')
-      .all(result.runId, 'evidence_check');
-    expect(auditRows.length).toBe(1);
-    const payload = JSON.parse(auditRows[0]!.payload) as {
-      result: string;
-      missing: string[];
+    const audit = evidenceAudit(result.runId);
+    expect(audit.result).toBe('soft_pass');
+    expect(audit.missing).toContain('ui_screenshot_if_ui_touched');
+
+    // The PR body is honest about the gap and surfaces the verification.
+    const prBody = fakeGh.pulls.create.mock.calls[0]![0].body as string;
+    expect(prBody).toContain('Note:');
+    expect(prBody).toContain('Codex composer is now enabled');
+  });
+
+  it('proof-ladder Tier 1 — Playwright screenshot satisfies the gate', async () => {
+    const repo = makeUiBugRepo();
+
+    const recipe: MockRecipe = {
+      filesToWrite: [
+        { path: 'src/Counter.tsx', contents: NEW_REACT_COMPONENT },
+        { path: 'src/Counter.test.tsx', contents: FAILING_TEST_TS },
+        { path: 'evidence/counter.png', contents: 'PNGDATA-counter-after-fix' },
+      ],
+      reasoning: bugFixReasoning({
+        evidence: { ui_verification: 'screenshot', screenshot_path: 'evidence/counter.png' },
+      }),
     };
-    expect(payload.result).toBe('fail');
-    expect(payload.missing).toContain('ui_screenshot_if_ui_touched');
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      trigger: 'manual',
+      runnerFactory: factoryFor(recipe),
+    });
+
+    expect(result.finalState).toBe('done');
+    const audit = evidenceAudit(result.runId);
+    expect(audit.result).toBe('pass');
+    expect(audit.missing).not.toContain('ui_screenshot_if_ui_touched');
+
+    const screenshots = listArtifacts(result.runId).filter((a) => a.kind === 'screenshot');
+    expect(screenshots.length).toBe(1);
+  });
+
+  it('proof-ladder Tier 2 — a UI test stands in for the screenshot', async () => {
+    const repo = makeUiBugRepo();
+
+    const recipe: MockRecipe = {
+      filesToWrite: [
+        { path: 'src/Counter.tsx', contents: NEW_REACT_COMPONENT },
+        { path: 'src/Counter.test.tsx', contents: FAILING_TEST_TS },
+        { path: 'src/Counter.e2e.test.tsx', contents: FAILING_TEST_TS },
+      ],
+      reasoning: bugFixReasoning({
+        evidence: {
+          ui_verification: 'ui_test',
+          ui_test_file: 'src/Counter.e2e.test.tsx',
+          test_output: 'PASS  src/Counter.e2e.test.tsx (1 test)',
+        },
+      }),
+    };
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'bug-fixer',
+      trigger: 'manual',
+      runnerFactory: factoryFor(recipe),
+    });
+
+    expect(result.finalState).toBe('done');
+    const audit = evidenceAudit(result.runId);
+    expect(audit.result).toBe('pass');
+    expect(audit.missing).not.toContain('ui_screenshot_if_ui_touched');
+  });
+
+  it('feature-builder — UI feature with manual verification ships labeled, never pauses', async () => {
+    const repo = createRepo({
+      githubFullName: 'test/react-feature',
+      localPath: repoPath,
+      defaultBranch: 'main',
+      mode: 'prs',
+      defaultRunner: 'claude',
+    });
+    createAgent({ repoId: repo.id, name: 'feature-builder' });
+    createBacklogItem({
+      repoId: repo.id,
+      source: 'manual',
+      title: 'Add a counter widget',
+      kind: 'feature',
+    });
+
+    const featureOutput = {
+      spec: 'Add a counter widget.',
+      plan: '1. Build Counter\n2. Test it',
+      pr_title: 'feat(ui): add counter widget',
+      pr_summary: 'Adds a counter widget to the dashboard.',
+      ui_verification: 'manual',
+      manual_verification: 'Ran the dev build and clicked the counter; it increments correctly.',
+    };
+    const recipe: MockRecipe = {
+      filesToWrite: [{ path: 'src/Counter.tsx', contents: NEW_REACT_COMPONENT }],
+      reasoning: ['BEGIN_FEATURE_OUTPUT', JSON.stringify(featureOutput), 'END_FEATURE_OUTPUT'].join(
+        '\n',
+      ),
+    };
+
+    const result = await runAgent({
+      repoId: repo.id,
+      agentName: 'feature-builder',
+      trigger: 'manual',
+      runnerFactory: factoryFor(recipe),
+    });
+
+    expect(result.finalState).toBe('done');
+    expect(result.prNumber).toBeDefined();
+    const audit = evidenceAudit(result.runId);
+    expect(audit.result).toBe('soft_pass');
+    expect(audit.missing).toContain('ui_screenshot_if_ui_touched');
+
+    const prBody = fakeGh.pulls.create.mock.calls[0]![0].body as string;
+    expect(prBody).toContain('Note:');
   });
 
   it('TIMEOUT — runner reports timeout and the run is marked failed with TIMEOUT', async () => {

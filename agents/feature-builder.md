@@ -56,14 +56,33 @@ BEGIN_FEATURE_OUTPUT
   "pr_title": "feat(reports): add CSV export to /reports",
   "pr_summary": "<one-paragraph summary for the PR body>",
   "screenshot_path": "playwright-report/feature-end-to-end.png",
-  "server_log_path": "logs/feature-execution.txt"
+  "server_log_path": "logs/feature-execution.txt",
+  "ui_verification": "<\"screenshot\" | \"ui_test\" | \"manual\" — how you proved the UI works; omit for non-UI features>",
+  "ui_test_file": "<path to the UI/e2e test that proves the feature, or null>",
+  "ui_test_output": "<pasted output of that UI test, or null>",
+  "manual_verification": "<concrete description of what you ran and observed, or null>"
 }
 END_FEATURE_OUTPUT
 ```
 
 `pr_title` MUST end up tagged `[obelisk:feature-builder]` (the publisher appends it). Branch is `obelisk/<run-id>` (the orchestrator manages this).
 
-`screenshot_path` is required for any UI-touching feature (Evidence Pack rule). `server_log_path` is required for any backend-touching feature.
+`server_log_path` is required for any backend-touching feature.
+
+## Proving a UI feature
+
+For any UI-touching feature, prove it works by climbing this ladder and stopping at the first
+rung that succeeds (record the rung in `ui_verification`):
+
+1. **Screenshot (best)** — drive the feature with Playwright (installed in the worktree's
+   `node_modules`) and save a screenshot to `screenshot_path`.
+2. **UI test** — if Playwright can't run here, write & run an automated UI/e2e test that
+   proves the feature; set `ui_test_file` and paste its output into `ui_test_output`.
+3. **Manual verification (floor)** — if neither is possible, write a concrete
+   `manual_verification` note (what you ran, what you saw — not a bare "works").
+
+The PR ships either way (a labeled gap is fine — the PR Reviewer re-verifies), so spend your
+effort producing real proof rather than satisfying the gate.
 
 If any loop step fails irrecoverably:
 - DEFINE: emit `SPEC_AMBIGUOUS:<questions>` and stop.
