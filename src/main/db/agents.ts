@@ -71,6 +71,7 @@ const DEFAULT_DISPLAY_NAME: Record<AgentName, string> = {
   'feature-builder': 'Feature Builder',
   'pr-reviewer': 'PR Reviewer',
   'ios-qa-pilot': 'iOS QA Pilot',
+  'ux-expert': 'UI/UX Expert',
 };
 
 const DEFAULT_PERMS: Record<AgentName, AgentPermissions> = {
@@ -104,6 +105,13 @@ const DEFAULT_PERMS: Record<AgentName, AgentPermissions> = {
     merge: false,
   },
   'ios-qa-pilot': {
+    readCode: true,
+    runTests: true,
+    createIssues: true,
+    draftPrs: false,
+    merge: false,
+  },
+  'ux-expert': {
     readCode: true,
     runTests: true,
     createIssues: true,
@@ -159,6 +167,9 @@ const DEFAULT_TIMEOUT: Record<AgentName, number> = {
   // Match the read/test agents at 30 min. Migration 013 bumps existing rows.
   'pr-reviewer': 30 * 60 * 1000,
   'ios-qa-pilot': 45 * 60 * 1000,
+  // Drives the live app via Playwright and screenshots each surface — same
+  // slow per-surface profile as Manual QA.
+  'ux-expert': 45 * 60 * 1000,
 };
 
 /**

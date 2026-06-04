@@ -7,6 +7,7 @@ const AGENT_LABELS: Record<AgentName, string> = {
   'feature-builder': 'Feature Builder',
   'pr-reviewer': 'PR Reviewer',
   'ios-qa-pilot': 'iOS QA Pilot',
+  'ux-expert': 'UI/UX Expert',
 };
 
 export function labelForAgent(name: AgentName): string {

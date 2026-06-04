@@ -1147,7 +1147,7 @@ function GenerateFeatureButton({
   );
 }
 
-const AGENT_OPTIONS: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+const AGENT_OPTIONS: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot', 'ux-expert'];
 
 function AgentMultiSelect({
   value,

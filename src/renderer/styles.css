@@ -3075,7 +3075,7 @@ body {
   border-right: 1px solid var(--line);
   padding: 18px 14px;
   background: var(--bg-1);
-  overflow-y: auto;
+  overflow: hidden;
   gap: 6px;
 }
 
@@ -3118,6 +3118,7 @@ body {
   gap: 4px;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .test-plans-toc-entry {
@@ -3189,6 +3190,7 @@ body {
   margin-top: 12px;
   align-self: stretch;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .test-plans-main {
@@ -7275,6 +7277,90 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
+}
+
+/* ---------- Coverage screen tabs (Test Coverage | UX Coverage) ---------- */
+.coverage-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+.coverage-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 9px 14px;
+  color: var(--t-2);
+  font: 500 12.5px var(--ui);
+  cursor: pointer;
+}
+.coverage-tab.active {
+  color: var(--t-0);
+  border-bottom-color: var(--brand);
+}
+
+/* ---------- UX coverage tab ---------- */
+.ux-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ux-coverage-pass-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+.ux-coverage-pass-hint {
+  color: var(--t-2);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+.ux-coverage-pass-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.ux-surface-card-unswept {
+  border-left: 3px solid var(--t-3);
+}
+.ux-surface-card-attention {
+  border-left: 3px solid var(--bad);
+}
+.ux-surface-card-healthy {
+  border-left: 3px solid var(--ok);
+}
+.ux-surface-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.ux-health-pill {
+  font: 600 10.5px var(--ui);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.ux-health-pill-unswept {
+  color: var(--t-2);
+  background: oklch(72% 0.05 230 / 0.12);
+}
+.ux-health-pill-attention {
+  color: var(--bad);
+  background: oklch(66% 0.18 18 / 0.14);
+}
+.ux-health-pill-healthy {
+  color: var(--ok);
+  background: oklch(70% 0.14 152 / 0.14);
+}
+
+.ux-run-btn {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .coverage-feature-card {

@@ -80,6 +80,7 @@ import {
 } from './test-plans';
 import {
   handleCoverageList,
+  handleCoverageListUx,
   handleCoverageBootstrapMap,
   handleCoverageGenerateMap,
   handleCoverageGenerationJobs,
@@ -219,6 +220,7 @@ export function registerIpcHandlers(): void {
 
   // Coverage map (Phase 12 — file × case × finding × churn report)
   register('coverage:list', handleCoverageList);
+  register('coverage:listUx', handleCoverageListUx);
   register('coverage:bootstrapMap', handleCoverageBootstrapMap);
   register('coverage:generateMap', handleCoverageGenerateMap);
   register('coverage:generationJobs', handleCoverageGenerationJobs);

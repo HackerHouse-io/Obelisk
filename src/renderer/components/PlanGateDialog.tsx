@@ -286,4 +286,5 @@ export const QA_AGENT_NAMES_FOR_GATE = new Set<AgentName>([
   'qa-hunter',
   'manual-qa',
   'ios-qa-pilot',
+  'ux-expert',
 ]);

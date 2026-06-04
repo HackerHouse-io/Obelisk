@@ -7,6 +7,7 @@ import { listPreviewsForRepo } from '../db/previews';
 import { ObeliskError } from '../../shared/errors';
 import { loadCoverageMap, matchesAnyGlob, resolveScopeToGlobs } from './coverage-map';
 import type { CoverageMap } from './coverage-map';
+import { parsePlanHint } from '../test-plans/inject';
 import { scanFromTrackedFiles } from './feature-scan';
 import { derivePerCaseState } from '../../shared/case-progress';
 import { computeFeatureScore } from '../../shared/coverage-formula';
@@ -164,7 +165,7 @@ export async function buildCoverageReport(repoId: string): Promise<CoverageRepor
     if (run.state !== 'done') continue;
     if (!run.finishedAt) continue;
     if (lastDoneAt === null || run.finishedAt > lastDoneAt) lastDoneAt = run.finishedAt;
-    const planId = parsePlanIdFromTaskRef(run.taskRef);
+    const planId = parsePlanHint(run.taskRef ?? undefined);
     if (!planId) continue;
     const files = planFiles.get(planId);
     if (files) {
@@ -473,11 +474,6 @@ async function computeChurn(
     churn.set(line, (churn.get(line) ?? 0) + 1);
   }
   return churn;
-}
-
-function parsePlanIdFromTaskRef(taskRef: string | null): string | null {
-  if (!taskRef) return null;
-  return taskRef.startsWith('plan:') ? taskRef.slice('plan:'.length) : null;
 }
 
 /**

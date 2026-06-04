@@ -82,12 +82,19 @@ const AGENTS: AgentMeta[] = [
     defaultRunner: 'claude',
     defaultSchedule: 'Manual / on-demand',
   },
+  {
+    name: 'ux-expert',
+    label: 'UI/UX Expert',
+    role: 'Playwright UX sweeps',
+    icon: 'Spark',
+    defaultRunner: 'codex',
+    defaultSchedule: '0 4 * * *',
+  },
 ];
 
 const POST_MVP: { label: string; role: string; icon: IconName }[] = [
   { label: 'Test Engineer', role: 'Coverage + flaky-test cleanup', icon: 'Code' },
   { label: 'Security Auditor', role: 'OWASP + secret scanning', icon: 'Lock' },
-  { label: 'Product Polish', role: 'UI consistency sweeps', icon: 'Spark' },
   { label: 'Docs Writer', role: 'README + ADRs', icon: 'Doc' },
   { label: 'Refactor Bot', role: 'Lift-and-shift refactors', icon: 'Sliders' },
 ];
@@ -611,6 +618,11 @@ const PICKER_EXPLAINERS: Record<AgentName, { explainer: string; singleton: boole
     explainer:
       'Manual QA runs every flow in qa/critical-flows.md per sweep — only one is useful today.',
     singleton: true,
+  },
+  'ux-expert': {
+    explainer:
+      'Each instance audits a different UX surface plan for improvements. Pair more with different plans and schedules.',
+    singleton: false,
   },
 };
 
@@ -1488,7 +1500,7 @@ function SkillsCard({ agent }: { agent: Agent }): ReactElement {
 
 /* ───────────────────────── Default test plan ───────────────────────── */
 
-const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+const QA_AGENT_NAMES: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot', 'ux-expert'];
 
 function PlanSelectionModeCard({
   agent,

@@ -149,7 +149,12 @@ function dedupeAgents(list: AgentName[]): AgentName[] {
  * three QA agents land enabled in `agentNames` so the user doesn't have
  * to manually toggle chips before they can dispatch from any of them.
  */
-export const DEFAULT_PLAN_AGENTS: AgentName[] = ['qa-hunter', 'manual-qa', 'ios-qa-pilot'];
+export const DEFAULT_PLAN_AGENTS: AgentName[] = [
+  'qa-hunter',
+  'manual-qa',
+  'ios-qa-pilot',
+  'ux-expert',
+];
 
 export interface CreatePlanInput {
   repoPath: string;

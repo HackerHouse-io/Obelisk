@@ -18,6 +18,7 @@ const DEFAULT_AGENTS: AgentName[] = [
   'feature-builder',
   'pr-reviewer',
   'ios-qa-pilot',
+  'ux-expert',
 ];
 
 export async function handleReposList(): Promise<IpcMap['repos:list']['res']> {

@@ -19,6 +19,8 @@ const DEFAULT_CRON: Record<AgentName, string | null> = {
   'feature-builder': '0 */6 * * *',
   'pr-reviewer': '*/5 * * * *',
   'ios-qa-pilot': null,
+  // Daily UX sweep, offset from qa-hunter (2am) so they don't pile up.
+  'ux-expert': '0 4 * * *',
 };
 
 export function defaultCronFor(agent: AgentName): string | null {

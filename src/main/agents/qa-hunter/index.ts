@@ -1,13 +1,8 @@
 import { createHash } from 'node:crypto';
 import { OBELISK_LABELS } from '../../publisher/labels';
 import { parseFencedJson } from '../lib/parse-fenced-json';
-import {
-  fetchKnownIssueTitles,
-  normalizeTitle,
-  normalizeText,
-  previewTitleConflicts,
-} from '../lib/find-existing-issue';
-import { listAllPreviewTitlesForRepo, listKnownFingerprintsForRepo } from '../../db/previews';
+import { normalizeText, previewTitleConflicts } from '../lib/find-existing-issue';
+import { collectKnownDedupKeys } from '../lib/dedup-keys';
 import { resolvePlanForAgentRun, toAssignedPlan } from '../../test-plans/inject';
 import type { QaFinding } from '../../../shared/types';
 import type {
@@ -60,6 +55,7 @@ export const qaHunterHandler: AgentHandler = {
     const { titles: knownTitles } = await collectKnownDedupKeys(
       input.repo.id,
       input.repo.githubFullName,
+      OBELISK_LABELS.fix,
     );
     const knownBlock =
       knownTitles.length === 0
@@ -100,6 +96,7 @@ export const qaHunterHandler: AgentHandler = {
     const { titles: dedupTitles, fingerprints: dedupFingerprints } = await collectKnownDedupKeys(
       input.repo.id,
       input.repo.githubFullName,
+      OBELISK_LABELS.fix,
     );
 
     const out: PublishPlan[] = [];
@@ -127,28 +124,6 @@ export const qaHunterHandler: AgentHandler = {
     return out;
   },
 };
-
-interface DedupKeys {
-  titles: string[];
-  fingerprints: Set<string>;
-}
-
-async function collectKnownDedupKeys(repoId: string, repoFullName: string): Promise<DedupKeys> {
-  const previewTitles = listAllPreviewTitlesForRepo(repoId);
-  const issues = await fetchKnownIssueTitles({
-    repoFullName,
-    label: OBELISK_LABELS.fix,
-  }).catch(() => []);
-  const seen = new Set<string>();
-  const titles: string[] = [];
-  for (const t of [...previewTitles, ...issues.map((i) => i.title)]) {
-    const key = normalizeTitle(t);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    titles.push(t);
-  }
-  return { titles, fingerprints: listKnownFingerprintsForRepo(repoId) };
-}
 
 /**
  * Stable content fingerprint for a finding. Hashes the normalized title +

@@ -11,6 +11,11 @@ export const OBELISK_LABELS = {
   needsHuman: 'obelisk:needs-human',
   qaBug: 'qa-bug',
   iosQaBug: 'ios-qa-bug',
+  // Provenance label the UI/UX Expert stamps on every finding. Constant across
+  // both routing paths (obelisk:fix → Bug Fixer, obelisk:feature → Feature
+  // Builder) so it never affects deriveKind — used only for filtering and the
+  // UX coverage tab.
+  ux: 'ux',
 } as const;
 
 export type ObeliskLabel = (typeof OBELISK_LABELS)[keyof typeof OBELISK_LABELS];

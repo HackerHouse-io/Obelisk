@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { axisVertices, polygonPoints, toSvgPath } from '../../../shared/coverage-formula';
+import { truncateLabel, useAnimatedValues } from './radar-helpers';
 import type { CoverageFeature } from '../../../shared/types';
 
 interface Props {
@@ -10,12 +11,11 @@ interface Props {
 }
 
 const RING_LEVELS = [25, 50, 75, 100];
-const TWEEN_MS = 600;
 
 /**
- * Hand-rolled SVG radar. Animates each axis value from its previous to
- * its new value over `TWEEN_MS` whenever the `features` array changes —
- * gives the "axis growing outward after a run" effect the screen needs.
+ * Hand-rolled SVG radar. Animates each axis value from its previous to its
+ * new value (via the shared `useAnimatedValues` tween) whenever the `features`
+ * array changes — the "axis growing outward after a run" effect the screen needs.
  *
  * Falls back to a horizontal bar list when fewer than 3 features are
  * available, since a 2-axis polygon collapses to a line.
@@ -225,62 +225,4 @@ function CoverageBarList({
       })}
     </div>
   );
-}
-
-/**
- * Tween from the previously-rendered values to `target` over TWEEN_MS.
- * Returns a value array that mutates each animation frame; React re-renders
- * the radar as the tween progresses.
- */
-function useAnimatedValues(target: number[]): number[] {
-  const [values, setValues] = useState<number[]>(() => target.map(() => 0));
-  const prevRef = useRef<number[]>(values);
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const from = padTo(prevRef.current, target.length, 0);
-    const start = performance.now();
-
-    function step(now: number): void {
-      const t = Math.min(1, (now - start) / TWEEN_MS);
-      const eased = easeOutCubic(t);
-      const next = target.map((tv, i) => {
-        const fv = from[i] ?? 0;
-        return fv + (tv - fv) * eased;
-      });
-      setValues(next);
-      prevRef.current = next;
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(step);
-      } else {
-        rafRef.current = null;
-      }
-    }
-    rafRef.current = requestAnimationFrame(step);
-    return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    };
-    // Re-run when the target signature changes — key on the joined values
-    // so an in-place mutation that keeps the same array identity also fires.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target.join('|')]);
-
-  return values;
-}
-
-function truncateLabel(label: string, max: number): string {
-  if (label.length <= max) return label;
-  return label.slice(0, Math.max(1, max - 1)) + '…';
-}
-
-function padTo(arr: number[], len: number, fill: number): number[] {
-  if (arr.length === len) return arr;
-  const out = arr.slice(0, len);
-  while (out.length < len) out.push(fill);
-  return out;
-}
-
-function easeOutCubic(t: number): number {
-  const u = 1 - t;
-  return 1 - u * u * u;
 }

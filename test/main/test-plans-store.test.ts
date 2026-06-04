@@ -119,11 +119,17 @@ describe('test-plans store', () => {
       blocks: blocks(),
       generatedBy: 'manual',
     });
-    expect(plan.frontmatter.agentNames).toEqual(['qa-hunter', 'manual-qa', 'ios-qa-pilot']);
+    expect(plan.frontmatter.agentNames).toEqual([
+      'qa-hunter',
+      'manual-qa',
+      'ios-qa-pilot',
+      'ux-expert',
+    ]);
     // Each QA agent's listPlans call must find the plan.
     expect(listPlans(repoDir, 'qa-hunter').map((p) => p.id)).toContain(plan.frontmatter.id);
     expect(listPlans(repoDir, 'manual-qa').map((p) => p.id)).toContain(plan.frontmatter.id);
     expect(listPlans(repoDir, 'ios-qa-pilot').map((p) => p.id)).toContain(plan.frontmatter.id);
+    expect(listPlans(repoDir, 'ux-expert').map((p) => p.id)).toContain(plan.frontmatter.id);
   });
 
   it('listPlans returns a plan for every agent in its agentNames list', () => {

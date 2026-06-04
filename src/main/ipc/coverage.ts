@@ -4,6 +4,7 @@ import { simpleGit } from 'simple-git';
 import type { IpcMap } from '../../shared/types';
 import { ObeliskError } from '../../shared/errors';
 import { buildCoverageReport } from '../coverage/aggregate';
+import { buildUxCoverageReport } from '../coverage/ux-aggregate';
 import { matchesAnyGlob, parseCoverageMap } from '../coverage/coverage-map';
 import { scanFromTrackedFiles } from '../coverage/feature-scan';
 import { startMapGenerationJob } from '../coverage/generate-map';
@@ -23,6 +24,12 @@ export async function handleCoverageList(
   payload: IpcMap['coverage:list']['req'],
 ): Promise<IpcMap['coverage:list']['res']> {
   return buildCoverageReport(payload.repoId);
+}
+
+export async function handleCoverageListUx(
+  payload: IpcMap['coverage:listUx']['req'],
+): Promise<IpcMap['coverage:listUx']['res']> {
+  return buildUxCoverageReport(payload.repoId);
 }
 
 /**

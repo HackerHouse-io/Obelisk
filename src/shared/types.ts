@@ -21,7 +21,8 @@ export type AgentName =
   | 'bug-fixer'
   | 'feature-builder'
   | 'pr-reviewer'
-  | 'ios-qa-pilot';
+  | 'ios-qa-pilot'
+  | 'ux-expert';
 export type AttributionMode = 'user' | 'bot' | 'custom';
 
 export type ISO = string;
@@ -949,6 +950,11 @@ export interface IpcMap {
     req: { repoId: string };
     res: CoverageReport;
   };
+  // UX/UI coverage — what the UI/UX Expert has swept, per surface.
+  'coverage:listUx': {
+    req: { repoId: string };
+    res: UxCoverageReport;
+  };
   // Bootstrap `qa/coverage-map.md` from a heuristic + filesystem scan.
   // - `commit: false / omitted` → return proposed entries for preview only.
   // - `commit: true`            → write the file (refuses to overwrite a
@@ -1132,6 +1138,55 @@ export interface CoverageReport {
   coveredFiles: number;
   uncoveredFiles: number;
   lastDoneAt: ISO | null;
+}
+
+/* ---------- UX/UI coverage (UI/UX Expert sweeps) ---------- */
+
+/**
+ * UX health for a surface. Unlike test coverage (proof-based: only moves when
+ * cases pass), this answers "has the UI/UX Expert swept this surface, and does
+ * it carry open UX debt?":
+ *   - `unswept`   — never audited by the UI/UX Expert
+ *   - `attention` — swept, but has open `ux`-labeled findings
+ *   - `healthy`   — swept with no open UX findings
+ */
+export type UxHealth = 'unswept' | 'attention' | 'healthy';
+
+export interface UxSurface {
+  /** Feature label from the shared `qa/coverage-map.md`. */
+  label: string;
+  /** Plans scoped to this feature whose agentNames include 'ux-expert'. */
+  planCount: number;
+  /** Newest done UI/UX Expert run touching this surface (feature plan or whole-app sweep). */
+  lastSweptAt: ISO | null;
+  swept: boolean;
+  /** Open `ux`-labeled previews whose suspected files fall in this feature's globs. */
+  openFindings: number;
+  bySeverity: { P0: number; P1: number; P2: number };
+  uxHealth: UxHealth;
+  /**
+   * 0–100 UX score for the radar axis. Not the proof-based test formula:
+   * unswept = 0, swept-and-clean = 100, swept-with-debt = degraded by the
+   * severity-weighted open-finding count (floored so a swept surface still
+   * reads as "audited, needs work" rather than collapsing to 0).
+   */
+  coverageScore: number;
+  /** Plans the UI/UX Expert can run for this surface (feature-scoped). */
+  planRefs: TestPlanRef[];
+}
+
+export interface UxCoverageReport {
+  repoId: string;
+  /** False when `qa/coverage-map.md` is missing — drives the generate-map CTA. */
+  hasCoverageMap: boolean;
+  /** Surfaces sorted: unswept first, then most open findings. */
+  surfaces: UxSurface[];
+  /** Whole-app plans the UI/UX Expert can run (sweep every surface at once). */
+  wholeAppPlans: TestPlanRef[];
+  totalSurfaces: number;
+  sweptSurfaces: number;
+  /** Newest done UI/UX Expert run across the repo. */
+  lastSweptAt: ISO | null;
 }
 
 /* ---------- Coverage Agent (autonomous loop) ---------- */

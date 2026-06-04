@@ -10,6 +10,8 @@ import { CoverageTour, type TourStep } from './coverage/CoverageTour';
 import { CoverageFeaturesTable } from './coverage/CoverageFeaturesTable';
 import { FeatureCard, type ActiveRun, type RunnerInstalled } from './coverage/FeatureCard';
 import { WholeAppPlansCard } from './coverage/WholeAppPlansCard';
+import { UxCoverageTab } from './coverage/UxCoverageTab';
+import { shortDate } from '../format';
 import type {
   BusEvent,
   CoverageEntry,
@@ -115,6 +117,8 @@ export function Coverage(): ReactElement {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+  /** Which coverage lens is showing: proof-based test coverage or UX coverage. */
+  const [tab, setTab] = useState<'test' | 'ux'>('test');
 
   const onSort = (key: SortKey): void => {
     if (sortKey !== key) {
@@ -545,268 +549,307 @@ export function Coverage(): ReactElement {
         </div>
       </header>
 
-      {error ? (
-        <div className="coverage-banner coverage-banner-error">
-          <Icon.AlertTri size={12} />
-          <div>{error}</div>
-        </div>
-      ) : null}
+      <div className="coverage-tabs" role="tablist" aria-label="Coverage view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'test'}
+          className={`coverage-tab${tab === 'test' ? ' active' : ''}`}
+          onClick={() => setTab('test')}
+          data-testid="coverage-tab-test"
+        >
+          Test Coverage
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'ux'}
+          className={`coverage-tab${tab === 'ux' ? ' active' : ''}`}
+          onClick={() => setTab('ux')}
+          data-testid="coverage-tab-ux"
+        >
+          UX Coverage
+        </button>
+      </div>
 
-      <CoverageAgentCard repoId={repo.id} onPassComplete={() => void load()} />
-
-      {report && !report.hasCoverageMap && !genJob ? (
-        <div className="coverage-banner coverage-banner-info">
-          {bootstrapBusy ? (
-            <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
-          ) : (
-            <Icon.Sparkles size={12} />
-          )}
-          <div>
-            {bootstrapBusy ? (
-              <>Asking Claude / Codex to analyze the codebase…</>
-            ) : (
-              <>
-                No <span className="mono">qa/coverage-map.md</span> yet — Claude / Codex will read
-                your codebase and propose feature labels.
-              </>
-            )}
-          </div>
-          <button
-            type="button"
-            className="btn sm primary"
-            onClick={() => void generateMap()}
-            disabled={bootstrapBusy}
-            data-testid="coverage-bootstrap-btn"
-          >
-            {bootstrapBusy ? (
-              <>
-                <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
-                Generating…
-              </>
-            ) : (
-              'Generate coverage map'
-            )}
-          </button>
-        </div>
-      ) : null}
-
-      {genJob ? <CoverageGenProgress job={genJob} onDismiss={dismissJobToast} /> : null}
-
-      {report ? (
+      {tab === 'ux' ? (
+        <UxCoverageTab repoId={repo.id} onOpenPlans={() => setRoute('test-plans')} />
+      ) : (
         <>
-          <div className="coverage-radar-section">
-            <div className="coverage-radar-stage">
-              <button
-                type="button"
-                className="coverage-radar-expand-btn"
-                onClick={() => setRadarExpanded(true)}
-                title="Expand radar to fullscreen"
-                aria-label="Expand radar"
-                data-testid="coverage-radar-expand"
-              >
-                <Icon.Search size={11} /> Expand
-              </button>
-              <CoverageRadar
-                features={radarFeatures}
-                selectedLabel={selectedFeature}
-                onSelect={setSelectedFeature}
-              />
-              {overflowCount > 0 ? (
-                <div className="coverage-radar-overflow">
-                  +{overflowCount} more in cards below — click <em>Expand</em> for all
-                </div>
-              ) : null}
-            </div>
-            <div className="coverage-radar-summary">
-              <div className="coverage-summary-stat">
-                <div className="coverage-summary-stat-value">{avgCoverage}%</div>
-                <div className="coverage-summary-stat-label">average coverage</div>
-              </div>
-              <div className="coverage-summary-stat">
-                <div className="coverage-summary-stat-value">{features.length}</div>
-                <div className="coverage-summary-stat-label">features tracked</div>
-              </div>
-              <div className="coverage-summary-stat">
-                <div className={`coverage-summary-stat-value${lowCoverage > 0 ? ' warn' : ''}`}>
-                  {lowCoverage}
-                </div>
-                <div className="coverage-summary-stat-label">below 50%</div>
-              </div>
-              <div className="coverage-summary-stat">
-                <div className="coverage-summary-stat-value text">
-                  {report.lastDoneAt ? short(report.lastDoneAt) : '—'}
-                </div>
-                <div className="coverage-summary-stat-label">last QA pass</div>
-              </div>
-              {staleLabels.length > 0 ? (
-                <div className="coverage-summary-stale" data-testid="coverage-stale-labels">
-                  <div className="coverage-summary-stale-title">
-                    {staleLabels.length} broken label{staleLabels.length === 1 ? '' : 's'}
-                  </div>
-                  <div className="coverage-summary-stale-list">
-                    {staleLabels.slice(0, 8).join(', ')}
-                    {staleLabels.length > 8 ? `, +${staleLabels.length - 8} more` : ''}
-                  </div>
-                  <div className="coverage-summary-stale-hint">
-                    Globs in <span className="mono">qa/coverage-map.md</span> match zero tracked
-                    files. Remove them in one click — or edit the file to fix the globs.
-                  </div>
-                  <button
-                    type="button"
-                    className="btn sm danger coverage-summary-stale-btn"
-                    onClick={() => setCleanStaleConfirmOpen(true)}
-                    disabled={cleanStaleBusy}
-                    data-testid="coverage-clean-stale-btn"
-                  >
-                    {cleanStaleBusy ? (
-                      <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />
-                    ) : (
-                      <Icon.Close size={11} />
-                    )}{' '}
-                    Remove {staleLabels.length} broken label{staleLabels.length === 1 ? '' : 's'}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <WholeAppPlansCard
-            repoId={repo.id}
-            plans={report.wholeAppPlans}
-            installed={installed}
-            activeRuns={activeRuns}
-            onChange={() => void load()}
-          />
-
-          {features.length > 0 ? (
-            <div className="coverage-feature-grid">
-              {features.map((f) => {
-                const job = Object.values(planJobs).find(
-                  (j) => (j.feature ?? '').toLowerCase() === f.label.toLowerCase(),
-                );
-                return (
-                  <FeatureCard
-                    key={f.label}
-                    repoId={repo.id}
-                    feature={f}
-                    selected={selectedFeature === f.label}
-                    installed={installed}
-                    activeRuns={activeRuns}
-                    planJob={job ?? null}
-                    onSelect={() => setSelectedFeature((cur) => (cur === f.label ? null : f.label))}
-                    onChange={() => void load()}
-                  />
-                );
-              })}
+          {error ? (
+            <div className="coverage-banner coverage-banner-error">
+              <Icon.AlertTri size={12} />
+              <div>{error}</div>
             </div>
           ) : null}
 
-          <details
-            className="coverage-files-disclosure"
-            open={filesOpen}
-            onToggle={(e) => setFilesOpen((e.target as HTMLDetailsElement).open)}
-          >
-            <summary className="coverage-files-summary">
-              <span>
-                Files
-                {filteredFeature ? (
-                  <>
-                    {' '}
-                    · <span className="coverage-files-scope">{filteredFeature.label}</span>
-                  </>
-                ) : null}
-              </span>
-              <span className="coverage-files-summary-count">
-                {report.totalFiles} tracked · {report.coveredFiles} covered ·{' '}
-                {report.uncoveredFiles} uncovered
-              </span>
-            </summary>
-            <div className="coverage-controls">
-              <div className="coverage-filter-strip" role="radiogroup" aria-label="Coverage filter">
-                {FILTERS.map((f) => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={filter === f.id}
-                    className={`coverage-filter-chip${filter === f.id ? ' active' : ''}`}
-                    onClick={() => setFilter(f.id)}
-                    title={f.help}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-              <input
-                type="search"
-                placeholder="Filter by path…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="coverage-search"
-                spellCheck={false}
-              />
-            </div>
+          <CoverageAgentCard repoId={repo.id} onPassComplete={() => void load()} />
 
-            <div className="coverage-table">
-              <div className="coverage-table-head">
-                <SortHeader
-                  label="File"
-                  sortKey="path"
-                  current={sortKey}
-                  dir={sortDir}
-                  onSort={onSort}
-                />
-                <SortHeader
-                  label="Cases"
-                  sortKey="cases"
-                  current={sortKey}
-                  dir={sortDir}
-                  onSort={onSort}
-                  numeric
-                />
-                <SortHeader
-                  label="Findings"
-                  sortKey="findings"
-                  current={sortKey}
-                  dir={sortDir}
-                  onSort={onSort}
-                  numeric
-                />
-                <SortHeader
-                  label="Last pass"
-                  sortKey="lastPass"
-                  current={sortKey}
-                  dir={sortDir}
-                  onSort={onSort}
-                />
-                <SortHeader
-                  label="Churn since"
-                  sortKey="churn"
-                  current={sortKey}
-                  dir={sortDir}
-                  onSort={onSort}
-                  numeric
-                />
-              </div>
-              {filteredFiles.length === 0 ? (
-                <div className="coverage-empty">No files match this filter.</div>
+          {report && !report.hasCoverageMap && !genJob ? (
+            <div className="coverage-banner coverage-banner-info">
+              {bootstrapBusy ? (
+                <Icon.Spinner size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
               ) : (
-                filteredFiles.slice(0, 500).map((f) => <CoverageRow key={f.path} entry={f} />)
+                <Icon.Sparkles size={12} />
               )}
-              {filteredFiles.length > 500 ? (
-                <div className="coverage-empty" style={{ color: 'var(--t-3)' }}>
-                  Showing first 500 of {filteredFiles.length}. Refine with the filter above.
+              <div>
+                {bootstrapBusy ? (
+                  <>Asking Claude / Codex to analyze the codebase…</>
+                ) : (
+                  <>
+                    No <span className="mono">qa/coverage-map.md</span> yet — Claude / Codex will
+                    read your codebase and propose feature labels.
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn sm primary"
+                onClick={() => void generateMap()}
+                disabled={bootstrapBusy}
+                data-testid="coverage-bootstrap-btn"
+              >
+                {bootstrapBusy ? (
+                  <>
+                    <Icon.Spinner size={11} style={{ animation: 'spin 0.9s linear infinite' }} />{' '}
+                    Generating…
+                  </>
+                ) : (
+                  'Generate coverage map'
+                )}
+              </button>
+            </div>
+          ) : null}
+
+          {genJob ? <CoverageGenProgress job={genJob} onDismiss={dismissJobToast} /> : null}
+
+          {report ? (
+            <>
+              <div className="coverage-radar-section">
+                <div className="coverage-radar-stage">
+                  <button
+                    type="button"
+                    className="coverage-radar-expand-btn"
+                    onClick={() => setRadarExpanded(true)}
+                    title="Expand radar to fullscreen"
+                    aria-label="Expand radar"
+                    data-testid="coverage-radar-expand"
+                  >
+                    <Icon.Search size={11} /> Expand
+                  </button>
+                  <CoverageRadar
+                    features={radarFeatures}
+                    selectedLabel={selectedFeature}
+                    onSelect={setSelectedFeature}
+                  />
+                  {overflowCount > 0 ? (
+                    <div className="coverage-radar-overflow">
+                      +{overflowCount} more in cards below — click <em>Expand</em> for all
+                    </div>
+                  ) : null}
+                </div>
+                <div className="coverage-radar-summary">
+                  <div className="coverage-summary-stat">
+                    <div className="coverage-summary-stat-value">{avgCoverage}%</div>
+                    <div className="coverage-summary-stat-label">average coverage</div>
+                  </div>
+                  <div className="coverage-summary-stat">
+                    <div className="coverage-summary-stat-value">{features.length}</div>
+                    <div className="coverage-summary-stat-label">features tracked</div>
+                  </div>
+                  <div className="coverage-summary-stat">
+                    <div className={`coverage-summary-stat-value${lowCoverage > 0 ? ' warn' : ''}`}>
+                      {lowCoverage}
+                    </div>
+                    <div className="coverage-summary-stat-label">below 50%</div>
+                  </div>
+                  <div className="coverage-summary-stat">
+                    <div className="coverage-summary-stat-value text">
+                      {report.lastDoneAt ? shortDate(report.lastDoneAt) : '—'}
+                    </div>
+                    <div className="coverage-summary-stat-label">last QA pass</div>
+                  </div>
+                  {staleLabels.length > 0 ? (
+                    <div className="coverage-summary-stale" data-testid="coverage-stale-labels">
+                      <div className="coverage-summary-stale-title">
+                        {staleLabels.length} broken label{staleLabels.length === 1 ? '' : 's'}
+                      </div>
+                      <div className="coverage-summary-stale-list">
+                        {staleLabels.slice(0, 8).join(', ')}
+                        {staleLabels.length > 8 ? `, +${staleLabels.length - 8} more` : ''}
+                      </div>
+                      <div className="coverage-summary-stale-hint">
+                        Globs in <span className="mono">qa/coverage-map.md</span> match zero tracked
+                        files. Remove them in one click — or edit the file to fix the globs.
+                      </div>
+                      <button
+                        type="button"
+                        className="btn sm danger coverage-summary-stale-btn"
+                        onClick={() => setCleanStaleConfirmOpen(true)}
+                        disabled={cleanStaleBusy}
+                        data-testid="coverage-clean-stale-btn"
+                      >
+                        {cleanStaleBusy ? (
+                          <Icon.Spinner
+                            size={11}
+                            style={{ animation: 'spin 0.9s linear infinite' }}
+                          />
+                        ) : (
+                          <Icon.Close size={11} />
+                        )}{' '}
+                        Remove {staleLabels.length} broken label
+                        {staleLabels.length === 1 ? '' : 's'}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <WholeAppPlansCard
+                repoId={repo.id}
+                plans={report.wholeAppPlans}
+                installed={installed}
+                activeRuns={activeRuns}
+                onChange={() => void load()}
+              />
+
+              {features.length > 0 ? (
+                <div className="coverage-feature-grid">
+                  {features.map((f) => {
+                    const job = Object.values(planJobs).find(
+                      (j) => (j.feature ?? '').toLowerCase() === f.label.toLowerCase(),
+                    );
+                    return (
+                      <FeatureCard
+                        key={f.label}
+                        repoId={repo.id}
+                        feature={f}
+                        selected={selectedFeature === f.label}
+                        installed={installed}
+                        activeRuns={activeRuns}
+                        planJob={job ?? null}
+                        onSelect={() =>
+                          setSelectedFeature((cur) => (cur === f.label ? null : f.label))
+                        }
+                        onChange={() => void load()}
+                      />
+                    );
+                  })}
                 </div>
               ) : null}
+
+              <details
+                className="coverage-files-disclosure"
+                open={filesOpen}
+                onToggle={(e) => setFilesOpen((e.target as HTMLDetailsElement).open)}
+              >
+                <summary className="coverage-files-summary">
+                  <span>
+                    Files
+                    {filteredFeature ? (
+                      <>
+                        {' '}
+                        · <span className="coverage-files-scope">{filteredFeature.label}</span>
+                      </>
+                    ) : null}
+                  </span>
+                  <span className="coverage-files-summary-count">
+                    {report.totalFiles} tracked · {report.coveredFiles} covered ·{' '}
+                    {report.uncoveredFiles} uncovered
+                  </span>
+                </summary>
+                <div className="coverage-controls">
+                  <div
+                    className="coverage-filter-strip"
+                    role="radiogroup"
+                    aria-label="Coverage filter"
+                  >
+                    {FILTERS.map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={filter === f.id}
+                        className={`coverage-filter-chip${filter === f.id ? ' active' : ''}`}
+                        onClick={() => setFilter(f.id)}
+                        title={f.help}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="search"
+                    placeholder="Filter by path…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="coverage-search"
+                    spellCheck={false}
+                  />
+                </div>
+
+                <div className="coverage-table">
+                  <div className="coverage-table-head">
+                    <SortHeader
+                      label="File"
+                      sortKey="path"
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={onSort}
+                    />
+                    <SortHeader
+                      label="Cases"
+                      sortKey="cases"
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={onSort}
+                      numeric
+                    />
+                    <SortHeader
+                      label="Findings"
+                      sortKey="findings"
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={onSort}
+                      numeric
+                    />
+                    <SortHeader
+                      label="Last pass"
+                      sortKey="lastPass"
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={onSort}
+                    />
+                    <SortHeader
+                      label="Churn since"
+                      sortKey="churn"
+                      current={sortKey}
+                      dir={sortDir}
+                      onSort={onSort}
+                      numeric
+                    />
+                  </div>
+                  {filteredFiles.length === 0 ? (
+                    <div className="coverage-empty">No files match this filter.</div>
+                  ) : (
+                    filteredFiles.slice(0, 500).map((f) => <CoverageRow key={f.path} entry={f} />)
+                  )}
+                  {filteredFiles.length > 500 ? (
+                    <div className="coverage-empty" style={{ color: 'var(--t-3)' }}>
+                      Showing first 500 of {filteredFiles.length}. Refine with the filter above.
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+            </>
+          ) : loading ? (
+            <div className="coverage-empty">
+              <Icon.Spinner size={14} style={{ animation: 'spin 0.9s linear infinite' }} /> Building
+              coverage report…
             </div>
-          </details>
+          ) : null}
         </>
-      ) : loading ? (
-        <div className="coverage-empty">
-          <Icon.Spinner size={14} style={{ animation: 'spin 0.9s linear infinite' }} /> Building
-          coverage report…
-        </div>
-      ) : null}
+      )}
 
       <ConfirmDialog
         open={regenConfirmOpen}
@@ -927,7 +970,7 @@ function CoverageRow({ entry }: { entry: CoverageEntry }): ReactElement {
       <div className="coverage-num">{entry.caseCount}</div>
       <div className="coverage-num">{entry.findingsCount}</div>
       <div className="coverage-pass">
-        {entry.lastPassedAt ? short(entry.lastPassedAt) : 'never'}
+        {entry.lastPassedAt ? shortDate(entry.lastPassedAt) : 'never'}
       </div>
       <div className="coverage-num">{entry.churnSinceLastPass}</div>
     </div>
@@ -977,20 +1020,6 @@ function sameActiveRuns(a: ActiveRun[], b: ActiveRun[]): boolean {
     if (x.runId !== y.runId || x.state !== y.state) return false;
   }
   return true;
-}
-
-function short(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
 }
 
 function CoverageGenProgress({

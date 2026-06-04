@@ -1109,7 +1109,13 @@ function buildRepoSummary(repo: Repo, worktreePath: string): RepoSummary {
 const QA_SUMMARY_BUDGET = 16 * 1024;
 
 function readQaPlaybookSummary(repoRoot: string): string {
-  const files = walkMarkdownFiles(join(repoRoot, 'qa'));
+  // Skip qa/ux-memory/** — those are per-plan UI/UX Expert memory files,
+  // injected directly into the matching ux-expert run by its selectTask. They
+  // must NOT leak into every agent's prompt (they'd bloat it and grow with the
+  // plan count).
+  const files = walkMarkdownFiles(join(repoRoot, 'qa')).filter(
+    (f) => !f.relPath.startsWith('ux-memory/') && !f.relPath.startsWith('ux-memory\\'),
+  );
   if (files.length === 0) return '';
 
   const parts: string[] = [];
