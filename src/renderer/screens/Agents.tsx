@@ -1542,14 +1542,15 @@ function PlanSelectionModeCard({
                 padding: '10px 12px',
                 borderRadius: 8,
                 cursor: active ? 'default' : 'pointer',
+                color: 'var(--t-0)',
                 border: `1px solid ${active ? 'var(--brand)' : 'var(--border, var(--bg-3))'}`,
                 background: active ? 'var(--brand-soft, var(--bg-1))' : 'transparent',
               }}
             >
-              <IconCmp size={15} color={active ? 'var(--brand)' : 'var(--t-3)'} />
+              <IconCmp size={15} color={active ? 'var(--brand)' : 'var(--t-2)'} />
               <span className="col" style={{ gap: 2, alignItems: 'flex-start' }}>
                 <span style={{ fontWeight: 600 }}>{o.label}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--t-3)' }}>{o.sub}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--t-2)' }}>{o.sub}</span>
               </span>
             </button>
           );
